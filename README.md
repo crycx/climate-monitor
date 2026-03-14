@@ -8,6 +8,55 @@ Backend: Python Flask API
 Frontend: Angular.
 Database: PostgreSQL
 
+
+## Mermaid ERP diagram
+
+erDiagram
+    Users ||--o{ Locations : has
+    Users ||--o{ Devices : owns
+    Locations ||--o{ Devices : contains
+    Devices ||--o{ Readings : records
+
+    Users {
+        int id PK
+        varchar username UK
+        varchar email UK
+        varchar password_hash
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    Locations {
+        int id PK
+        int user_id FK
+        varchar name
+        text description
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    Devices {
+        int id PK
+        int user_id FK
+        int location_id FK
+        varchar name
+        varchar device_type
+        varchar api_key UK
+        boolean is_active
+        timestamp last_seen
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    Readings {
+        bigint id PK
+        int device_id FK
+        varchar sensor_type
+        float value
+        varchar unit
+        timestamp timestamp
+    }
+
 ## API Endpoints
 https://editor.swagger.io/
 
