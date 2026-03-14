@@ -1,17 +1,15 @@
 # Climate Monitor
-
-IoT system for monitoring temperature and humidity using ESP32 + DHT22 sensors.
+Smart home system for monitoring temperature and humidity using ESP32 + DHT22 sensors.
 
 ## Tech Stack
 
-The hardware side runs on an ESP32 with a DHT22 sensor, flashed with Rust. The backend is a Python Flask API talking to a PostgreSQL database. Frontend is built with Angular.
-
-## Architecture
-
-ESP32 reads temperature and humidity from the DHT22, then sends the data over WiFi to the Flask API. The API stores everything in PostgreSQL, and the Angular frontend displays it all in the browser.
-
+Hardware: ESP32 with a DHT22 sensor (Rust). The
+Backend: Python Flask API
+Frontend: Angular.
+Database: PostgreSQL
 
 ## API Endpoints
+https://editor.swagger.io/
 
 ### Authentication
 

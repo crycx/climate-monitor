@@ -1,0 +1,425 @@
+openapi: 3.0.3
+info:
+  title: Climate Monitor API
+  description: IoT API for temperature and humidity monitoring
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:5000/api
+    description: Local development
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        created_at:
+          type: string
+          format: date-time
+
+    Location:
+      type: object
+      properties:
+        id:
+          type: integer
+        user_id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Device:
+      type: object
+      properties:
+        id:
+          type: integer
+        user_id:
+          type: integer
+        location_id:
+          type: integer
+        name:
+          type: string
+        device_type:
+          type: string
+        api_key:
+          type: string
+        is_active:
+          type: boolean
+        last_seen:
+          type: string
+          format: date-time
+
+    Reading:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        device_id:
+          type: integer
+        sensor_type:
+          type: string
+        value:
+          type: number
+          format: float
+        unit:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    AuthLogin:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+
+    AuthRegister:
+      type: object
+      required:
+        - username
+        - email
+        - password
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    LocationInput:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+
+    DeviceInput:
+      type: object
+      required:
+        - name
+        - location_id
+      properties:
+        name:
+          type: string
+        location_id:
+          type: integer
+
+    ReadingInput:
+      type: object
+      required:
+        - sensor_type
+        - value
+        - unit
+      properties:
+        sensor_type:
+          type: string
+        value:
+          type: number
+        unit:
+          type: string
+
+paths:
+  /auth/register:
+    post:
+      summary: Register a new user
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthRegister'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Validation error
+
+  /auth/login:
+    post:
+      summary: Login user
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthLogin'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+        '401':
+          description: Invalid credentials
+
+  /auth/me:
+    get:
+      summary: Get current user
+      tags:
+        - Auth
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /locations:
+    get:
+      summary: List user's locations
+      tags:
+        - Locations
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of locations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Location'
+
+    post:
+      summary: Create a location
+      tags:
+        - Locations
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocationInput'
+      responses:
+        '201':
+          description: Location created
+
+  /locations/{id}:
+    put:
+      summary: Update a location
+      tags:
+        - Locations
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocationInput'
+      responses:
+        '200':
+          description: Location updated
+
+    delete:
+      summary: Delete a location
+      tags:
+        - Locations
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: Location deleted
+
+  /devices:
+    get:
+      summary: List user's devices
+      tags:
+        - Devices
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Device'
+
+    post:
+      summary: Register a new device
+      tags:
+        - Devices
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceInput'
+      responses:
+        '201':
+          description: Device created
+
+  /devices/{id}:
+    get:
+      summary: Get device details
+      tags:
+        - Devices
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Device details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+
+    put:
+      summary: Update a device
+      tags:
+        - Devices
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Device updated
+
+    delete:
+      summary: Delete a device
+      tags:
+        - Devices
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: Device deleted
+
+  /devices/{id}/readings:
+    get:
+      summary: Get device readings
+      tags:
+        - Readings
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of readings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Reading'
+
+    post:
+      summary: Submit reading (from ESP32)
+      tags:
+        - Readings
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReadingInput'
+      responses:
+        '201':
+          description: Reading created
+
+  /readings/latest:
+    get:
+      summary: Get latest readings across all devices
+      tags:
+        - Readings
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Latest readings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Reading'
