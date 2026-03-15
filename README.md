@@ -1,13 +1,20 @@
 # Climate Monitor
 Smart home system for monitoring temperature and humidity using ESP32 + DHT22 sensors.
 
+## Local development
+1. Create .env foleder with 
+    - APP_PORT
+    - POSTGRES_PASSWORD
+    - POSTGRES_DB
+2. Run `docker-compose up` or with -d flag for detached
+3. `docker exec -i db psql -U postgres -d climate_monitor < init.sql` to create database tables from init.sql in root
+
 ## Tech Stack
 
 Hardware: ESP32 with a DHT22 sensor (Rust). The
 Backend: Python Flask API
 Frontend: Angular.
 Database: PostgreSQL
-
 
 ## Mermaid ERP diagram
 
