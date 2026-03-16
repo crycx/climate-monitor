@@ -2,12 +2,22 @@
 Smart home system for monitoring temperature and humidity using ESP32 + DHT22 sensors.
 
 ## Local development
-1. Create .env foleder with 
+1. Create .env folder with 
     - APP_PORT
     - POSTGRES_PASSWORD
     - POSTGRES_DB
 2. Run `docker-compose up` or with -d flag for detached
-3. `docker exec -i db psql -U postgres -d climate_monitor < init.sql` to create database tables from init.sql in root
+3. (Optional) Create database tables from `init.sql` in the repo root:
+    - PowerShell:
+        - `Get-Content .\init.sql -Raw | docker exec -i db psql -U postgres -d climate_monitor`
+    - cmd.exe:
+        - `type init.sql | docker exec -i db psql -U postgres -d climate_monitor`
+        - or `cmd /c "docker exec -i db psql -U postgres -d climate_monitor < init.sql"`
+    - Bash/zsh:
+        - `docker exec -i db psql -U postgres -d climate_monitor < init.sql`
+4. Reset PostgreSQL (delete Docker volume; wipes all data):
+    - `docker compose down -v`
+    - `docker compose up -d`
 
 ## Tech Stack
 
@@ -66,6 +76,11 @@ erDiagram
 
 ## API Endpoints
 https://editor.swagger.io/
+
+### Swagger UI (served by Flask)
+
+- Swagger UI: `http://localhost:8000/swagger`
+- OpenAPI spec: `http://localhost:8000/openapi.yaml`
 
 ### Authentication
 
