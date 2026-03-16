@@ -5,8 +5,8 @@ info:
   version: 1.0.0
 
 servers:
-  - url: http://localhost:5000/api
-    description: Local development
+  - url: /api
+    description: Same host (via docker compose)
 
 components:
   securitySchemes:
