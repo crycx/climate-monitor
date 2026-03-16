@@ -2,12 +2,19 @@
 Smart home system for monitoring temperature and humidity using ESP32 + DHT22 sensors.
 
 ## Local development
-1. Create .env foleder with 
+1. Create .env folder with 
     - APP_PORT
     - POSTGRES_PASSWORD
     - POSTGRES_DB
 2. Run `docker-compose up` or with -d flag for detached
-3. `docker exec -i db psql -U postgres -d climate_monitor < init.sql` to create database tables from init.sql in root
+3. Create database tables from `init.sql` in the repo root:
+     - PowerShell:
+         - `Get-Content .\init.sql -Raw | docker exec -i db psql -U postgres -d climate_monitor`
+     - cmd.exe:
+         - `type init.sql | docker exec -i db psql -U postgres -d climate_monitor`
+         - or `cmd /c "docker exec -i db psql -U postgres -d climate_monitor < init.sql"`
+     - Bash/zsh:
+         - `docker exec -i db psql -U postgres -d climate_monitor < init.sql`
 
 ## Tech Stack
 
