@@ -40,6 +40,38 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
     - `docker compose up -d --build api`
     - `docker compose exec api pytest -q`
 
+## Angular quick start
+
+1. Install dependencies:
+    - `cd frontend/climate-monitor`
+    - `npm install`
+2. Start development server:
+    - `ng serve` or `ng serve -o` to open it in browser after start
+3. Open app:
+    - `http://localhost:4200`
+
+### Angular auth flow (manual test)
+
+1. Open login page: `http://localhost:4200/login`
+2. Open register page: `http://localhost:4200/register`
+3. Create an account and confirm you are redirected to Home (`/`)
+4. Logout from the header menu and confirm redirect back to `/login`
+5. Forgot password flow:
+    - Open `http://localhost:4200/forgot-password`
+    - Submit email
+    - In development you can use returned token (if `EXPOSE_RESET_TOKEN_IN_RESPONSE=true`) on `http://localhost:4200/reset-password`
+
+### Angular environments
+
+- Development API base URL: `frontend/climate-monitor/src/environments/environment.ts`
+- Production API base URL: `frontend/climate-monitor/src/environments/environment.prod.ts`
+- Build config switches environment file in `frontend/climate-monitor/angular.json`
+
+### Production build
+
+- `cd frontend/climate-monitor`
+- `npm run build`
+
 ## Tech Stack
 
 Hardware: ESP32 with a DHT22 sensor (Rust). The
