@@ -2,7 +2,10 @@
 Smart home system for monitoring temperature and humidity using ESP32 + DHT22 sensors.
 
 ## Local development
-1. Create .env folder with 
+1. Create `.env` from template:
+    - PowerShell: `Copy-Item .env.example .env`
+    - Bash/zsh: `cp .env.example .env`
+2. Update values in `.env` (at minimum):
     - APP_PORT
     - POSTGRES_PASSWORD
     - POSTGRES_DB
@@ -21,8 +24,8 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
     - (optional, security) FORGOT_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=900
     - (optional, security) RESET_PASSWORD_RATE_LIMIT_COUNT=10
     - (optional, security) RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=900
-2. Run `docker-compose up` or with -d flag for detached
-3. (Optional) Create database tables from `init.sql` in the repo root:
+3. Run `docker-compose up` or with -d flag for detached
+4. (Optional) Create database tables from `init.sql` in the repo root:
     - PowerShell:
         - `Get-Content .\init.sql -Raw | docker exec -i db psql -U postgres -d climate_monitor`
     - cmd.exe:
@@ -30,7 +33,7 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
         - or `cmd /c "docker exec -i db psql -U postgres -d climate_monitor < init.sql"`
     - Bash/zsh:
         - `docker exec -i db psql -U postgres -d climate_monitor < init.sql`
-4. Reset PostgreSQL (delete Docker volume; wipes all data):
+5. Reset PostgreSQL (delete Docker volume; wipes all data):
     - `docker compose down -v`
     - `docker compose up -d`
 
