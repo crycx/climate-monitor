@@ -1,0 +1,59 @@
+/* You can add global styles to this file, and also import other style files */
+/* Material Symbols Outlined */
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined');
+
+
+.fullAreaCenter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+}
+
+
+.mat-mdc-form-field .mdc-text-field--filled:not(.mdc-text-field--disabled) {
+  background-color: var(--mat-sys-surface-container) !important;
+}
+
+/* 2) Autofill: SUNNI sama taust */
+.mat-mdc-form-field input.mdc-text-field__input:-webkit-autofill,
+.mat-mdc-form-field input.mdc-text-field__input:-webkit-autofill:hover,
+.mat-mdc-form-field input.mdc-text-field__input:-webkit-autofill:focus,
+.mat-mdc-form-field textarea.mdc-text-field__input:-webkit-autofill,
+.mat-mdc-form-field textarea.mdc-text-field__input:-webkit-autofill:hover,
+.mat-mdc-form-field textarea.mdc-text-field__input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0px 1000px var(--mat-sys-surface-container) inset !important;
+  box-shadow: 0 0 0px 1000px var(--mat-sys-surface-container) inset !important;
+
+  -webkit-text-fill-color: var(--mat-sys-on-surface) !important;
+  caret-color: var(--mat-sys-primary) !important;
+
+  /* Chrome mõnikord animab autofilli tausta tagasi – see “lukustab” */
+  transition: background-color 999999s ease-in-out 0s !important;
+}
+
+.mat-mdc-menu-item.active-menu-item,
+.mat-menu-item.active-menu-item {
+  position: relative;
+}
+
+.mat-mdc-menu-item.active-menu-item::after,
+.mat-menu-item.active-menu-item::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 3px;
+  background: currentColor;
+  opacity: 0.9;
+  z-index: 2;            /* et oleks state-layeri peal */
+  pointer-events: none;
+}
+
+app-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}

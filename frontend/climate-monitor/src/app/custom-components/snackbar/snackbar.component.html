@@ -1,0 +1,10 @@
+<div class="d-flex align-items-center justify-content-between">
+  <div class="d-flex align-items-center">
+    <mat-icon *ngIf="data.icon" [ngStyle]="{'color': data.iconColor}" [ngClass]="{'rotate-icon': data.dots}" >{{ data.icon }}</mat-icon><div class="warningText mx-2">{{ data.text }} <span *ngIf="data.dots" class="dotts">...</span></div>
+  </div>
+  <div *ngIf="data.dismiss" class="dismiss d-flex align-items-center" >
+    <button (click)="snackBarRef.dismiss()" mat-button>{{ data.dismiss }}</button>
+    <button *ngIf="data.back" (click)="goBack()" mat-button>{{ data.back }}</button>
+    <button *ngIf="data.addNew" (click)="onAddNew(data.addNew); data" mat-button>{{ data.addNewString }}</button>
+  </div>
+</div>

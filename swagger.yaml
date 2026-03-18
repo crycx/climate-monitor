@@ -10,9 +10,10 @@ servers:
 
 components:
   securitySchemes:
-    BearerAuth:
-      type: http
-      scheme: bearer
+    SessionAuth:
+      type: apiKey
+      in: cookie
+      name: session
 
   schemas:
     User:
@@ -110,6 +111,34 @@ components:
         password:
           type: string
 
+    AuthForgotPassword:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+
+    AuthResetPassword:
+      type: object
+      required:
+        - token
+        - password
+      properties:
+        token:
+          type: string
+        password:
+          type: string
+
+    AuthLoginResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+
     LocationInput:
       type: object
       required:
@@ -184,12 +213,50 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  access_token:
-                    type: string
+                $ref: '#/components/schemas/AuthLoginResponse'
         '401':
           description: Invalid credentials
+
+  /auth/logout:
+    post:
+      summary: Logout user
+      tags:
+        - Auth
+      responses:
+        '204':
+          description: Logged out
+
+  /auth/forgot-password:
+    post:
+      summary: Request password reset token
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthForgotPassword'
+      responses:
+        '200':
+          description: Reset request accepted
+
+  /auth/reset-password:
+    post:
+      summary: Reset password with token
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthResetPassword'
+      responses:
+        '200':
+          description: Password updated
+        '400':
+          description: Invalid or expired token
 
   /auth/me:
     get:
@@ -197,7 +264,7 @@ paths:
       tags:
         - Auth
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       responses:
         '200':
           description: Current user
@@ -212,7 +279,7 @@ paths:
       tags:
         - Locations
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       responses:
         '200':
           description: List of locations
@@ -228,7 +295,7 @@ paths:
       tags:
         - Locations
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       requestBody:
         required: true
         content:
@@ -245,7 +312,7 @@ paths:
       tags:
         - Locations
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -267,7 +334,7 @@ paths:
       tags:
         - Locations
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -284,7 +351,7 @@ paths:
       tags:
         - Devices
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       responses:
         '200':
           description: List of devices
@@ -300,7 +367,7 @@ paths:
       tags:
         - Devices
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       requestBody:
         required: true
         content:
@@ -317,7 +384,7 @@ paths:
       tags:
         - Devices
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -337,7 +404,7 @@ paths:
       tags:
         - Devices
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -353,7 +420,7 @@ paths:
       tags:
         - Devices
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -370,7 +437,7 @@ paths:
       tags:
         - Readings
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -413,7 +480,7 @@ paths:
       tags:
         - Readings
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       responses:
         '200':
           description: Latest readings

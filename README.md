@@ -6,6 +6,21 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
     - APP_PORT
     - POSTGRES_PASSWORD
     - POSTGRES_DB
+    - SECRET_KEY
+    - FRONTEND_ORIGIN (example: http://localhost:4200)
+    - (optional) SESSION_COOKIE_SECURE=true in production
+    - (optional, reset email) FRONTEND_RESET_URL=http://localhost:4200/reset-password
+    - (optional, reset email) SMTP_HOST
+    - (optional, reset email) SMTP_PORT=587
+    - (optional, reset email) SMTP_USERNAME
+    - (optional, reset email) SMTP_PASSWORD
+    - (optional, reset email) SMTP_USE_TLS=true
+    - (optional, reset email) MAIL_FROM=no-reply@climate-monitor.local
+    - (optional, dev only) EXPOSE_RESET_TOKEN_IN_RESPONSE=true
+    - (optional, security) FORGOT_PASSWORD_RATE_LIMIT_COUNT=5
+    - (optional, security) FORGOT_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=900
+    - (optional, security) RESET_PASSWORD_RATE_LIMIT_COUNT=10
+    - (optional, security) RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=900
 2. Run `docker-compose up` or with -d flag for detached
 3. (Optional) Create database tables from `init.sql` in the repo root:
     - PowerShell:
@@ -18,6 +33,12 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
 4. Reset PostgreSQL (delete Docker volume; wipes all data):
     - `docker compose down -v`
     - `docker compose up -d`
+
+## Backend tests
+
+- Run auth tests inside API container:
+    - `docker compose up -d --build api`
+    - `docker compose exec api pytest -q`
 
 ## Tech Stack
 

@@ -1,0 +1,34 @@
+<div class="fullAreaCenter">
+  <div style="max-width: 360px; margin: 40px auto;">
+    <mat-card appearance="outlined">
+      <mat-card-header class="mb-2">
+        <mat-card-title>Login</mat-card-title>
+      </mat-card-header>
+
+      <mat-card-content>
+        <form id="login-form" (ngSubmit)="submit()" [formGroup]="form">
+          <mat-form-field style="width: 100%;">
+            <mat-label>Username</mat-label>
+            <input matInput formControlName="username" autocomplete="username" />
+          </mat-form-field>
+
+          <mat-form-field style="width: 100%;">
+            <mat-label>Password</mat-label>
+            <input matInput type="password" autocomplete="current-password" formControlName="password" />
+          </mat-form-field>
+
+          <p *ngIf="error()" style="color: #c00; margin: 8px 0;">{{ error() }}</p>
+
+
+        </form>
+      </mat-card-content>
+      <mat-card-actions>
+        <button style="margin-right: 12px;" mat-button type="button" routerLink="/forgot-password">Forgot password?</button>
+        <button style="margin-right: auto;" mat-button type="button" routerLink="/register">Create account</button>
+        <button style="margin-left: auto;" matButton color="primary" type="submit" form="login-form">
+          Login
+        </button>
+      </mat-card-actions>
+    </mat-card>
+  </div>
+</div>
