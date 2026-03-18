@@ -37,6 +37,19 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
     - `docker compose down -v`
     - `docker compose up -d`
 
+## Linux server without Docker
+
+- See `DEPLOY_LINUX_NO_DOCKER.md` for a step-by-step guide to run PostgreSQL and the Flask backend directly on a Linux server without Docker.
+- Recommended stack for production:
+    - PostgreSQL as a system service
+    - Python virtual environment + Gunicorn for the Flask app
+    - Nginx as reverse proxy
+
+Important:
+- `backend/app.py` runs `db.create_all()` on startup, but that only creates tables that exist as SQLAlchemy models in the file.
+- Right now those models are `users` and `password_reset_tokens`.
+- If you also need the tables defined in `init.sql` (`locations`, `devices`, `readings`), import `init.sql` manually into PostgreSQL.
+
 ## Backend tests
 
 - Run auth tests inside API container:
