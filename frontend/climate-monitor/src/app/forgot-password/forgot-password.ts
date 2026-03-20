@@ -5,11 +5,11 @@ import { AuthService } from '../auth/auth.service';
 
 @Component({
   selector: 'app-forgot-password',
-  templateUrl: './forgot-password.component.html',
+  templateUrl: './forgot-password.html',
   standalone: false,
-  styleUrls: ['./forgot-password.component.css'],
+  styleUrls: ['./forgot-password.css'],
 })
-export class ForgotPasswordComponent {
+export class ForgotPassword {
   loading = false;
   error = signal<string | null>(null);
   info = signal<string | null>(null);

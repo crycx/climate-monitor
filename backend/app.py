@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from flask_cors import CORS
 from flask import Flask, Response, jsonify, request, send_file, session
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -118,6 +119,7 @@ class User(db.Model):
     username = db.Column(db.String(100), unique=True, nullable=False)
     email = db.Column(db.String(255), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
+    is_admin = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     created_at = db.Column(db.DateTime)
 
     def to_dict(self) -> dict:
@@ -125,6 +127,7 @@ class User(db.Model):
             "id": self.id,
             "username": self.username,
             "email": self.email,
+            "is_admin": self.is_admin,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -260,10 +263,20 @@ def login_required(view_func):
     return _wrapped
 
 
+def _ensure_users_is_admin_column() -> None:
+    columns = {column["name"] for column in inspect(db.engine).get_columns("users")}
+    if "is_admin" in columns:
+        return
+
+    db.session.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE"))
+    db.session.commit()
+
+
 _configure_app()
 
 with app.app_context():
     db.create_all()
+    _ensure_users_is_admin_column()
 
 
 def _openapi_spec_path() -> Path:
@@ -439,6 +452,247 @@ def auth_logout():
 @login_required
 def auth_me(current_user: User):
     return jsonify(current_user.to_dict()), 200
+
+
+@app.post("/api/auth/change-password")
+@login_required
+def auth_change_password(current_user: User):
+    payload = request.get_json(silent=True) or {}
+    current_password = payload.get("current_password") or ""
+    new_password = payload.get("new_password") or ""
+
+    if not current_password or not new_password:
+        return jsonify({"error": "current_password and new_password are required"}), 400
+
+    if not check_password_hash(current_user.password_hash, current_password):
+        return jsonify({"error": "Current password is incorrect"}), 401
+
+    current_user.password_hash = generate_password_hash(new_password)
+    db.session.commit()
+
+    return jsonify({"message": "Password changed"}), 200
+
+
+def _require_manage_access(current_user: User, user_id: int):
+    if not current_user.is_admin and current_user.id != user_id:
+        return jsonify({"error": "Forbidden"}), 403
+    return None
+
+
+def _validate_user_update_payload(
+    payload: dict, *, actor_is_admin: bool
+) -> tuple[dict, tuple[Response, int] | None]:
+    username = payload.get("username")
+    email = payload.get("email")
+    password = payload.get("password")
+    is_admin = payload.get("is_admin")
+
+    updates: dict = {}
+
+    if username is not None:
+        cleaned_username = str(username).strip()
+        if not cleaned_username:
+            return {}, (jsonify({"error": "username cannot be empty"}), 400)
+        updates["username"] = cleaned_username
+
+    if email is not None:
+        cleaned_email = str(email).strip().lower()
+        if not cleaned_email or "@" not in cleaned_email:
+            return {}, (jsonify({"error": "email is not valid"}), 400)
+        updates["email"] = cleaned_email
+
+    if password is not None:
+        if not actor_is_admin:
+            return {}, (
+                jsonify({"error": "Only admin can reset password via this endpoint"}),
+                403,
+            )
+        cleaned_password = str(password)
+        if not cleaned_password:
+            return {}, (jsonify({"error": "password cannot be empty"}), 400)
+        updates["password_hash"] = generate_password_hash(cleaned_password)
+
+    if is_admin is not None:
+        if not actor_is_admin:
+            return {}, (jsonify({"error": "Only admin can change admin privileges"}), 403)
+
+        if isinstance(is_admin, bool):
+            updates["is_admin"] = is_admin
+        elif isinstance(is_admin, str):
+            updates["is_admin"] = _to_bool(is_admin)
+        else:
+            return {}, (jsonify({"error": "is_admin must be boolean"}), 400)
+
+    if not updates:
+        return {}, (
+            jsonify({"error": "At least one of username, email, or password is required"}),
+            400,
+        )
+
+    return updates, None
+
+
+def _validate_user_create_payload(
+    payload: dict, *, actor_is_admin: bool
+) -> tuple[dict, tuple[Response, int] | None]:
+    if not actor_is_admin:
+        return {}, (jsonify({"error": "Only admin can create users"}), 403)
+
+    username = (payload.get("username") or "").strip()
+    email = (payload.get("email") or "").strip().lower()
+    is_admin = payload.get("is_admin", False)
+
+    if not username or not email:
+        return {}, (jsonify({"error": "username and email are required"}), 400)
+
+    if "@" not in email:
+        return {}, (jsonify({"error": "email is not valid"}), 400)
+
+    if isinstance(is_admin, bool):
+        normalized_is_admin = is_admin
+    elif isinstance(is_admin, str):
+        normalized_is_admin = _to_bool(is_admin)
+    else:
+        return {}, (jsonify({"error": "is_admin must be boolean"}), 400)
+
+    return {
+        "username": username,
+        "email": email,
+        "is_admin": normalized_is_admin,
+    }, None
+
+
+@app.get("/api/users")
+@login_required
+def users_list(current_user: User):
+    if current_user.is_admin:
+        users = User.query.order_by(User.id.asc()).all()
+        return jsonify([user.to_dict() for user in users]), 200
+
+    return jsonify([current_user.to_dict()]), 200
+
+
+@app.post("/api/users")
+@login_required
+def users_create(current_user: User):
+    payload = request.get_json(silent=True) or {}
+    user_data, validation_error = _validate_user_create_payload(
+        payload,
+        actor_is_admin=current_user.is_admin,
+    )
+    if validation_error:
+        return validation_error
+
+    existing_user = User.query.filter(
+        (User.username == user_data["username"]) | (User.email == user_data["email"])
+    ).first()
+    if existing_user:
+        return jsonify({"error": "username or email already exists"}), 409
+
+    user = User(
+        username=user_data["username"],
+        email=user_data["email"],
+        is_admin=user_data["is_admin"],
+        password_hash=generate_password_hash(secrets.token_urlsafe(24)),
+    )
+    db.session.add(user)
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"error": "username or email already exists"}), 409
+
+    reset_token = _create_reset_token(user)
+    email_sent = _send_reset_password_email(user.email, reset_token)
+
+    response = {
+        "message": "User created and password setup link generated",
+        "user": user.to_dict(),
+        "email_sent": email_sent,
+    }
+    if app.config["EXPOSE_RESET_TOKEN_IN_RESPONSE"]:
+        response["reset_token"] = reset_token
+
+    return jsonify(response), 201
+
+
+@app.get("/api/users/<int:user_id>")
+@login_required
+def users_get(current_user: User, user_id: int):
+    forbidden = _require_manage_access(current_user, user_id)
+    if forbidden:
+        return forbidden
+
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    return jsonify(user.to_dict()), 200
+
+
+@app.patch("/api/users/<int:user_id>")
+@login_required
+def users_update(current_user: User, user_id: int):
+    forbidden = _require_manage_access(current_user, user_id)
+    if forbidden:
+        return forbidden
+
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    payload = request.get_json(silent=True) or {}
+    updates, validation_error = _validate_user_update_payload(
+        payload,
+        actor_is_admin=current_user.is_admin,
+    )
+    if validation_error:
+        return validation_error
+
+    new_username = updates.get("username")
+    if new_username and new_username != user.username:
+        existing = User.query.filter(User.username == new_username, User.id != user.id).first()
+        if existing:
+            return jsonify({"error": "username already exists"}), 409
+
+    new_email = updates.get("email")
+    if new_email and new_email != user.email:
+        existing = User.query.filter(User.email == new_email, User.id != user.id).first()
+        if existing:
+            return jsonify({"error": "email already exists"}), 409
+
+    for key, value in updates.items():
+        setattr(user, key, value)
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"error": "username or email already exists"}), 409
+
+    return jsonify(user.to_dict()), 200
+
+
+@app.delete("/api/users/<int:user_id>")
+@login_required
+def users_delete(current_user: User, user_id: int):
+    forbidden = _require_manage_access(current_user, user_id)
+    if forbidden:
+        return forbidden
+
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    deleting_self = current_user.id == user.id
+    db.session.delete(user)
+    db.session.commit()
+
+    if deleting_self:
+        session.clear()
+
+    return "", 204
 
 
 @app.get("/openapi.yaml")

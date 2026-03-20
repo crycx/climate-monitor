@@ -1,0 +1,82 @@
+<div class="container">
+  <div style="max-width: 640px; margin: 0 auto;">
+    <mat-card appearance="outlined">
+      <mat-card-header>
+        <mat-card-title *ngIf="!isCreateMode">User details</mat-card-title>
+        <mat-card-title *ngIf="isCreateMode">Add user</mat-card-title>
+      </mat-card-header>
+
+      <mat-card-content>
+        <div *ngIf="loading()" style="padding: 8px 0 16px 0;">
+          <mat-progress-bar mode="indeterminate"></mat-progress-bar>
+        </div>
+
+        <p *ngIf="error()" style="color: #c00; margin-top: 8px;">{{ error() }}</p>
+        <p *ngIf="success()" style="color: #0a7f35; margin-top: 8px;">{{ success() }}</p>
+
+        <p *ngIf="isCreateMode && !devResetToken()" style="margin-top: 8px; color: var(--mat-sys-on-surface-variant);">
+          A password setup link will be sent to the user's email after creation.
+        </p>
+
+        <div *ngIf="devResetToken()" style="margin-top: 12px;">
+          <p style="font-size: 12px; color: #666;">Dev reset token:</p>
+          <code style="word-break: break-all; display: block; margin-bottom: 8px;">{{ devResetToken() }}</code>
+          <button mat-stroked-button type="button" color="primary" (click)="openResetPage()">Open reset page with token</button>
+          <button mat-stroked-button type="button" style="margin-left: 8px;" (click)="goToUser()">Go to user details</button>
+        </div>
+
+        <form [formGroup]="form" autocomplete="off">
+          <mat-form-field style="width: 100%;">
+            <mat-label>Username</mat-label>
+            <input matInput formControlName="username" />
+          </mat-form-field>
+
+          <mat-form-field style="width: 100%;">
+            <mat-label>Email</mat-label>
+            <input matInput formControlName="email" />
+          </mat-form-field>
+
+          <mat-checkbox formControlName="is_admin">Admin</mat-checkbox>
+
+          <mat-form-field *ngIf="!isCreateMode" style="width: 100%; margin-top: 8px;">
+            <mat-label>Set new password (optional)</mat-label>
+            <input matInput [type]="showPassword() ? 'text' : 'password'" formControlName="password"
+                   autocomplete="new-password" readonly
+                   (focus)="$any($event.target).removeAttribute('readonly')" />
+            <button mat-icon-button matSuffix type="button" (click)="togglePasswordVisibility()" [attr.aria-label]="showPassword() ? 'Hide password' : 'Show password'">
+              <mat-icon>{{ showPassword() ? 'visibility_off' : 'visibility' }}</mat-icon>
+            </button>
+          </mat-form-field>
+        </form>
+      </mat-card-content>
+
+      <mat-card-actions>
+        <button mat-button type="button" (click)="back()">Back</button>
+
+        <span style="margin-left: auto;"></span>
+
+        <button
+          matButton="elevated"
+          color="warn"
+          type="button"
+          class="btn-delete"
+          (click)="deleteUser()"
+          [disabled]="isCreateMode || deleting() || loading()"
+        >
+          Delete
+        </button>
+
+        <button
+          matButton="elevated"
+          color="primary"
+          type="button"
+          class="btn-ok"
+          (click)="save()"
+          [disabled]="saving() || loading()"
+        >
+          {{ isCreateMode ? 'Create' : 'Save' }}
+        </button>
+      </mat-card-actions>
+    </mat-card>
+  </div>
+</div>

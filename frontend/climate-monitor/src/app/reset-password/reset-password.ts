@@ -5,11 +5,11 @@ import { AuthService } from '../auth/auth.service';
 
 @Component({
   selector: 'app-reset-password',
-  templateUrl: './reset-password.component.html',
+  templateUrl: './reset-password.html',
   standalone: false,
-  styleUrls: ['./reset-password.component.css'],
+  styleUrls: ['./reset-password.css'],
 })
-export class ResetPasswordComponent {
+export class ResetPassword {
   loading = false;
   error = signal<string | null>(null);
   info = signal<string | null>(null);

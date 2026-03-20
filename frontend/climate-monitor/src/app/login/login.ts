@@ -4,48 +4,43 @@ import { Router } from '@angular/router';
 import { AuthService } from '../auth/auth.service';
 
 @Component({
-  selector: 'app-register',
-  templateUrl: './register.component.html',
+  selector: 'app-login',
+  templateUrl: './login.html',
   standalone: false,
-  styleUrls: ['./register.component.css'],
+  styleUrls: ['./login.css']
 })
-export class RegisterComponent {
+export class Login {
   loading = false;
   error = signal<string | null>(null);
   form: FormGroup;
 
+
   constructor(private fb: FormBuilder, private auth: AuthService, private router: Router) {
     this.form = this.fb.group({
       username: ['', [Validators.required]],
-      email: ['', [Validators.required, Validators.email]],
-      password: ['', [Validators.required, Validators.minLength(6)]],
-      confirmPassword: ['', [Validators.required]],
+      password: ['', [Validators.required]],
     });
   }
 
   submit() {
     this.error.set(null);
-    if (this.form.invalid) {
+    if (this.form.invalid){
       this.form.markAllAsTouched();
       return;
     }
 
-    const { username, email, password, confirmPassword } = this.form.value;
-    if (password !== confirmPassword) {
-      this.error.set('Passwords do not match');
-      return;
-    }
-
+    const { username, password } = this.form.value;
     this.loading = true;
 
-    this.auth.register(username!, email!, password!).subscribe({
+    this.auth.login(username!, password!).subscribe({
       next: () => {
         this.loading = false;
         this.router.navigateByUrl('/');
       },
       error: (err) => {
+        console.log('Login error', err);
         this.loading = false;
-        this.error.set(err?.error?.error ?? 'Register failed');
+        this.error.set(err?.error?.message ?? 'Login failed');
       },
     });
   }

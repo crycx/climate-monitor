@@ -7,6 +7,7 @@ import { Router } from '@angular/router';
 export type AuthUser = {
   id: number;
   email: string;
+  is_admin: boolean;
   username: string;
   created_at: string | null;
 };
@@ -19,6 +20,10 @@ type LoginResponse = {
 type ForgotPasswordResponse = {
   message: string;
   reset_token?: string;
+};
+
+type ChangePasswordResponse = {
+  message: string;
 };
 
 @Injectable({ providedIn: 'root' })
@@ -72,6 +77,17 @@ export class AuthService {
     return this.http.post<{ message: string }>(
       `${environment.apiBase}/auth/reset-password`,
       { token, password },
+      { withCredentials: true }
+    );
+  }
+
+  changePassword(currentPassword: string, newPassword: string): Observable<ChangePasswordResponse> {
+    return this.http.post<ChangePasswordResponse>(
+      `${environment.apiBase}/auth/change-password`,
+      {
+        current_password: currentPassword,
+        new_password: newPassword,
+      },
       { withCredentials: true }
     );
   }

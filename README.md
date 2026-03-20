@@ -156,6 +156,15 @@ https://editor.swagger.io/
 - `POST /api/auth/register` - Register new user
 - `POST /api/auth/login` - Login user
 - `GET /api/auth/me` - Get current user
+- `POST /api/auth/change-password` - Change current user's password
+
+### Users
+
+- `POST /api/users` - Create user and send password setup token by email (admin only)
+- `GET /api/users` - List users (admin sees all; regular user sees self)
+- `GET /api/users/:id` - Get user details (self or admin)
+- `PATCH /api/users/:id` - Update user (self or admin; only admin can set `is_admin` and reset another user's password)
+- `DELETE /api/users/:id` - Delete user (self or admin)
 
 ### Locations
 

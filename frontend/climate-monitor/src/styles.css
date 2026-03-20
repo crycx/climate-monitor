@@ -10,6 +10,21 @@
   height: 100vh;
 }
 
+.fullAreaCenterWithHeader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 64px);
+  padding: 24px 16px;
+  box-sizing: border-box;
+}
+
+@media (max-width: 599px) {
+  .fullAreaCenterWithHeader {
+    min-height: calc(100vh - 56px);
+  }
+}
+
 
 .mat-mdc-form-field .mdc-text-field--filled:not(.mdc-text-field--disabled) {
   background-color: var(--mat-sys-surface-container) !important;
@@ -56,4 +71,48 @@ app-header {
   position: sticky;
   top: 0;
   z-index: 100;
+}
+
+
+.flex-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  /* margin-bottom: 20px; */
+}
+
+.actionButtons {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.btn-ok {
+  /* background: rgba(46, 125, 50, 0.7) !important; */
+  color: rgba(46, 125, 50, 0.7) !important;
+}
+
+.btn-ok:disabled {
+  /* background: rgba(46, 125, 50, 0.3) !important; */
+  color: rgba(46, 125, 50, 0.3) !important;
+}
+
+.btn-delete {
+  /* background: rgba(198, 40, 40, 0.7) !important; */
+  color: rgba(198, 40, 40, 1) !important;
+}
+
+.container > h2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+
+.click-row { cursor: pointer; }
+.click-row:hover {
+  /* Fallback for browsers without color-mix support. */
+  background-color: rgba(0, 0, 0, 0.03);
+  /* Theme-aware hover tint: darkens in light mode, lightens in dark mode. */
+  background-color: color-mix(in srgb, var(--mat-sys-on-surface) 8%, transparent);
 }
