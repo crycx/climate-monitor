@@ -1,0 +1,27 @@
+<IfModule mod_headers.c>
+  # Angular SW update sõltub sellest, et need oleksid alati värskelt kontrollitavad
+  <FilesMatch "^(ngsw\.json|ngsw-worker\.js|safety-worker\.js)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </FilesMatch>
+
+  # index ja manifest ka pigem no-cache (et install/update oleks stabiilne)
+  <FilesMatch "^(index\.html|manifest\.webmanifest)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </FilesMatch>
+</IfModule>
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Kui fail või kaust eksisteerib, serveeri see otse
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Muidu suuna kõik index.html peale (Angular routes)
+  RewriteRule ^ index.html [L]
+</IfModule>
