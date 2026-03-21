@@ -8,7 +8,6 @@ import { UsersListStateService } from './users-list-state.service';
 import { ApiService, ApiUser } from '../services/api';
 import { FormControl } from '@angular/forms';
 import { Subject, takeUntil } from 'rxjs';
-// või kui kasutad KaredusApiService: import { KaredusApiService } from '../core/api/karedus-api.service';
 
 export type UserRow = {
   id: number;
