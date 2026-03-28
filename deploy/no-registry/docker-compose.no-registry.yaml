@@ -1,0 +1,42 @@
+services:
+  db:
+    image: climate-monitor-postgres:17
+    container_name: climate_monitor_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  api:
+    image: climate-monitor-api:no-registry
+    container_name: climate_monitor_api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${APP_PORT}:5000"
+    environment:
+      FLASK_DEBUG: 0
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      SECRET_KEY: ${SECRET_KEY}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE}
+      SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE}
+      FRONTEND_RESET_URL: ${FRONTEND_RESET_URL}
+      RESET_TOKEN_TTL_MINUTES: ${RESET_TOKEN_TTL_MINUTES}
+      EXPOSE_RESET_TOKEN_IN_RESPONSE: ${EXPOSE_RESET_TOKEN_IN_RESPONSE}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USERNAME: ${SMTP_USERNAME}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_USE_TLS: ${SMTP_USE_TLS}
+      MAIL_FROM: ${MAIL_FROM}
+      FORGOT_PASSWORD_RATE_LIMIT_COUNT: ${FORGOT_PASSWORD_RATE_LIMIT_COUNT}
+      FORGOT_PASSWORD_RATE_LIMIT_WINDOW_SECONDS: ${FORGOT_PASSWORD_RATE_LIMIT_WINDOW_SECONDS}
+      RESET_PASSWORD_RATE_LIMIT_COUNT: ${RESET_PASSWORD_RATE_LIMIT_COUNT}
+      RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS: ${RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS}
+    depends_on:
+      - db
+
+volumes:
+  db_data:
