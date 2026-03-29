@@ -104,7 +104,7 @@ jobs:
             set -euo pipefail
 
             DEPLOY_ROOT="/opt/climate-monitor"
-            BUNDLE_TAR="/tmp/backend-no-registry-bundle.tar.gz"
+            BUNDLE_TAR="/tmp/build-artifacts/backend-no-registry-bundle.tar.gz"
             TMP_DIR="/tmp/climate-backend-ci"
 
             rm -rf "$TMP_DIR"
