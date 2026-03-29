@@ -107,6 +107,29 @@ jobs:
             BUNDLE_TAR="/tmp/build-artifacts/backend-no-registry-bundle.tar.gz"
             TMP_DIR="/tmp/climate-backend-ci"
 
+            cleanup_tmp() {
+              rm -rf "$TMP_DIR" "$BUNDLE_TAR"
+            }
+
+            trap cleanup_tmp EXIT
+
+            run_compose_up() {
+              if sudo docker compose version >/dev/null 2>&1; then
+                sudo docker compose -f "$DEPLOY_ROOT/docker-compose.no-registry.yaml" up -d
+              elif command -v docker-compose >/dev/null 2>&1; then
+                # docker-compose v1.29 can fail with KeyError: ContainerConfig on recreate.
+                # Removing existing app/db containers first avoids the buggy recreate path.
+                CONTAINERS_TO_REMOVE=$(sudo docker ps -a --format '{{.Names}}' | grep -E '(^|_)climate_monitor_(db|api)$' || true)
+                if [ -n "$CONTAINERS_TO_REMOVE" ]; then
+                  echo "$CONTAINERS_TO_REMOVE" | xargs -r sudo docker rm -f >/dev/null 2>&1 || true
+                fi
+                sudo docker-compose -f "$DEPLOY_ROOT/docker-compose.no-registry.yaml" up -d
+              else
+                echo "Neither 'docker compose' nor 'docker-compose' is available." >&2
+                return 1
+              fi
+            }
+
             rm -rf "$TMP_DIR"
             mkdir -p "$TMP_DIR"
             tar -xzf "$BUNDLE_TAR" -C "$TMP_DIR"
@@ -117,24 +140,51 @@ jobs:
               sudo cp "$TMP_DIR/.env.example" "$DEPLOY_ROOT/.env"
             fi
 
-            sudo docker load -i "$TMP_DIR/climate-monitor-images.tar"
+            OLD_API_ID=$(sudo docker image inspect climate-monitor-api:no-registry --format '{{.Id}}' 2>/dev/null || true)
+            OLD_DB_ID=$(sudo docker image inspect climate-monitor-postgres:17 --format '{{.Id}}' 2>/dev/null || true)
 
-            if sudo docker compose version >/dev/null 2>&1; then
-              sudo docker compose -f "$DEPLOY_ROOT/docker-compose.no-registry.yaml" up -d
-            elif command -v docker-compose >/dev/null 2>&1; then
-              # docker-compose v1.29 can fail with KeyError: ContainerConfig on recreate.
-              # Removing existing app/db containers first avoids the buggy recreate path.
-              CONTAINERS_TO_REMOVE=$(sudo docker ps -a --format '{{.Names}}' | grep -E '(^|_)climate_monitor_(db|api)$' || true)
-              if [ -n "$CONTAINERS_TO_REMOVE" ]; then
-                echo "$CONTAINERS_TO_REMOVE" | xargs -r sudo docker rm -f >/dev/null 2>&1 || true
+            sudo docker load -i "$TMP_DIR/climate-monitor-images.tar"
+            NEW_API_ID=$(sudo docker image inspect climate-monitor-api:no-registry --format '{{.Id}}')
+            NEW_DB_ID=$(sudo docker image inspect climate-monitor-postgres:17 --format '{{.Id}}')
+
+            set +e
+            run_compose_up
+            DEPLOY_EXIT_CODE=$?
+            set -e
+
+            if [ "$DEPLOY_EXIT_CODE" -ne 0 ]; then
+              echo "Deployment failed. Attempting rollback to previous images..."
+
+              if [ -n "$OLD_API_ID" ]; then
+                sudo docker tag "$OLD_API_ID" climate-monitor-api:no-registry
               fi
-              sudo docker-compose -f "$DEPLOY_ROOT/docker-compose.no-registry.yaml" up -d
-            else
-              echo "Neither 'docker compose' nor 'docker-compose' is available." >&2
-              exit 1
+              if [ -n "$OLD_DB_ID" ]; then
+                sudo docker tag "$OLD_DB_ID" climate-monitor-postgres:17
+              fi
+
+              # Best-effort rollback start; keep original failure status for CI visibility.
+              run_compose_up || true
+              exit "$DEPLOY_EXIT_CODE"
             fi
 
-            rm -rf "$TMP_DIR" "$BUNDLE_TAR"
+            # New deployment succeeded: remove previously tagged images (if they differ).
+            if [ -n "$OLD_API_ID" ] && [ "$OLD_API_ID" != "$NEW_API_ID" ]; then
+              sudo docker image rm "$OLD_API_ID" >/dev/null 2>&1 || true
+            fi
+            if [ -n "$OLD_DB_ID" ] && [ "$OLD_DB_ID" != "$NEW_DB_ID" ]; then
+              sudo docker image rm "$OLD_DB_ID" >/dev/null 2>&1 || true
+            fi
+
+            echo "Docker disk usage before cleanup:"
+            sudo docker system df || true
+
+            sudo docker image prune -f >/dev/null 2>&1 || true
+            sudo docker container prune -f >/dev/null 2>&1 || true
+            sudo docker network prune -f >/dev/null 2>&1 || true
+            sudo docker builder prune -f >/dev/null 2>&1 || true
+
+            echo "Docker disk usage after cleanup:"
+            sudo docker system df || true
 
   no_backend_changes:
     name: No Backend Changes
