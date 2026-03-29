@@ -123,8 +123,11 @@ jobs:
               sudo docker compose -f "$DEPLOY_ROOT/docker-compose.no-registry.yaml" up -d
             elif command -v docker-compose >/dev/null 2>&1; then
               # docker-compose v1.29 can fail with KeyError: ContainerConfig on recreate.
-              # Removing existing containers first avoids the buggy recreate path.
-              sudo docker rm -f climate_monitor_db climate_monitor_api >/dev/null 2>&1 || true
+              # Removing existing app/db containers first avoids the buggy recreate path.
+              CONTAINERS_TO_REMOVE=$(sudo docker ps -a --format '{{.Names}}' | grep -E '(^|_)climate_monitor_(db|api)$' || true)
+              if [ -n "$CONTAINERS_TO_REMOVE" ]; then
+                echo "$CONTAINERS_TO_REMOVE" | xargs -r sudo docker rm -f >/dev/null 2>&1 || true
+              fi
               sudo docker-compose -f "$DEPLOY_ROOT/docker-compose.no-registry.yaml" up -d
             else
               echo "Neither 'docker compose' nor 'docker-compose' is available." >&2
