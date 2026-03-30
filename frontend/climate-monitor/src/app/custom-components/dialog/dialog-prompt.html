@@ -1,0 +1,21 @@
+<h2 mat-dialog-title>{{  data.title }}</h2>
+<mat-dialog-content class="mat-typography">
+  <div id="nimekiriContent">
+    {{ data.message }}<br><strong>{{ data.object }}</strong>
+    <ng-container *ngIf="data.message2">
+      <br>
+      {{ data.message2 }}
+    </ng-container>
+    <ng-container *ngIf="data.messages">
+      <ng-container *ngFor="let message of data.messages">
+        <br>
+        <strong>{{ message.bold }}</strong> {{ message.normal }}
+      </ng-container>
+    </ng-container>
+
+  </div>
+</mat-dialog-content>
+<mat-dialog-actions align="end" class="mt-4">
+  <button mat-raised-button color="warn"  mat-dialog-close [mat-dialog-close]="true">{{ 'Yes' }}</button>
+  <button mat-button (click)="onNoClick()">{{ "Cancel" }}</button>
+</mat-dialog-actions>

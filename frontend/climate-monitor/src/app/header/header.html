@@ -1,0 +1,43 @@
+<mat-toolbar *ngIf="user$ | async as user" class="app-header" color="primary">
+  <!-- vasakul: menüü nupp -->
+  <button mat-icon-button type="button" aria-label="Ava menüü" [matMenuTriggerFor]="menu">
+    <mat-icon>menu</mat-icon>
+  </button>
+
+  <mat-menu #menu="matMenu">
+    <button mat-menu-item [routerLink]="['/']" [routerLinkActiveOptions]="{exact: true}" routerLinkActive="mat-menu-item-highlighted">
+      <mat-icon>home</mat-icon>
+      <span>Home page</span>
+    </button>
+    <button *ngIf="user.is_admin" mat-menu-item [routerLink]="['/users']" [routerLinkActiveOptions]="{exact: true}" routerLinkActive="mat-menu-item-highlighted">
+      <mat-icon>people</mat-icon>
+      <span>Users</span>
+    </button>
+  </mat-menu>
+  <!-- {{ user$ | async | json }} -->
+
+  <span class="spacer"></span>
+
+  <!-- paremal: kasutaja menüü -->
+  <button
+    mat-button
+    type="button"
+    [matMenuTriggerFor]="userMenu"
+    aria-label="Kasutaja menüü"
+  >
+    <mat-icon>account_circle</mat-icon>
+    <span class="user-name">{{ (user$ | async)?.username || "kasutaja" }}</span>
+    <mat-icon>arrow_drop_down</mat-icon>
+  </button>
+
+  <mat-menu #userMenu="matMenu">
+    <button mat-menu-item [routerLink]="['/change-password']" [routerLinkActiveOptions]="{exact: true}" routerLinkActive="mat-menu-item-highlighted">
+      <mat-icon>lock</mat-icon>
+      <span>Change password</span>
+    </button>
+    <button mat-menu-item type="button" (click)="logout()">
+      <mat-icon>logout</mat-icon>
+      <span>Logout</span>
+    </button>
+  </mat-menu>
+</mat-toolbar>

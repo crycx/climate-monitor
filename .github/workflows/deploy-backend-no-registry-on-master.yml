@@ -1,0 +1,196 @@
+name: Deploy Backend No-Registry On Master
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'backend/**'
+      - 'deploy/postgres/**'
+      - 'deploy/no-registry/docker-compose.no-registry.yaml'
+      - 'init.sql'
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: "Force deploy even if backend files were not changed"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: deploy-backend-no-registry-master
+  cancel-in-progress: true
+
+jobs:
+  detect_changes:
+    name: Detect Backend Changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend_changed: ${{ steps.filter.outputs.backend }}
+      should_deploy: ${{ steps.decide.outputs.should_deploy }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'deploy/postgres/**'
+              - 'deploy/no-registry/docker-compose.no-registry.yaml'
+              - 'init.sql'
+
+      - name: Decide whether to deploy
+        id: decide
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ "${{ github.event.inputs.force_deploy || 'true' }}" == "true" ]]; then
+              echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "should_deploy=${{ steps.filter.outputs.backend }}" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "should_deploy=${{ steps.filter.outputs.backend }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build_bundle_and_deploy:
+    name: Build Bundle And Deploy Backend
+    runs-on: ubuntu-latest
+    needs: detect_changes
+    if: needs.detect_changes.outputs.should_deploy == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -t climate-monitor-api:no-registry ./backend
+
+      - name: Build Postgres image
+        run: docker build -t climate-monitor-postgres:17 ./deploy/postgres
+
+      - name: Create backend bundle
+        shell: bash
+        run: |
+          mkdir -p build-artifacts
+          docker save -o build-artifacts/climate-monitor-images.tar climate-monitor-api:no-registry climate-monitor-postgres:17
+          cp deploy/no-registry/docker-compose.no-registry.yaml build-artifacts/
+          cp deploy/no-registry/.env.example build-artifacts/
+          tar -czf build-artifacts/backend-no-registry-bundle.tar.gz -C build-artifacts climate-monitor-images.tar docker-compose.no-registry.yaml .env.example
+
+      - name: Upload backend bundle to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          source: build-artifacts/backend-no-registry-bundle.tar.gz
+          target: /tmp/
+          overwrite: true
+
+      - name: Deploy backend bundle on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          script: |
+            set -euo pipefail
+
+            DEPLOY_ROOT="/opt/climate-monitor"
+            BUNDLE_TAR="/tmp/build-artifacts/backend-no-registry-bundle.tar.gz"
+            TMP_DIR="/tmp/climate-backend-ci"
+
+            cleanup_tmp() {
+              rm -rf "$TMP_DIR" "$BUNDLE_TAR"
+            }
+
+            trap cleanup_tmp EXIT
+
+            run_compose_up() {
+              if sudo docker compose version >/dev/null 2>&1; then
+                sudo docker compose -f "$DEPLOY_ROOT/docker-compose.no-registry.yaml" up -d
+              elif command -v docker-compose >/dev/null 2>&1; then
+                # docker-compose v1.29 can fail with KeyError: ContainerConfig on recreate.
+                # Removing existing app/db containers first avoids the buggy recreate path.
+                CONTAINERS_TO_REMOVE=$(sudo docker ps -a --format '{{.Names}}' | grep -E '(^|_)climate_monitor_(db|api)$' || true)
+                if [ -n "$CONTAINERS_TO_REMOVE" ]; then
+                  echo "$CONTAINERS_TO_REMOVE" | xargs -r sudo docker rm -f >/dev/null 2>&1 || true
+                fi
+                sudo docker-compose -f "$DEPLOY_ROOT/docker-compose.no-registry.yaml" up -d
+              else
+                echo "Neither 'docker compose' nor 'docker-compose' is available." >&2
+                return 1
+              fi
+            }
+
+            rm -rf "$TMP_DIR"
+            mkdir -p "$TMP_DIR"
+            tar -xzf "$BUNDLE_TAR" -C "$TMP_DIR"
+
+            sudo mkdir -p "$DEPLOY_ROOT"
+            sudo cp "$TMP_DIR/docker-compose.no-registry.yaml" "$DEPLOY_ROOT/docker-compose.no-registry.yaml"
+            if [ ! -f "$DEPLOY_ROOT/.env" ]; then
+              sudo cp "$TMP_DIR/.env.example" "$DEPLOY_ROOT/.env"
+            fi
+
+            OLD_API_ID=$(sudo docker image inspect climate-monitor-api:no-registry --format '{{.Id}}' 2>/dev/null || true)
+            OLD_DB_ID=$(sudo docker image inspect climate-monitor-postgres:17 --format '{{.Id}}' 2>/dev/null || true)
+
+            sudo docker load -i "$TMP_DIR/climate-monitor-images.tar"
+            NEW_API_ID=$(sudo docker image inspect climate-monitor-api:no-registry --format '{{.Id}}')
+            NEW_DB_ID=$(sudo docker image inspect climate-monitor-postgres:17 --format '{{.Id}}')
+
+            set +e
+            run_compose_up
+            DEPLOY_EXIT_CODE=$?
+            set -e
+
+            if [ "$DEPLOY_EXIT_CODE" -ne 0 ]; then
+              echo "Deployment failed. Attempting rollback to previous images..."
+
+              if [ -n "$OLD_API_ID" ]; then
+                sudo docker tag "$OLD_API_ID" climate-monitor-api:no-registry
+              fi
+              if [ -n "$OLD_DB_ID" ]; then
+                sudo docker tag "$OLD_DB_ID" climate-monitor-postgres:17
+              fi
+
+              # Best-effort rollback start; keep original failure status for CI visibility.
+              run_compose_up || true
+              exit "$DEPLOY_EXIT_CODE"
+            fi
+
+            # New deployment succeeded: remove previously tagged images (if they differ).
+            if [ -n "$OLD_API_ID" ] && [ "$OLD_API_ID" != "$NEW_API_ID" ]; then
+              sudo docker image rm "$OLD_API_ID" >/dev/null 2>&1 || true
+            fi
+            if [ -n "$OLD_DB_ID" ] && [ "$OLD_DB_ID" != "$NEW_DB_ID" ]; then
+              sudo docker image rm "$OLD_DB_ID" >/dev/null 2>&1 || true
+            fi
+
+            echo "Docker disk usage before cleanup:"
+            sudo docker system df || true
+
+            sudo docker image prune -f >/dev/null 2>&1 || true
+            sudo docker container prune -f >/dev/null 2>&1 || true
+            sudo docker network prune -f >/dev/null 2>&1 || true
+            sudo docker builder prune -f >/dev/null 2>&1 || true
+
+            echo "Docker disk usage after cleanup:"
+            sudo docker system df || true
+
+  no_backend_changes:
+    name: No Backend Changes
+    runs-on: ubuntu-latest
+    needs: detect_changes
+    if: needs.detect_changes.outputs.should_deploy != 'true'
+    steps:
+      - name: Skip message
+        run: echo "Backend did not change and force_deploy was not enabled. Skipping deploy."

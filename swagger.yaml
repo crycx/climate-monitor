@@ -10,9 +10,10 @@ servers:
 
 components:
   securitySchemes:
-    BearerAuth:
-      type: http
-      scheme: bearer
+    SessionAuth:
+      type: apiKey
+      in: cookie
+      name: session
 
   schemas:
     User:
@@ -25,6 +26,8 @@ components:
         email:
           type: string
           format: email
+        is_admin:
+          type: boolean
         created_at:
           type: string
           format: date-time
@@ -110,6 +113,84 @@ components:
         password:
           type: string
 
+    AuthForgotPassword:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+
+    AuthResetPassword:
+      type: object
+      required:
+        - token
+        - password
+      properties:
+        token:
+          type: string
+        password:
+          type: string
+
+    AuthLoginResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+
+    AuthChangePassword:
+      type: object
+      required:
+        - current_password
+        - new_password
+      properties:
+        current_password:
+          type: string
+        new_password:
+          type: string
+
+    UserUpdateInput:
+      type: object
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        is_admin:
+          type: boolean
+        password:
+          type: string
+
+    UserCreateInput:
+      type: object
+      required:
+        - username
+        - email
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        is_admin:
+          type: boolean
+
+    UserCreateResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        email_sent:
+          type: boolean
+        reset_token:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+
     LocationInput:
       type: object
       required:
@@ -184,12 +265,50 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  access_token:
-                    type: string
+                $ref: '#/components/schemas/AuthLoginResponse'
         '401':
           description: Invalid credentials
+
+  /auth/logout:
+    post:
+      summary: Logout user
+      tags:
+        - Auth
+      responses:
+        '204':
+          description: Logged out
+
+  /auth/forgot-password:
+    post:
+      summary: Request password reset token
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthForgotPassword'
+      responses:
+        '200':
+          description: Reset request accepted
+
+  /auth/reset-password:
+    post:
+      summary: Reset password with token
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthResetPassword'
+      responses:
+        '200':
+          description: Password updated
+        '400':
+          description: Invalid or expired token
 
   /auth/me:
     get:
@@ -197,7 +316,7 @@ paths:
       tags:
         - Auth
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       responses:
         '200':
           description: Current user
@@ -206,13 +325,156 @@ paths:
               schema:
                 $ref: '#/components/schemas/User'
 
+  /auth/change-password:
+    post:
+      summary: Change current user's password
+      tags:
+        - Auth
+      security:
+        - SessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthChangePassword'
+      responses:
+        '200':
+          description: Password changed
+        '400':
+          description: Validation error
+        '401':
+          description: Current password is incorrect
+
+  /users:
+    post:
+      summary: Create user and send password setup token (admin only)
+      tags:
+        - Users
+      security:
+        - SessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateInput'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserCreateResponse'
+        '400':
+          description: Validation error
+        '403':
+          description: Forbidden
+        '409':
+          description: Username or email already exists
+
+    get:
+      summary: List users (admin gets all, regular user gets self)
+      tags:
+        - Users
+      security:
+        - SessionAuth: []
+      responses:
+        '200':
+          description: List of users available to current session
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+
+  /users/{id}:
+    get:
+      summary: Get user by id (self or admin)
+      tags:
+        - Users
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: User not found
+        '403':
+          description: Forbidden
+
+    patch:
+      summary: Update user profile (self or admin)
+      tags:
+        - Users
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdateInput'
+      responses:
+        '200':
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Validation error
+        '403':
+          description: Forbidden
+        '404':
+          description: User not found
+        '409':
+          description: Username or email already exists
+
+    delete:
+      summary: Delete user account (self or admin)
+      tags:
+        - Users
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: User deleted
+        '403':
+          description: Forbidden
+        '404':
+          description: User not found
+
   /locations:
     get:
       summary: List user's locations
       tags:
         - Locations
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       responses:
         '200':
           description: List of locations
@@ -228,7 +490,7 @@ paths:
       tags:
         - Locations
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       requestBody:
         required: true
         content:
@@ -245,7 +507,7 @@ paths:
       tags:
         - Locations
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -267,7 +529,7 @@ paths:
       tags:
         - Locations
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -284,7 +546,7 @@ paths:
       tags:
         - Devices
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       responses:
         '200':
           description: List of devices
@@ -300,7 +562,7 @@ paths:
       tags:
         - Devices
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       requestBody:
         required: true
         content:
@@ -317,7 +579,7 @@ paths:
       tags:
         - Devices
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -337,7 +599,7 @@ paths:
       tags:
         - Devices
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -353,7 +615,7 @@ paths:
       tags:
         - Devices
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -370,7 +632,7 @@ paths:
       tags:
         - Readings
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       parameters:
         - name: id
           in: path
@@ -413,7 +675,7 @@ paths:
       tags:
         - Readings
       security:
-        - BearerAuth: []
+        - SessionAuth: []
       responses:
         '200':
           description: Latest readings

@@ -32,3 +32,9 @@ Thumbs.db
 
 # Docker
 *.pid
+
+# Deployment artifacts
+deploy/*.zip
+deploy/*.tar
+deploy/*.tar.gz
+deploy/no-registry/climate-monitor-images.tar

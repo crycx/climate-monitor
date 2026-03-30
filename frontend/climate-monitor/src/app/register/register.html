@@ -1,0 +1,42 @@
+<div class="fullAreaCenter">
+  <div style="max-width: 360px; margin: 40px auto;">
+    <mat-card appearance="outlined">
+      <mat-card-header class="mb-2">
+        <mat-card-title>Register</mat-card-title>
+      </mat-card-header>
+
+      <mat-card-content>
+        <form id="register-form" (ngSubmit)="submit()" [formGroup]="form">
+          <mat-form-field style="width: 100%;">
+            <mat-label>Username</mat-label>
+            <input matInput formControlName="username" autocomplete="username" />
+          </mat-form-field>
+
+          <mat-form-field style="width: 100%;">
+            <mat-label>Email</mat-label>
+            <input matInput formControlName="email" autocomplete="email" />
+          </mat-form-field>
+
+          <mat-form-field style="width: 100%;">
+            <mat-label>Password</mat-label>
+            <input matInput type="password" formControlName="password" autocomplete="new-password" />
+          </mat-form-field>
+
+          <mat-form-field style="width: 100%;">
+            <mat-label>Confirm password</mat-label>
+            <input matInput type="password" formControlName="confirmPassword" autocomplete="new-password" />
+          </mat-form-field>
+
+          <p *ngIf="error()" style="color: #c00; margin: 8px 0;">{{ error() }}</p>
+        </form>
+      </mat-card-content>
+
+      <mat-card-actions>
+        <button style="margin-right: auto;" mat-button type="button" routerLink="/login">Back to login</button>
+        <button style="margin-left: auto;" matButton color="primary" type="submit" form="register-form" [disabled]="loading">
+          {{ loading ? 'Creating...' : 'Create account' }}
+        </button>
+      </mat-card-actions>
+    </mat-card>
+  </div>
+</div>

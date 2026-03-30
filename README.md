@@ -2,12 +2,30 @@
 Smart home system for monitoring temperature and humidity using ESP32 + DHT22 sensors.
 
 ## Local development
-1. Create .env folder with 
+1. Create `.env` from template:
+    - PowerShell: `Copy-Item .env.example .env`
+    - Bash/zsh: `cp .env.example .env`
+2. Update values in `.env` (at minimum):
     - APP_PORT
     - POSTGRES_PASSWORD
     - POSTGRES_DB
-2. Run `docker-compose up` or with -d flag for detached
-3. (Optional) Create database tables from `init.sql` in the repo root:
+    - SECRET_KEY
+    - FRONTEND_ORIGIN (example: http://localhost:4200)
+    - (optional) SESSION_COOKIE_SECURE=true in production
+    - (optional, reset email) FRONTEND_RESET_URL=http://localhost:4200/reset-password
+    - (optional, reset email) SMTP_HOST
+    - (optional, reset email) SMTP_PORT=587
+    - (optional, reset email) SMTP_USERNAME
+    - (optional, reset email) SMTP_PASSWORD
+    - (optional, reset email) SMTP_USE_TLS=true
+    - (optional, reset email) MAIL_FROM=no-reply@climate-monitor.local
+    - (optional, dev only) EXPOSE_RESET_TOKEN_IN_RESPONSE=true
+    - (optional, security) FORGOT_PASSWORD_RATE_LIMIT_COUNT=5
+    - (optional, security) FORGOT_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=900
+    - (optional, security) RESET_PASSWORD_RATE_LIMIT_COUNT=10
+    - (optional, security) RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=900
+3. Run `docker-compose up` or with -d flag for detached
+4. (Optional) Create database tables from `init.sql` in the repo root:
     - PowerShell:
         - `Get-Content .\init.sql -Raw | docker exec -i db psql -U postgres -d climate_monitor`
     - cmd.exe:
@@ -15,9 +33,60 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
         - or `cmd /c "docker exec -i db psql -U postgres -d climate_monitor < init.sql"`
     - Bash/zsh:
         - `docker exec -i db psql -U postgres -d climate_monitor < init.sql`
-4. Reset PostgreSQL (delete Docker volume; wipes all data):
+5. Reset PostgreSQL (delete Docker volume; wipes all data):
     - `docker compose down -v`
     - `docker compose up -d`
+
+## Linux server without Docker
+
+- See `DEPLOY_LINUX_NO_DOCKER.md` for a step-by-step guide to run PostgreSQL and the Flask backend directly on a Linux server without Docker.
+- Recommended stack for production:
+    - PostgreSQL as a system service
+    - Python virtual environment + Gunicorn for the Flask app
+    - Nginx as reverse proxy
+
+Important:
+- `backend/app.py` runs `db.create_all()` on startup, but that only creates tables that exist as SQLAlchemy models in the file.
+- Right now those models are `users` and `password_reset_tokens`.
+- If you also need the tables defined in `init.sql` (`locations`, `devices`, `readings`), import `init.sql` manually into PostgreSQL.
+
+## Backend tests
+
+- Run auth tests inside API container:
+    - `docker compose up -d --build api`
+    - `docker compose exec api pytest -q`
+
+## Angular quick start
+
+1. Install dependencies:
+    - `cd frontend/climate-monitor`
+    - `npm install`
+2. Start development server:
+    - `ng serve` or `ng serve -o` to open it in browser after start
+3. Open app:
+    - `http://localhost:4200`
+
+### Angular auth flow (manual test)
+
+1. Open login page: `http://localhost:4200/login`
+2. Open register page: `http://localhost:4200/register`
+3. Create an account and confirm you are redirected to Home (`/`)
+4. Logout from the header menu and confirm redirect back to `/login`
+5. Forgot password flow:
+    - Open `http://localhost:4200/forgot-password`
+    - Submit email
+    - In development you can use returned token (if `EXPOSE_RESET_TOKEN_IN_RESPONSE=true`) on `http://localhost:4200/reset-password`
+
+### Angular environments
+
+- Development API base URL: `frontend/climate-monitor/src/environments/environment.ts`
+- Production API base URL: `frontend/climate-monitor/src/environments/environment.prod.ts`
+- Build config switches environment file in `frontend/climate-monitor/angular.json`
+
+### Production build
+
+- `cd frontend/climate-monitor`
+- `npm run build`
 
 ## Tech Stack
 
@@ -87,6 +156,15 @@ https://editor.swagger.io/
 - `POST /api/auth/register` - Register new user
 - `POST /api/auth/login` - Login user
 - `GET /api/auth/me` - Get current user
+- `POST /api/auth/change-password` - Change current user's password
+
+### Users
+
+- `POST /api/users` - Create user and send password setup token by email (admin only)
+- `GET /api/users` - List users (admin sees all; regular user sees self)
+- `GET /api/users/:id` - Get user details (self or admin)
+- `PATCH /api/users/:id` - Update user (self or admin; only admin can set `is_admin` and reset another user's password)
+- `DELETE /api/users/:id` - Delete user (self or admin)
 
 ### Locations
 
