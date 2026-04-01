@@ -10,7 +10,9 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
     - POSTGRES_PASSWORD
     - POSTGRES_DB
     - SECRET_KEY
-    - FRONTEND_ORIGIN (example: http://localhost:4200)
+        - FRONTEND_ORIGIN (example: http://localhost:4200)
+            - Can contain multiple comma-separated origins (example: http://localhost:4200,https://climate.sinpal.ee)
+            - Must include scheme (http/https) and must match browser origin exactly
     - (optional, security) SELF_REGISTRATION_ENABLED=false
     - (optional) SESSION_COOKIE_SECURE=true in production
     - (optional, reset email) FRONTEND_RESET_URL=http://localhost:4200/reset-password
@@ -25,7 +27,9 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
     - (optional, security) FORGOT_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=900
     - (optional, security) RESET_PASSWORD_RATE_LIMIT_COUNT=10
     - (optional, security) RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=900
-3. Run `docker-compose up` or with -d flag for detached
+3. Run `docker compose up` or with `-d` flag for detached
+     - After any backend/API code, `backend/requirements.txt`, or `backend/Dockerfile` change, run:
+         - `docker compose up -d --build api`
 4. (Optional) Create database tables from `init.sql` in the repo root:
     - PowerShell:
         - `Get-Content .\init.sql -Raw | docker exec -i db psql -U postgres -d climate_monitor`
@@ -36,6 +40,16 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
         - `docker exec -i db psql -U postgres -d climate_monitor < init.sql`
 5. Reset PostgreSQL (delete Docker volume; wipes all data):
     - `docker compose down -v`
+    - `docker compose up -d`
+
+### Docker troubleshooting (local)
+
+- If you see `KeyError: 'ContainerConfig'`, you are likely using old `docker-compose` v1.
+    Use Docker Compose v2 (`docker compose ...`) instead.
+- If API fails with traceback like `While importing 'run' ... ModuleNotFoundError: No module named 'flask_cors'`, rebuild the API image without cache:
+    - `docker compose down --remove-orphans`
+    - `docker compose build --no-cache api`
+    - `docker compose run --rm api python -c "import flask_cors; print('flask_cors ok')"`
     - `docker compose up -d`
 
 ## Linux server without Docker
