@@ -1,9 +1,9 @@
-name: Deploy Backend No-Registry On Master
+name: Deploy Backend No-Registry On Main
 
 on:
   push:
     branches:
-      - master
+      - main
     paths:
       - 'backend/**'
       - 'deploy/postgres/**'
@@ -18,7 +18,7 @@ on:
         default: true
 
 concurrency:
-  group: deploy-backend-no-registry-master
+  group: deploy-backend-no-registry-main
   cancel-in-progress: true
 
 jobs:

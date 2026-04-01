@@ -1,9 +1,9 @@
-name: Deploy Frontend On Master
+name: Deploy Frontend On Main
 
 on:
   push:
     branches:
-      - master
+      - main
     paths:
       - 'frontend/climate-monitor/**'
   workflow_dispatch:
@@ -15,7 +15,7 @@ on:
         default: true
 
 concurrency:
-  group: deploy-frontend-master
+  group: deploy-frontend-main
   cancel-in-progress: true
 
 jobs:
