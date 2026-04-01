@@ -2,6 +2,7 @@ import { Component, signal } from '@angular/core';
 import { FormBuilder, FormGroup, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../auth/auth.service';
+import { environment } from '../../environments/environment';
 
 @Component({
   selector: 'app-login',
@@ -12,6 +13,7 @@ import { AuthService } from '../auth/auth.service';
 export class Login {
   loading = false;
   error = signal<string | null>(null);
+  selfRegistrationEnabled = environment.selfRegistrationEnabled;
   form: FormGroup;
 
 

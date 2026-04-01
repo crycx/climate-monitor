@@ -45,6 +45,10 @@ def configure_app(app: Flask) -> None:
     app.config["RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS"] = int(
         os.getenv("RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS", "900")
     )
+    app.config["SELF_REGISTRATION_ENABLED"] = to_bool(
+        os.getenv("SELF_REGISTRATION_ENABLED"),
+        True,
+    )
 
     CORS(
         app,

@@ -11,6 +11,7 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
     - POSTGRES_DB
     - SECRET_KEY
     - FRONTEND_ORIGIN (example: http://localhost:4200)
+    - (optional, security) SELF_REGISTRATION_ENABLED=false
     - (optional) SESSION_COOKIE_SECURE=true in production
     - (optional, reset email) FRONTEND_RESET_URL=http://localhost:4200/reset-password
     - (optional, reset email) SMTP_HOST
@@ -69,8 +70,8 @@ Important:
 ### Angular auth flow (manual test)
 
 1. Open login page: `http://localhost:4200/login`
-2. Open register page: `http://localhost:4200/register`
-3. Create an account and confirm you are redirected to Home (`/`)
+2. If self-registration is enabled, open register page: `http://localhost:4200/register`
+3. If self-registration is enabled, create an account and confirm you are redirected to Home (`/`)
 4. Logout from the header menu and confirm redirect back to `/login`
 5. Forgot password flow:
     - Open `http://localhost:4200/forgot-password`
