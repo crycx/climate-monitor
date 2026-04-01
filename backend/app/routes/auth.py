@@ -17,6 +17,9 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
 @auth_bp.post("/register")
 def auth_register():
+    if not current_app.config.get("SELF_REGISTRATION_ENABLED", True):
+        return jsonify({"error": "Account creation is currently disabled"}), 403
+
     payload = request.get_json(silent=True) or {}
     username = (payload.get("username") or "").strip()
     email = (payload.get("email") or "").strip().lower()

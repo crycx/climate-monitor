@@ -8,7 +8,10 @@ from .utils.env_utils import database_url, to_bool
 
 
 def configure_app(app: Flask) -> None:
-    frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:4200")
+    frontend_origins_raw = os.getenv("FRONTEND_ORIGIN", "http://localhost:4200")
+    frontend_origins = [
+        origin.strip() for origin in frontend_origins_raw.split(",") if origin.strip()
+    ]
 
     app.config["SQLALCHEMY_DATABASE_URI"] = database_url()
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -45,9 +48,13 @@ def configure_app(app: Flask) -> None:
     app.config["RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS"] = int(
         os.getenv("RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS", "900")
     )
+    app.config["SELF_REGISTRATION_ENABLED"] = to_bool(
+        os.getenv("SELF_REGISTRATION_ENABLED"),
+        True,
+    )
 
     CORS(
         app,
         supports_credentials=True,
-        resources={r"/api/*": {"origins": [frontend_origin]}},
+        resources={r"/api/*": {"origins": frontend_origins}},
     )
