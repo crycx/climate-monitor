@@ -81,23 +81,39 @@ fn main() -> ! {
         delay.delay_millis(3000);
     }
 
+    esp_println::println!("Connecting to {} ...", WIFI_SSID);
 
-    controller.connect().unwrap();
+    // controller.connect().unwrap();
 
+    let mut retries = 0;
     loop {
-      match controller.is_connected() {
-          Ok(true) => {
-              esp_println::println!("Wi-Fi connected");
-              break;
-          }
-          Ok(false) => {
-              esp_println::println!("Waiting for Wi-Fi...");
-          }
-          Err(err) => {
-              esp_println::println!("Wi-Fi status error: {:?}", err);
-          }
-      }
-          delay.delay_millis(500);
+        match controller.connect() {
+            Ok(()) => {}
+            Err(e) => {
+                esp_println::println!("connect() error: {:?}", e);
+            }
+        }
+
+        delay.delay_millis(2000);
+
+        match controller.is_connected() {
+            Ok(true) => {
+                esp_println::println!("Wi-Fi connected!");
+                break;
+            }
+            Ok(false) => {
+                esp_println::println!("Waiting for Wi-Fi... (attempt {})", retries);
+            }
+            Err(e) => {
+                esp_println::println!("Wi-Fi status: {:?}, retrying... (attempt {})", e, retries);
+            }
+        }
+
+        retries += 1;
+        if retries > 20 {
+            esp_println::println!("Failed to connect after 20 attempts, restarting...");
+            esp_hal::system::software_reset();
+        }
     }
 
     esp_println::println!("Wi-Fi started, SSID configured");
