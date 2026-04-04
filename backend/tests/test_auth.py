@@ -12,7 +12,7 @@ os.environ["FORGOT_PASSWORD_RATE_LIMIT_WINDOW_SECONDS"] = "60"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app as app_module  # noqa: E402
+import run as app_module  # noqa: E402
 
 
 app = app_module.app
