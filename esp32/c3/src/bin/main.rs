@@ -245,12 +245,11 @@ async fn post_readings(
         r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%"}}]"#,
         temp, hum
     );
-    let content_length = alloc::format!("{}", body.len());
 
     let mut rx_buf = [0u8; 512];
     match http.request(Method::POST, READINGS_URL).await {
         Ok(req) => {
-            let headers = [("X-API-Key", API_KEY), ("Content-Length", content_length.as_str())];
+            let headers = [("X-API-Key", API_KEY)];
             let mut builder = req
                 .content_type(ContentType::ApplicationJson)
                 .headers(&headers)
