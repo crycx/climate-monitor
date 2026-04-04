@@ -53,3 +53,4 @@ deploy/*.zip
 deploy/*.tar
 deploy/*.tar.gz
 deploy/no-registry/climate-monitor-images.tar
+esp32/c3/.cargo/config.toml
