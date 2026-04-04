@@ -9,7 +9,7 @@
 
 use embedded_dht_rs::dht22::Dht22;
 use esp_backtrace as _;
-use esp_radio::wifi::{ClientConfig, ModeConfig};
+use esp_radio::wifi::{ClientConfig, ModeConfig, ScanConfig};
 use esp_rtos as _;
 use esp_hal::{
     clock::CpuClock,
@@ -59,19 +59,28 @@ fn main() -> ! {
 
     controller.start().unwrap();
 
-    esp_println::println!("SSID: {}, PSWD: {}",
-              WIFI_SSID, WIFI_PASSWORD);
+    delay.delay_millis(1000);
 
-    // loop {
-    //   let scan_results = controller.scan_with_config(ScanConfig::default()).unwrap();
-    //   esp_println::println!("Scan results:");
-    //   for ap in scan_results {
-    //       esp_println::println!("SSID: {}, Channel: {}, Signal{},  Auth: {:?}",
-    //           ap.ssid, ap.channel, ap.signal_strength, ap.auth_method);
-    //   }
-    //   delay.delay_millis(2000);
+    loop {
+        esp_println::println!("Scanning for {}...", WIFI_SSID);
+        match controller.scan_with_config(ScanConfig::default()) {
+            Ok(results) => {
+                esp_println::println!("Found {} networks:", results.len());
+                for ap in &results {
+                    esp_println::println!("  SSID: {}, Signal: {}, Auth: {:?}",
+                    ap.ssid, ap.signal_strength, ap.auth_method);
+                }
+                if results.iter().any(|ap| ap.ssid == WIFI_SSID) {
+                    esp_println::println!("Network {} found, attempting to connect...", WIFI_SSID);
+                    break;
+                }
+            }
+            Err(e) => esp_println::println!("Scan failed: {:?}", e),
+        }
+        esp_println::println!("{} not found, rescanning in 3s...", WIFI_SSID);
+        delay.delay_millis(3000);
+    }
 
-    // }
 
     controller.connect().unwrap();
 
