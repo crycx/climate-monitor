@@ -1,3 +1,5 @@
+from datetime import timezone
+
 from ..extensions import db
 
 
@@ -17,6 +19,15 @@ class Reading(db.Model):
     timestamp = db.Column(db.DateTime)
 
     def to_dict(self) -> dict:
+        timestamp_value = None
+        if self.timestamp:
+            ts = self.timestamp
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            else:
+                ts = ts.astimezone(timezone.utc)
+            timestamp_value = ts.isoformat()
+
         return {
             "id": self.id,
             "device_id": self.device_id,
@@ -24,5 +35,5 @@ class Reading(db.Model):
             "sensor_type": self.sensor_type,
             "value": float(self.value),
             "unit": self.unit,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "timestamp": timestamp_value,
         }

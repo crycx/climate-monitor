@@ -116,3 +116,49 @@ app-header {
   /* Theme-aware hover tint: darkens in light mode, lightens in dark mode. */
   background-color: color-mix(in srgb, var(--mat-sys-on-surface) 8%, transparent);
 }
+
+.home-select-panel {
+  max-height: 360px !important;
+  border-radius: 12px !important;
+  padding: 4px 0 !important;
+}
+
+.home-select-panel .mat-mdc-option {
+  min-height: 40px !important;
+}
+
+.home-select-panel .mdc-list-item__primary-text {
+  font-size: 14px;
+}
+
+.home-select-panel::-webkit-scrollbar {
+  width: 10px;
+}
+
+.home-select-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.home-select-panel::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  background-color: color-mix(in srgb, var(--mat-sys-on-surface) 35%, transparent);
+}
+
+.mat-mdc-snack-bar-container.cm-snackbar-dark .mdc-snackbar__surface {
+  background: #0f172a !important;
+  color: #e5e7eb !important;
+  border: 1px solid #334155;
+  box-shadow: 0 14px 36px rgba(2, 6, 23, 0.5);
+}
+
+.mat-mdc-snack-bar-container.cm-snackbar-dark .mdc-snackbar__label {
+  color: #e5e7eb !important;
+}
+
+.mat-mdc-snack-bar-container.cm-snackbar-dark .mdc-button__label {
+  color: #cbd5e1 !important;
+}
+
+

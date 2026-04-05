@@ -12,3 +12,13 @@ class Location(db.Model):
     updated_at = db.Column(db.DateTime)
 
     devices = db.relationship("Device", backref="location", lazy=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "description": self.description,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }

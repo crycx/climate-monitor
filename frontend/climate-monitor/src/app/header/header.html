@@ -9,6 +9,14 @@
       <mat-icon>home</mat-icon>
       <span>Home page</span>
     </button>
+    <button mat-menu-item [routerLink]="['/devices']" [routerLinkActiveOptions]="{exact: true}" routerLinkActive="mat-menu-item-highlighted">
+      <mat-icon>memory</mat-icon>
+      <span>Devices</span>
+    </button>
+    <button mat-menu-item [routerLink]="['/locations']" [routerLinkActiveOptions]="{exact: true}" routerLinkActive="mat-menu-item-highlighted">
+      <mat-icon>place</mat-icon>
+      <span>Locations</span>
+    </button>
     <button *ngIf="user.is_admin" mat-menu-item [routerLink]="['/users']" [routerLinkActiveOptions]="{exact: true}" routerLinkActive="mat-menu-item-highlighted">
       <mat-icon>people</mat-icon>
       <span>Users</span>
@@ -26,7 +34,7 @@
     aria-label="Kasutaja menüü"
   >
     <mat-icon>account_circle</mat-icon>
-    <span class="user-name">{{ (user$ | async)?.username || "kasutaja" }}</span>
+    <span class="user-name">{{ (user$ | async)?.username || "user" }}</span>
     <mat-icon>arrow_drop_down</mat-icon>
   </button>
 

@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta, timezone
+import secrets
 
 from flask import Blueprint, jsonify, request
+from sqlalchemy.exc import IntegrityError
 
 from ..decorators.api_key import api_key_required
 from ..decorators.auth import login_required
 from ..extensions import db
-from ..models import Device, Reading, User
+from ..models import Device, Location, Reading, User
 
 
 readings_bp = Blueprint("readings", __name__, url_prefix="/api/readings")
@@ -156,6 +158,24 @@ def _save_readings(device: Device, readings_payload: list[dict]) -> int:
     return len(readings)
 
 
+def _can_access_device(current_user: User, device: Device) -> bool:
+    return current_user.is_admin or device.user_id == current_user.id
+
+
+def _resolve_location_for_user(current_user: User, location_id: int | None):
+    if location_id is None:
+        return None, None
+
+    location = db.session.get(Location, location_id)
+    if not location:
+        return None, (jsonify({"error": "Location not found"}), 404)
+
+    if not current_user.is_admin and location.user_id != current_user.id:
+        return None, (jsonify({"error": "Access denied"}), 403)
+
+    return location, None
+
+
 @readings_bp.post("")
 @api_key_required
 def create_reading(device: Device):
@@ -201,6 +221,138 @@ def list_devices(current_user: User):
     else:
         devices = Device.query.filter_by(user_id=current_user.id).order_by(Device.id.asc()).all()
     return jsonify([d.to_dict() for d in devices]), 200
+
+
+@devices_bp.post("")
+@login_required
+def create_device(current_user: User):
+    payload = request.get_json(silent=True) or {}
+
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+
+    user_id = payload.get("user_id") if current_user.is_admin else current_user.id
+    if not isinstance(user_id, int) or not db.session.get(User, user_id):
+        return jsonify({"error": "Invalid user_id"}), 400
+
+    location_id = payload.get("location_id")
+    if location_id is not None and not isinstance(location_id, int):
+        return jsonify({"error": "location_id must be an integer"}), 400
+
+    location, location_error = _resolve_location_for_user(current_user, location_id)
+    if location_error:
+        return location_error
+    if location and location.user_id not in {None, user_id}:
+        return jsonify({"error": "Location does not belong to selected user"}), 400
+
+    api_key = (payload.get("api_key") or "").strip() or secrets.token_hex(32)
+    if len(api_key) != 64:
+        return jsonify({"error": "api_key must be 64 characters"}), 400
+
+    now = datetime.now(timezone.utc)
+    device = Device(
+        user_id=user_id,
+        location_id=location_id,
+        name=name,
+        device_type=(payload.get("device_type") or None),
+        api_key=api_key,
+        is_active=bool(payload.get("is_active", True)),
+        created_at=now,
+        updated_at=now,
+    )
+
+    db.session.add(device)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"error": "api_key already exists"}), 409
+
+    result = device.to_dict()
+    result["api_key"] = device.api_key
+    return jsonify(result), 201
+
+
+@devices_bp.get("/<int:device_id>")
+@login_required
+def get_device(current_user: User, device_id: int):
+    device = db.session.get(Device, device_id)
+    if not device:
+        return jsonify({"error": "Device not found"}), 404
+    if not _can_access_device(current_user, device):
+        return jsonify({"error": "Access denied"}), 403
+
+    result = device.to_dict()
+    result["api_key"] = device.api_key
+    return jsonify(result), 200
+
+
+@devices_bp.patch("/<int:device_id>")
+@login_required
+def update_device(current_user: User, device_id: int):
+    device = db.session.get(Device, device_id)
+    if not device:
+        return jsonify({"error": "Device not found"}), 404
+    if not _can_access_device(current_user, device):
+        return jsonify({"error": "Access denied"}), 403
+
+    payload = request.get_json(silent=True) or {}
+
+    if "name" in payload:
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name cannot be empty"}), 400
+        device.name = name
+
+    if "device_type" in payload:
+        device.device_type = payload.get("device_type") or None
+
+    if "location_id" in payload:
+        location_id = payload.get("location_id")
+        if location_id is not None and not isinstance(location_id, int):
+            return jsonify({"error": "location_id must be an integer"}), 400
+        location, location_error = _resolve_location_for_user(current_user, location_id)
+        if location_error:
+            return location_error
+        if location and location.user_id not in {None, device.user_id}:
+            return jsonify({"error": "Location does not belong to device owner"}), 400
+        device.location_id = location_id
+
+    if "is_active" in payload:
+        device.is_active = bool(payload.get("is_active"))
+
+    if "api_key" in payload:
+        api_key = (payload.get("api_key") or "").strip()
+        if len(api_key) != 64:
+            return jsonify({"error": "api_key must be 64 characters"}), 400
+        device.api_key = api_key
+
+    device.updated_at = datetime.now(timezone.utc)
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"error": "api_key already exists"}), 409
+
+    result = device.to_dict()
+    result["api_key"] = device.api_key
+    return jsonify(result), 200
+
+
+@devices_bp.delete("/<int:device_id>")
+@login_required
+def delete_device(current_user: User, device_id: int):
+    device = db.session.get(Device, device_id)
+    if not device:
+        return jsonify({"error": "Device not found"}), 404
+    if not _can_access_device(current_user, device):
+        return jsonify({"error": "Access denied"}), 403
+
+    db.session.delete(device)
+    db.session.commit()
+    return "", 204
 
 
 @devices_bp.get("/<int:device_id>/readings")
