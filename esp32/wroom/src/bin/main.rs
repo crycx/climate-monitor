@@ -7,9 +7,20 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+extern crate alloc;
+
 use embedded_dht_rs::dht22::Dht22;
 use embassy_executor::Spawner;
-use embassy_net::{Config as NetConfig, Stack, StackResources};
+use embassy_net::{
+    dns::DnsQueryType,
+    dns::DnsSocket,
+    tcp::client::{TcpClient, TcpClientState},
+    Config as NetConfig,
+    ConfigV4,
+    Ipv4Address,
+    Stack,
+    StackResources,
+};
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::{
@@ -20,6 +31,11 @@ use esp_hal::{
 };
 use esp_radio::wifi::{ClientConfig, ModeConfig, ScanConfig};
 use esp_rtos as _;
+use reqwless::{
+    client::{HttpClient, TlsConfig, TlsVerify},
+    headers::ContentType,
+    request::{Method, RequestBuilder},
+};
 use static_cell::StaticCell;
 
 // This creates a default app-descriptor required by the ESP-IDF bootloader.
@@ -32,10 +48,12 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
+const READINGS_URL: &str = env!("API_URL");
 
 static ESP_CTRL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
 static NET_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 static NET_STACK: StaticCell<Stack<'static>> = StaticCell::new();
+static TCP_STATE: StaticCell<TcpClientState<1, 4096, 4096>> = StaticCell::new();
 
 #[embassy_executor::task]
 async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::WifiDevice<'static>>) {
@@ -149,13 +167,33 @@ async fn main(spawner: Spawner) {
         seed,
     );
     let stack: &'static Stack<'static> = NET_STACK.init(stack);
+    let tcp_state: &'static TcpClientState<1, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
 
     spawner.spawn(net_task(runner)).unwrap();
 
     esp_println::println!("Waiting for DHCP...");
-    stack.wait_config_up().await;
-    if let Some(cfg) = stack.config_v4() {
-        esp_println::println!("Got IP: {:?}", cfg.address);
+    match embassy_time::with_timeout(Duration::from_secs(30), stack.wait_config_up()).await {
+        Ok(()) => {
+            if let Some(cfg) = stack.config_v4() {
+                esp_println::println!("Got IP: {:?}", cfg.address);
+                esp_println::println!("Gateway: {:?}", cfg.gateway);
+                esp_println::println!("DNS servers (DHCP): {:?}", cfg.dns_servers);
+
+                // Override DNS to public resolvers
+                let mut override_cfg = cfg.clone();
+                override_cfg.dns_servers.clear();
+                let _ = override_cfg.dns_servers.push(Ipv4Address::new(8, 8, 8, 8));
+                let _ = override_cfg.dns_servers.push(Ipv4Address::new(1, 1, 1, 1));
+                stack.set_config_v4(ConfigV4::Static(override_cfg));
+                esp_println::println!("DNS overridden to [8.8.8.8, 1.1.1.1]");
+                esp_println::println!("Got IP: {:?}", cfg.address);
+
+            }
+        }
+        Err(_) => {
+            esp_println::println!("DHCP timeout, restarting...");
+            esp_hal::system::software_reset();
+        }
     }
 
     let mut dht22_pin = Flex::new(peripherals.GPIO4);
