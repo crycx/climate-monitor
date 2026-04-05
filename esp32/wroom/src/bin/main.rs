@@ -49,6 +49,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
 const READINGS_URL: &str = env!("API_URL");
+const API_KEY: &str = env!("API_KEY");
 
 static ESP_CTRL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
 static NET_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
@@ -84,6 +85,57 @@ async fn verify_dns(stack: &'static Stack<'static>) -> bool {
         }
     }
 }
+
+async fn post_readings(
+    stack: &'static Stack<'static>,
+    tcp_state: &'static TcpClientState<1, 4096, 4096>,
+    temp: f32,
+    hum: f32,
+) {
+    let tcp_client = TcpClient::new(*stack, tcp_state);
+    let dns = DnsSocket::new(*stack);
+
+    let tls_seed = esp_hal::rng::Rng::new().random() as u64;
+    let mut tls_rx = [0u8; 4096];
+    let mut tls_tx = [0u8; 4096];
+    let tls = TlsConfig::new(tls_seed, &mut tls_rx, &mut tls_tx, TlsVerify::None);
+
+    let mut http = HttpClient::new_with_tls(&tcp_client, &dns, tls);
+
+    let body = alloc::format!(
+        r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%"}}]"#,
+        temp, hum
+    );
+    let mut rx_buf = [0u8; 512];
+
+    match http.request(Method::POST, READINGS_URL).await {
+        Ok(request) => {
+            let headers = [("X-API-Key", API_KEY)];
+            let mut request = request
+                .content_type(ContentType::ApplicationJson)
+                .headers(&headers)
+                .body(body.as_bytes());
+
+            let result = embassy_time::with_timeout(Duration::from_secs(10), request.send(&mut rx_buf)).await;
+
+            match result {
+                Ok(Ok(response)) => {
+                    esp_println::println!("POST -> HTTP {}", response.status.0);
+                }
+                Ok(Err(error)) => {
+                    esp_println::println!("POST error: {:?}", error);
+                }
+                Err(_) => {
+                    esp_println::println!("POST send timeout");
+                }
+            }
+        }
+        Err(error) => {
+            esp_println::println!("HTTP connect error: {:?}", error);
+        }
+    }
+}
+
 #[allow(
     clippy::large_stack_frames,
     reason = "it's not unusual to allocate larger buffers etc. in main"
@@ -97,6 +149,8 @@ async fn main(spawner: Spawner) {
     esp_alloc::heap_allocator!(size: 36 * 1024);
     esp_println::logger::init_logger_from_env();
     let delay = Delay::new();
+    esp_println::println!("this is URL: {}", READINGS_URL);
+
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
@@ -211,7 +265,6 @@ async fn main(spawner: Spawner) {
                 stack.set_config_v4(ConfigV4::Static(override_cfg));
                 esp_println::println!("DNS overridden to [8.8.8.8, 1.1.1.1]");
                 esp_println::println!("Got IP: {:?}", cfg.address);
-
             }
         }
         Err(_) => {
@@ -238,7 +291,7 @@ async fn main(spawner: Spawner) {
     let mut dht22 = Dht22::new(dht22_pin, Delay::new());
 
     loop {
-        Timer::after(Duration::from_secs(10)).await;
+        Timer::after(Duration::from_secs(60)).await;
 
         match dht22.read() {
             Ok(sensor_reading) => {
@@ -247,6 +300,7 @@ async fn main(spawner: Spawner) {
                     sensor_reading.temperature,
                     sensor_reading.humidity
                 );
+                post_readings(stack, tcp_state, sensor_reading.temperature, sensor_reading.humidity).await;
             }
             Err(error) => {
                 esp_println::dbg!("An error occurred while trying to read sensor: {:?}", error);
