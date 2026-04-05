@@ -291,7 +291,7 @@ async fn main(spawner: Spawner) {
     let mut dht22 = Dht22::new(dht22_pin, Delay::new());
 
     loop {
-        Timer::after(Duration::from_secs(60)).await;
+        Timer::after(Duration::from_secs(30)).await;
 
         match dht22.read() {
             Ok(sensor_reading) => {
