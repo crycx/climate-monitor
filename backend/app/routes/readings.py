@@ -56,7 +56,7 @@ def _apply_readings_filters(query):
     limit = request.args.get("limit", 100, type=int)
     if limit is None or limit < 1:
         return None, None, (jsonify({"error": "limit must be a positive integer"}), 400)
-    clamped_limit = min(limit, 1000)
+    clamped_limit = min(limit, 10000)
 
     order = (request.args.get("order") or "desc").strip().lower()
     if order not in {"asc", "desc"}:

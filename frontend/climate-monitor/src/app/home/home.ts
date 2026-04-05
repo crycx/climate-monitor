@@ -101,8 +101,10 @@ export class Home implements AfterViewInit, OnDestroy {
       }
       this.error.set('');
 
+      const fetchLimit = this.limitForRange(selectedRangeHours);
+
       const sub = this.api
-        .getLatestReadings(1000, 'asc', selectedLocationId ?? undefined, afterId, fromTs)
+        .getLatestReadings(fetchLimit, 'asc', selectedLocationId ?? undefined, afterId, fromTs)
         .pipe(timeout(15000), finalize(() => {
           if (showLoading) {
             this.loading.set(false);
@@ -473,6 +475,16 @@ export class Home implements AfterViewInit, OnDestroy {
     });
 
     return merged.slice(-1000);
+  }
+
+  private limitForRange(hours: number | null): number {
+    if (hours === null) return 10000;     // All
+    if (hours <= 1)     return 500;
+    if (hours <= 3)     return 1000;
+    if (hours <= 6)     return 2000;
+    if (hours <= 12)    return 4000;
+    if (hours <= 24)    return 7000;
+    return 10000;                         // 48h
   }
 
   private buildFromTs(hours: number | null): string | undefined {
