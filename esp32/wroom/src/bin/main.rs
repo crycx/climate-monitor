@@ -60,6 +60,30 @@ async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::Wifi
     runner.run().await;
 }
 
+async fn verify_dns(stack: &'static Stack<'static>) -> bool {
+    let hostname = {
+        let after_scheme = READINGS_URL
+            .find("://")
+            .map(|i| &READINGS_URL[i + 3..])
+            .unwrap_or(READINGS_URL);
+        after_scheme
+            .find('/')
+            .map(|i| &after_scheme[..i])
+            .unwrap_or(after_scheme)
+    };
+
+    esp_println::println!("Resolving {} ...", hostname);
+    match stack.dns_query(hostname, DnsQueryType::A).await {
+        Ok(addresses) => {
+            esp_println::println!("DNS resolved: {:?}", addresses);
+            true
+        }
+        Err(error) => {
+            esp_println::println!("DNS query failed: {:?}", error);
+            false
+        }
+    }
+}
 #[allow(
     clippy::large_stack_frames,
     reason = "it's not unusual to allocate larger buffers etc. in main"
@@ -194,6 +218,11 @@ async fn main(spawner: Spawner) {
             esp_println::println!("DHCP timeout, restarting...");
             esp_hal::system::software_reset();
         }
+    }
+
+    if !verify_dns(stack).await {
+        esp_println::println!("DNS verification failed, restarting...");
+        esp_hal::system::software_reset();
     }
 
     let mut dht22_pin = Flex::new(peripherals.GPIO4);
