@@ -15,6 +15,15 @@ def ensure_users_is_admin_column() -> None:
     db.session.commit()
 
 
+def ensure_readings_location_column() -> None:
+    columns = {column["name"] for column in inspect(db.engine).get_columns("readings")}
+    if "location_id" in columns:
+        return
+
+    db.session.execute(text("ALTER TABLE readings ADD COLUMN location_id INTEGER"))
+    db.session.commit()
+
+
 def require_manage_access(current_user, user_id: int):
     if not current_user.is_admin and current_user.id != user_id:
         return jsonify({"error": "Forbidden"}), 403

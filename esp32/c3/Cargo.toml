@@ -19,6 +19,9 @@ wifi = [
     "dep:static_cell",
     "dep:reqwless",
 ]
+# Use plain HTTP instead of HTTPS (for local/development testing).
+# Combine with wifi: cargo run --release --features wifi,no-tls
+no-tls = []
 
 [dependencies]
 embedded-dht-rs = { version = "0.5.0", features = ["dht22"] }

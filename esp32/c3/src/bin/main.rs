@@ -21,7 +21,7 @@ use esp_hal::{
 #[cfg(feature = "wifi")]
 use embassy_executor::Spawner;
 #[cfg(feature = "wifi")]
-use embassy_net::{Config as NetConfig, Stack, StackResources, dns::DnsSocket, tcp::client::{TcpClient, TcpClientState}};
+use embassy_net::{Config as NetConfig, Stack, StackResources, dns::DnsSocket, tcp::client::{TcpClient, TcpClientState}, StaticConfigV4, Ipv4Address, Ipv4Cidr};
 #[cfg(feature = "wifi")]
 use embassy_time::{Duration, Timer};
 #[cfg(feature = "wifi")]
@@ -29,13 +29,17 @@ use esp_hal::interrupt::software::SoftwareInterruptControl;
 #[cfg(feature = "wifi")]
 use esp_hal::timer::timg::TimerGroup;
 #[cfg(feature = "wifi")]
+use esp_radio::wifi::event::{self, EventExt};
+#[cfg(feature = "wifi")]
 use esp_radio::wifi::{ClientConfig, ModeConfig};
 #[cfg(feature = "wifi")]
 use reqwless::{
-    client::{HttpClient, TlsConfig, TlsVerify},
+    client::HttpClient,
     request::{Method, RequestBuilder},
     headers::ContentType,
 };
+#[cfg(all(feature = "wifi", not(feature = "no-tls")))]
+use reqwless::client::{TlsConfig, TlsVerify};
 #[cfg(feature = "wifi")]
 use static_cell::StaticCell;
 
@@ -52,6 +56,9 @@ const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
 const READINGS_URL: &str = concat!(env!("API_URL"), "readings");
 #[cfg(feature = "wifi")]
 const API_KEY: &str = env!("API_KEY");
+// Optional static IP (set STATIC_IP env var to use; leave empty for DHCP)
+#[cfg(feature = "wifi")]
+const STATIC_IP: &str = match option_env!("STATIC_IP") { Some(v) => v, None => "" };
 
 // ── Static storage for embassy-net (must be 'static) ────────────────────────
 #[cfg(feature = "wifi")]
@@ -90,7 +97,7 @@ fn main() -> ! {
     let mut dht22 = Dht22::new(dht22_pin, Delay::new());
 
     loop {
-        delay.delay_millis(2000);
+        delay.delay_millis(10000);
         match dht22.read() {
             Ok(r) => {
                 esp_println::println!(
@@ -127,13 +134,13 @@ async fn connection_task(mut wifi_ctrl: esp_radio::wifi::WifiController<'static>
                 esp_println::println!("WiFi: connected!");
                 // Wait until we lose the connection before retrying.
                 wifi_ctrl.wait_for_event(esp_radio::wifi::WifiEvent::StaDisconnected).await;
-                esp_println::println!("WiFi: disconnected, retrying in 5 s");
+                esp_println::println!("WiFi: disconnected, retrying in 30 s");
             }
             Err(e) => {
-                esp_println::println!("WiFi: connect error: {:?}, retrying in 5 s", e);
+                esp_println::println!("WiFi: connect error: {:?}, retrying in 30 s", e);
             }
         }
-        Timer::after(Duration::from_secs(5)).await;
+        Timer::after(Duration::from_secs(30)).await;
     }
 }
 
@@ -167,13 +174,26 @@ async fn main(spawner: Spawner) {
         ))
         .unwrap();
 
+    install_wifi_event_diagnostics();
+
     wifi_ctrl.start_async().await.unwrap();
 
     // Build the embassy-net TCP/IP stack.
     let seed = esp_hal::rng::Rng::new().random() as u64;
+    // Use static IP if STATIC_IP env var is set, otherwise fall back to DHCP.
+    let net_config = if STATIC_IP.is_empty() {
+        NetConfig::dhcpv4(Default::default())
+    } else {
+        let parts: [u8; 4] = parse_ipv4(STATIC_IP);
+        NetConfig::ipv4_static(StaticConfigV4 {
+            address: Ipv4Cidr::new(Ipv4Address::new(parts[0], parts[1], parts[2], parts[3]), 24),
+            gateway: Some(Ipv4Address::new(parts[0], parts[1], parts[2], 1)),
+            dns_servers: Default::default(),
+        })
+    };
     let (stack, runner) = embassy_net::new(
         interfaces.sta,
-        NetConfig::dhcpv4(Default::default()),
+        net_config,
         NET_RESOURCES.init(StackResources::new()),
         seed,
     );
@@ -184,8 +204,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(connection_task(wifi_ctrl)).unwrap();
     spawner.spawn(net_task(runner)).unwrap();
 
-    // Wait for DHCP address.
-    esp_println::println!("Waiting for IP...");
+    // Wait until WiFi is connected and DHCP has assigned an address.
     stack.wait_config_up().await;
     if let Some(cfg) = stack.config_v4() {
         esp_println::println!("Got IP: {:?}", cfg.address);
@@ -214,13 +233,72 @@ async fn main(spawner: Spawner) {
                     r.temperature,
                     r.humidity
                 );
-                post_readings(stack, tcp_state, r.temperature, r.humidity).await;
+                if stack.is_config_up() {
+                    post_readings(stack, tcp_state, r.temperature, r.humidity).await;
+                } else {
+                    esp_println::println!("Network down, waiting for reconnect...");
+                    stack.wait_config_up().await;
+                    esp_println::println!("Reconnected, sending reading.");
+                    post_readings(stack, tcp_state, r.temperature, r.humidity).await;
+                }
             }
             Err(e) => {
                 esp_println::println!("DHT22 read error: {:?}", e);
             }
         }
     }
+}
+
+#[cfg(feature = "wifi")]
+fn install_wifi_event_diagnostics() {
+    event::StaStart::update_handler(|_| {
+        esp_println::println!("[wifi-event] StaStart");
+    });
+    event::StaConnected::update_handler(|ev| {
+        esp_println::println!(
+            "[wifi-event] StaConnected: channel={}, authmode={}, aid={}",
+            ev.channel(),
+            ev.authmode(),
+            ev.aid()
+        );
+    });
+    event::StaAuthmodeChange::update_handler(|ev| {
+        esp_println::println!(
+            "[wifi-event] StaAuthmodeChange: old={}, new={}",
+            ev.old_mode(),
+            ev.new_mode()
+        );
+    });
+    event::StaBeaconTimeout::update_handler(|_| {
+        esp_println::println!("[wifi-event] StaBeaconTimeout");
+    });
+    event::StaDisconnected::update_handler(|ev| {
+        let ssid_len = (ev.ssid_len() as usize).min(ev.ssid().len());
+        let ssid = &ev.ssid()[..ssid_len];
+        let bssid = ev.bssid();
+        if bssid.len() >= 6 {
+            esp_println::println!(
+                "[wifi-event] StaDisconnected: reason={}, rssi={}, ssid={:?}, bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                ev.reason(),
+                ev.rssi(),
+                ssid,
+                bssid[0],
+                bssid[1],
+                bssid[2],
+                bssid[3],
+                bssid[4],
+                bssid[5]
+            );
+        } else {
+            esp_println::println!(
+                "[wifi-event] StaDisconnected: reason={}, rssi={}, ssid={:?}, bssid={:?}",
+                ev.reason(),
+                ev.rssi(),
+                ssid,
+                bssid
+            );
+        }
+    });
 }
 
 /// Send temperature + humidity as HTTPS JSON POST to the backend API.
@@ -234,12 +312,19 @@ async fn post_readings(
     let tcp_client = TcpClient::new(*stack, tcp_state);
     let dns = DnsSocket::new(*stack);
 
+    #[cfg(not(feature = "no-tls"))]
     let tls_seed = esp_hal::rng::Rng::new().random() as u64;
+    #[cfg(not(feature = "no-tls"))]
     let mut tls_rx = [0u8; 4096];
+    #[cfg(not(feature = "no-tls"))]
     let mut tls_tx = [0u8; 4096];
+    #[cfg(not(feature = "no-tls"))]
     let tls = TlsConfig::new(tls_seed, &mut tls_rx, &mut tls_tx, TlsVerify::None);
 
+    #[cfg(not(feature = "no-tls"))]
     let mut http = HttpClient::new_with_tls(&tcp_client, &dns, tls);
+    #[cfg(feature = "no-tls")]
+    let mut http = HttpClient::new(&tcp_client, &dns);
 
     let body = alloc::format!(
         r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%"}}]"#,
@@ -262,4 +347,26 @@ async fn post_readings(
         }
         Err(e) => esp_println::println!("HTTP connect error: {:?}", e),
     }
+}
+
+/// Parse a "a.b.c.d" IPv4 string into [u8; 4] at compile-time-friendly runtime.
+#[cfg(feature = "wifi")]
+fn parse_ipv4(s: &str) -> [u8; 4] {
+    let mut out = [0u8; 4];
+    let mut idx = 0;
+    let mut cur = 0u8;
+    let mut has_digit = false;
+    for b in s.bytes() {
+        if b == b'.' {
+            out[idx] = cur;
+            idx += 1;
+            cur = 0;
+            has_digit = false;
+        } else {
+            cur = cur * 10 + (b - b'0');
+            has_digit = true;
+        }
+    }
+    if has_digit { out[idx] = cur; }
+    out
 }

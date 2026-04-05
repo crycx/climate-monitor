@@ -3,7 +3,7 @@ from flask import Flask
 from .config import configure_app
 from .extensions import db
 from .routes import register_blueprints
-from .services.user_service import ensure_users_is_admin_column
+from .services.user_service import ensure_readings_location_column, ensure_users_is_admin_column
 from .utils.env_utils import load_environment
 
 
@@ -18,5 +18,6 @@ def create_app() -> Flask:
     with app.app_context():
         db.create_all()
         ensure_users_is_admin_column()
+        ensure_readings_location_column()
 
     return app

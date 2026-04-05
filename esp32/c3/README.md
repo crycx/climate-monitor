@@ -21,6 +21,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # Install the nightly toolchain (required by this project)
 rustup toolchain install nightly
 
+# Required for build-std in .cargo/config.toml
+rustup component add --toolchain nightly rust-src
+
 # Add the RISC-V bare-metal target
 rustup target add --toolchain nightly riscv32imc-unknown-none-elf
 ```
@@ -54,7 +57,9 @@ runner = "espflash flash --monitor --chip esp32c3 --port COM3"
 [env]
 WIFI_SSID     = "YourNetworkName"
 WIFI_PASSWORD = "YourWifiPassword"
-API_URL       = "https://climate.sinpal.ee/api/"   # trailing slash required
+# Choose one API URL (trailing slash required):
+# API_URL     = "https://climate.sinpal.ee/api/"     # production (HTTPS)
+API_URL       = "http://192.168.50.25:8000/api/"     # local network (HTTP)
 API_KEY       = "your-64-char-api-key-here"
 
 [build]
@@ -69,7 +74,7 @@ The `API_KEY` must match the `api_key` column of the corresponding row in the
 
 ## Build & Flash
 
-### WiFi mode (sends data to server)
+### WiFi mode (sends data to server via HTTPS)
 
 ```bash
 cargo run --release --features wifi
@@ -77,6 +82,15 @@ cargo run --release --features wifi
 
 This compiles, flashes, and opens a serial monitor in one step.
 Press **Ctrl-R** to reset the board, **Ctrl-C** to exit the monitor.
+
+### WiFi mode — local development (plain HTTP, no TLS)
+
+Use this when the backend runs on your local network over HTTP.
+Set `API_URL = "http://<your-server-ip>:<port>/api/"` in `.cargo/config.toml`, then:
+
+```bash
+cargo run --release --features wifi,no-tls
+```
 
 ### Console-only mode (no WiFi, useful for sensor testing)
 
