@@ -1,0 +1,95 @@
+[package]
+name = "esp-wifi-caddy"
+version = "0.1.0"
+edition = "2024"
+authors = ["liebman <liebman@zod.com>"]
+license = "MIT OR Apache-2.0"
+rust-version = "1.93"
+description = "WiFi STA+AP manager for Embassy (esp-radio, embassy-net)"
+repository = "https://github.com/liebman/wifi-caddy"
+keywords = ["esp32", "wifi", "embassy", "embedded", "captive-portal"]
+categories = ["embedded", "no-std"]
+
+[features]
+default = ["config", "captive", "partition-table"]
+nightly = ["wifi-caddy/nightly"]
+defmt = [
+    "dep:defmt",
+    "esp-radio/defmt",
+    "embassy-time/defmt",
+    "embassy-net/defmt",
+    "wifi-caddy/defmt",
+]
+log = ["dep:log", "wifi-caddy/log"]
+config = [
+    "wifi-caddy/portal",
+    "dep:embedded-io-async",
+    "dep:sequential-storage",
+    "dep:embassy-embedded-hal",
+    "dep:esp-storage",
+]
+captive = ["wifi-caddy/captive"]
+partition-table = ["dep:esp-bootloader-esp-idf"]
+debug-server = ["wifi-caddy/debug-server"]
+
+# this feature is required for the docs.rs build and release builds to work
+esp-hal-unstable = ["esp-hal/unstable"]
+esp32c6 = [
+    "esp-hal/esp32c6",
+    "esp-rtos/esp32c6",
+    "esp-radio/esp32c6",
+    "esp-storage/esp32c6",
+    "esp-bootloader-esp-idf/esp32c6",
+]
+
+[package.metadata.docs.rs]
+features = ["esp32c6", "esp-hal-unstable"]
+targets = ["riscv32imac-unknown-none-elf"]
+cargo-args = ["-Z", "build-std=alloc,core"]
+
+[dependencies]
+wifi-caddy = { version = "0.1.0", path = "../wifi-caddy" }
+
+embassy-executor = { version = "0.9.1" }
+embassy-time = { version = "0.5.0" }
+embassy-sync = { version = "0.7.2" }
+embassy-futures = { version = "0.1.2" }
+embassy-net = { version = "0.8.0", features = [
+    "dhcpv4",
+    "medium-ethernet",
+    "tcp",
+    "udp",
+    "dns",
+] }
+
+esp-hal = { version = "1.0.0", features = ["unstable"] }
+esp-alloc = "0.9.0"
+esp-rtos = { version = "0.2.0", features = [
+    "embassy",
+    "esp-alloc",
+    "esp-radio",
+] }
+esp-radio = { version = "0.17.0", features = [
+    "esp-alloc",
+    "smoltcp",
+    "unstable",
+    "wifi",
+] }
+
+defmt = { version = "1.0.1", optional = true }
+log = { version = "0.4", optional = true }
+
+static_cell = { version = "2.1.1", default-features = false }
+enumset = "1.1.10"
+
+# config feature: flash storage backend
+embedded-io-async = { version = "0.7", optional = true }
+sequential-storage = { version = "7.0.1", optional = true, features = [
+    "alloc",
+] }
+embassy-embedded-hal = { version = "0.5.0", optional = true, features = [
+    "time",
+] }
+esp-storage = { version = "0.8.1", optional = true }
+
+esp-bootloader-esp-idf = { version = "0.4.0", optional = true, default-features = false }

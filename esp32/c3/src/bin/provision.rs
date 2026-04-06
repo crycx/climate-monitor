@@ -59,7 +59,7 @@ pub struct AppConfig {
     api_url: String,
 
     #[config_store(env_default = "API_KEY")]
-    #[config_form(fieldset = "Backend", input_type = "password", help = "Device API key")]
+    #[config_form(fieldset = "Backend", input_type = "text", help = "Device API key")]
     api_key: String,
 }
 

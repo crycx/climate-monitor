@@ -1225,9 +1225,8 @@ dependencies = [
 [[package]]
 name = "esp-wifi-caddy"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67132a49cf78252a1e102ff14e05fc17a8136c1cc7dbf33033f5dc3081607269"
 dependencies = [
+ "critical-section",
  "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
@@ -2414,8 +2413,6 @@ checksum = "6a02e4885ed3bc0f2de90ea6dd45ebcbb66dacffe03547fadbb0eeae2770887d"
 [[package]]
 name = "wifi-caddy"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5665edaa4de3badfa590375f10a3fa3d8817bcab45c115e3effe5a64b00d4e8"
 dependencies = [
  "edge-captive",
  "edge-dhcp",
@@ -2435,8 +2432,6 @@ dependencies = [
 [[package]]
 name = "wifi-caddy-proc"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95ed8c3917f4b15216c58ec23ad3f09f42cb4dd5a7a8c58ddd5755113d22e98a"
 dependencies = [
  "proc-macro2",
  "quote",

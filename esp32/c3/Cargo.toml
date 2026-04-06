@@ -1,6 +1,7 @@
 [package]
 edition      = "2024"
 name         = "wroom"
+default-run  = "wroom"
 rust-version = "1.88"
 version      = "0.1.0"
 
@@ -74,3 +75,8 @@ incremental      = false
 lto              = 'fat'
 opt-level        = 's'
 overflow-checks  = false
+
+[patch.crates-io]
+esp-wifi-caddy = { path = "vendor/esp-wifi-caddy" }
+wifi-caddy = { path = "vendor/wifi-caddy" }
+wifi-caddy-proc = { path = "vendor/wifi-caddy-proc" }

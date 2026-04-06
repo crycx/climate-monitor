@@ -29,7 +29,7 @@ use embassy_executor::Spawner;
 #[cfg(feature = "wifi")]
 use embassy_net::{Stack, dns::DnsSocket, tcp::client::TcpClientState};
 #[cfg(feature = "wifi")]
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 #[cfg(feature = "wifi")]
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 #[cfg(feature = "wifi")]
@@ -61,7 +61,115 @@ esp_bootloader_esp_idf::esp_app_desc!();
 #[config_notify]
 #[config_ui(
     page_heading = "Climate Monitor Setup",
-    subtitle = "Configure WiFi and API access for this device"
+        subtitle = "Configure WiFi and API access for this device",
+        extra_js = r#"
+(function () {
+    function installWifiScanUi() {
+        var ssidInput = document.getElementById('wifi_ssid');
+        if (!ssidInput || document.getElementById('wifi_scan_select')) {
+            return;
+        }
+
+        var field = ssidInput.closest('.config-form-group');
+        if (!field) {
+            return;
+        }
+
+        var row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.gap = '8px';
+        row.style.marginTop = '8px';
+        row.style.alignItems = 'center';
+
+        var scanBtn = document.createElement('button');
+        scanBtn.type = 'button';
+        scanBtn.textContent = 'Scan nearby WiFi';
+
+        var select = document.createElement('select');
+        select.id = 'wifi_scan_select';
+        select.style.flex = '1';
+
+        var placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Select a network';
+        select.appendChild(placeholder);
+
+        var status = document.createElement('div');
+        status.className = 'config-form-help';
+        status.style.marginTop = '6px';
+
+        function populate(networks) {
+            select.innerHTML = '';
+
+            var initial = document.createElement('option');
+            initial.value = '';
+            initial.textContent = networks.length ? 'Select a network' : 'No networks found yet';
+            select.appendChild(initial);
+
+            networks.forEach(function (network) {
+                var option = document.createElement('option');
+                option.value = network.ssid;
+                option.textContent = network.ssid + ' (' + network.rssi + ' dBm)';
+                select.appendChild(option);
+            });
+        }
+
+        function scanNetworks() {
+            scanBtn.disabled = true;
+            status.textContent = 'Scanning nearby networks...';
+
+            fetch('/wifi-scan')
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error('HTTP ' + response.status);
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    var networks = Array.isArray(data.networks) ? data.networks.filter(function (item) {
+                        return item && item.ssid;
+                    }) : [];
+                    populate(networks);
+                    status.textContent = networks.length
+                        ? 'Found ' + networks.length + ' nearby network(s).'
+                        : 'Scan completed, but no visible networks were returned yet.';
+                })
+                .catch(function (error) {
+                    status.textContent = 'Scan failed: ' + error.message;
+                })
+                .finally(function () {
+                    scanBtn.disabled = false;
+                });
+        }
+
+        select.addEventListener('change', function () {
+            if (select.value) {
+                ssidInput.value = select.value;
+            }
+        });
+
+        scanBtn.addEventListener('click', scanNetworks);
+        row.appendChild(scanBtn);
+        row.appendChild(select);
+        field.appendChild(row);
+        field.appendChild(status);
+
+        scanNetworks();
+    }
+
+    var originalLoadMain = window.loadConfig_main;
+    if (typeof originalLoadMain === 'function') {
+        window.loadConfig_main = function () {
+            return Promise.resolve(originalLoadMain()).then(function (result) {
+                installWifiScanUi();
+                return result;
+            });
+        };
+    }
+
+    window.addEventListener('load', installWifiScanUi);
+})();
+"#
 )]
 pub struct AppConfig {
     #[config_store(env_default = "WIFI_SSID", notify = "Wifi")]
@@ -77,7 +185,7 @@ pub struct AppConfig {
     api_url: String,
 
     #[config_store(env_default = "API_KEY")]
-    #[config_form(fieldset = "Backend", input_type = "password", help = "Device API key")]
+    #[config_form(fieldset = "Backend", input_type = "text", help = "Device API key")]
     api_key: String,
 }
 
@@ -150,22 +258,30 @@ async fn gpio_poll_task(btn: Input<'static>) {
 #[embassy_executor::task]
 async fn button_task(wifi_sender: esp_wifi_caddy::WifiCommandSender) {
     loop {
-        // Wait for button press.
+        // Wait for press.
         while !BUTTON_PRESSED.load(Ordering::Relaxed) {
             Timer::after(Duration::from_millis(20)).await;
         }
+        let press_start = Instant::now();
 
-        // Wait for release (basic debounce).
+        // Wait for release.
         while BUTTON_PRESSED.load(Ordering::Relaxed) {
             Timer::after(Duration::from_millis(20)).await;
         }
+        let held = press_start.elapsed();
 
-        if AP_ACTIVE.load(Ordering::Relaxed) {
-            esp_println::println!("Button: AP portal off");
+        if held >= Duration::from_secs(3) {
+            esp_println::println!("Button: long press -> force AP on");
+            AP_ACTIVE.store(true, Ordering::Relaxed);
+            wifi_sender
+                .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
+                .await;
+        } else if AP_ACTIVE.load(Ordering::Relaxed) {
+            esp_println::println!("Button: short press -> AP portal off");
             AP_ACTIVE.store(false, Ordering::Relaxed);
             wifi_sender.send(WifiCaddyCommand::APDown).await;
         } else {
-            esp_println::println!("Button: AP portal on");
+            esp_println::println!("Button: short press -> AP portal on");
             AP_ACTIVE.store(true, Ordering::Relaxed);
             wifi_sender
                 .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
@@ -382,7 +498,7 @@ async fn post_readings(
             let result = builder.send(&mut rx_buf).await;
             match result {
                 Ok(r) => {
-                    esp_println::println!("POST → HTTP {}", r.status.0);
+                    esp_println::println!("POST -> HTTP {}", r.status.0);
                     true
                 }
                 Err(e) => {
