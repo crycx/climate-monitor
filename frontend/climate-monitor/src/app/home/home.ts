@@ -1,8 +1,8 @@
-import { AfterViewInit, Component, ElementRef, OnDestroy, ViewChild, computed, effect, signal, untracked } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, OnDestroy, QueryList, ViewChildren, computed, effect, signal, untracked } from '@angular/core';
 import { finalize, Subscription, timeout } from 'rxjs';
 import { Chart, type ChartConfiguration, registerables } from 'chart.js';
 import { MatSnackBar, MatSnackBarRef } from '@angular/material/snack-bar';
-import { ApiLocation, ApiReading, ApiService } from '../services/api';
+import { ApiDevice, ApiLocation, ApiReading, ApiService } from '../services/api';
 import { Snackbar } from '../custom-components/snackbar/snackbar';
 
 Chart.register(...registerables);
@@ -34,17 +34,28 @@ type RangeOption = {
   styleUrl: './home.css',
 })
 export class Home implements AfterViewInit, OnDestroy {
-  @ViewChild('climateCanvas')
-  climateCanvas?: ElementRef<HTMLCanvasElement>;
+  @ViewChildren('deviceCanvas')
+  deviceCanvases!: QueryList<ElementRef<HTMLCanvasElement>>;
 
   loading = signal(true);
   error = signal('');
   lastUpdated = signal('');
   locations = signal<ApiLocation[]>([]);
+  devices = signal<ApiDevice[]>([]);
+  selectedDeviceIds = signal<number[]>([]);
+  gridCols = signal<1 | 2>(2);
   locationOptions = computed<LocationOption[]>(() => [
     { id: null, label: 'All locations' },
     ...this.locations().map((location) => ({ id: location.id, label: location.name })),
   ]);
+  visibleDevices = computed(() => {
+    const allDevices = this.devices();
+    const selected = this.selectedDeviceIds();
+    const readingDeviceIds = new Set(this.readings().map((r) => r.device_id));
+    const withReadings = allDevices.filter((d) => readingDeviceIds.has(d.id));
+    if (selected.length === 0) return withReadings;
+    return withReadings.filter((d) => selected.includes(d.id));
+  });
   rangeOptions: RangeOption[] = [
     { hours: 1, label: 'Last 1 h' },
     { hours: 3, label: 'Last 3 h' },
@@ -63,7 +74,8 @@ export class Home implements AfterViewInit, OnDestroy {
   autoRefreshEnabled = signal(true);
 
   private locationsSub?: Subscription;
-  private climateChart?: Chart;
+  private devicesSub?: Subscription;
+  private deviceCharts = new Map<number, Chart>();
   private colorSchemeMedia?: MediaQueryList;
   private colorSchemeListener?: (event: MediaQueryListEvent) => void;
   private readonly autoRefreshMs = 30000;
@@ -139,8 +151,10 @@ export class Home implements AfterViewInit, OnDestroy {
                 : 'Failed to load readings.',
             );
             this.readings.set([]);
-            this.climateChart?.destroy();
-            this.climateChart = undefined;
+            for (const chart of this.deviceCharts.values()) {
+              chart.destroy();
+            }
+            this.deviceCharts.clear();
           },
         });
 
@@ -153,10 +167,12 @@ export class Home implements AfterViewInit, OnDestroy {
       }
 
       const readings = this.readings();
+      const visibleDevices = this.visibleDevices();
       this.isDarkMode();
+      this.gridCols();
 
       const debounceId = window.setTimeout(() => {
-        this.renderChart(readings);
+        this.renderCharts(readings, visibleDevices);
       }, this.renderDebounceMs);
 
       onCleanup(() => {
@@ -193,13 +209,18 @@ export class Home implements AfterViewInit, OnDestroy {
 
   ngAfterViewInit(): void {
     this.loadLocations();
+    this.loadDevices();
     this.viewReady.set(true);
     this.refresh();
   }
 
   ngOnDestroy(): void {
     this.locationsSub?.unsubscribe();
-    this.climateChart?.destroy();
+    this.devicesSub?.unsubscribe();
+    for (const chart of this.deviceCharts.values()) {
+      chart.destroy();
+    }
+    this.deviceCharts.clear();
     this.closeLoadingSnack();
     if (this.colorSchemeMedia && this.colorSchemeListener) {
       this.colorSchemeMedia.removeEventListener('change', this.colorSchemeListener);
@@ -235,16 +256,46 @@ export class Home implements AfterViewInit, OnDestroy {
     this.autoRefreshEnabled.set(checked);
   }
 
-  private renderChart(readings: ApiReading[]): void {
-    const temperature = this.mapSeries(readings, 'temperature');
-    const humidity = this.mapSeries(readings, 'humidity');
+  onDeviceSelectionChange(ids: number[]): void {
+    this.selectedDeviceIds.set(ids);
+  }
 
-    this.climateChart = this.renderLineChart(
-      this.climateCanvas?.nativeElement,
-      this.climateChart,
-      temperature,
-      humidity,
-    );
+  onGridColsChange(cols: 1 | 2): void {
+    for (const chart of this.deviceCharts.values()) {
+      chart.destroy();
+    }
+    this.deviceCharts.clear();
+    this.gridCols.set(cols);
+  }
+
+  getLocationName(locationId: number | null): string | null {
+    if (!locationId) return null;
+    return this.locations().find((l) => l.id === locationId)?.name ?? null;
+  }
+
+  private renderCharts(readings: ApiReading[], visibleDevices: ApiDevice[]): void {
+    const visibleIds = new Set(visibleDevices.map((d) => d.id));
+    for (const [id, chart] of this.deviceCharts) {
+      if (!visibleIds.has(id)) {
+        chart.destroy();
+        this.deviceCharts.delete(id);
+      }
+    }
+
+    const canvases = this.deviceCanvases.toArray();
+    visibleDevices.forEach((device, index) => {
+      const canvas = canvases[index]?.nativeElement;
+      const deviceReadings = readings.filter((r) => r.device_id === device.id);
+      const temp = this.mapSeries(deviceReadings, 'temperature');
+      const hum = this.mapSeries(deviceReadings, 'humidity');
+      const existing = this.deviceCharts.get(device.id);
+      const chart = this.renderLineChart(canvas, existing, temp, hum);
+      if (chart) {
+        this.deviceCharts.set(device.id, chart);
+      } else {
+        this.deviceCharts.delete(device.id);
+      }
+    });
   }
 
   private mapSeries(readings: ApiReading[], sensorType: string): ReadingPoint[] {
@@ -317,6 +368,7 @@ export class Home implements AfterViewInit, OnDestroy {
         yHumScale.title.color = axisColor;
       }
 
+      existing.resize();
       existing.update('none');
       return existing;
     }
@@ -596,6 +648,14 @@ export class Home implements AfterViewInit, OnDestroy {
       error: () => {
         this.locations.set([]);
       },
+    });
+  }
+
+  private loadDevices(): void {
+    this.devicesSub?.unsubscribe();
+    this.devicesSub = this.api.listDevices().subscribe({
+      next: (devices) => this.devices.set(devices ?? []),
+      error: () => this.devices.set([]),
     });
   }
 }

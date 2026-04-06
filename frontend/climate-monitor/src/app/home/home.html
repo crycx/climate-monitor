@@ -2,7 +2,7 @@
   <div class="home-header">
     <div>
       <h1>Climate Overview</h1>
-      <p>Temperature and humidity on one chart.</p>
+      <p>Temperature and humidity per device.</p>
     </div>
     <div class="header-actions">
       <mat-form-field class="location-filter" appearance="outline" subscriptSizing="dynamic">
@@ -14,6 +14,20 @@
         >
           <mat-option *ngFor="let option of locationOptions()" [value]="option.id">
             {{ option.label }}
+          </mat-option>
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field class="device-filter" appearance="outline" subscriptSizing="dynamic">
+        <mat-label>Devices</mat-label>
+        <mat-select
+          multiple
+          panelClass="home-select-panel"
+          [value]="selectedDeviceIds()"
+          (selectionChange)="onDeviceSelectionChange($event.value)"
+        >
+          <mat-option *ngFor="let device of devices()" [value]="device.id">
+            {{ device.name }}
           </mat-option>
         </mat-select>
       </mat-form-field>
@@ -30,6 +44,19 @@
           </mat-option>
         </mat-select>
       </mat-form-field>
+
+      <mat-button-toggle-group
+        class="layout-toggle"
+        [value]="gridCols()"
+        (change)="onGridColsChange($event.value)"
+      >
+        <mat-button-toggle [value]="1" matTooltip="Full width">
+          <mat-icon>view_agenda</mat-icon>
+        </mat-button-toggle>
+        <mat-button-toggle [value]="2" matTooltip="Two columns">
+          <mat-icon>grid_view</mat-icon>
+        </mat-button-toggle>
+      </mat-button-toggle-group>
 
       <mat-checkbox
         class="auto-refresh-toggle"
@@ -54,13 +81,20 @@
 
   <p class="status status-error" *ngIf="!loading() && error()">{{ error() }}</p>
 
-  <div class="chart-grid" *ngIf="!error()">
-    <section class="chart-card">
-      <h2>Temperature + Humidity</h2>
+  <div class="chart-grid" [class.two-col]="gridCols() === 2" *ngIf="!error()">
+    <section class="chart-card" *ngFor="let device of visibleDevices()">
+      <div class="chart-card-header">
+        <h2>{{ device.name }}</h2>
+        <span class="chart-location" *ngIf="getLocationName(device.location_id) as locName">{{ locName }}</span>
+      </div>
       <div class="chart-shell">
-        <canvas #climateCanvas></canvas>
+        <canvas #deviceCanvas></canvas>
       </div>
     </section>
+
+    <p class="no-devices" *ngIf="!loading() && visibleDevices().length === 0 && readings().length > 0">
+      No devices match the current filter.
+    </p>
   </div>
 
   <p class="updated" *ngIf="lastUpdated()">Last updated: {{ lastUpdated() }}</p>

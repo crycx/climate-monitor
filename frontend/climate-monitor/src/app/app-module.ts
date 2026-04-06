@@ -23,6 +23,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatSelectModule } from '@angular/material/select';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { ServiceWorkerModule } from '@angular/service-worker';
 import { Snackbar } from './custom-components/snackbar/snackbar';
 import { CredentialsInterceptor } from './auth/credentials.interceptor';
@@ -92,6 +93,7 @@ registerLocaleData(localeEt);
     MatTooltipModule,
     MatCheckboxModule,
     MatSelectModule,
+    MatButtonToggleModule,
     ServiceWorkerModule.register('ngsw-worker.js', {
       enabled: environment.production,
       registrationStrategy: 'registerWhenStable:30000',
