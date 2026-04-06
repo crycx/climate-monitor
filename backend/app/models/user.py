@@ -17,5 +17,5 @@ class User(db.Model):
             "username": self.username,
             "email": self.email,
             "is_admin": self.is_admin,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
         }

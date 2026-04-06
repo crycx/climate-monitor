@@ -2,7 +2,9 @@ import { Component, OnDestroy, OnInit, signal } from '@angular/core';
 import { FormBuilder, FormGroup, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subject, takeUntil } from 'rxjs';
+import { MatSnackBar } from '@angular/material/snack-bar';
 import { DialogService } from '../../custom-components/dialog/dialog.service';
+import { Snackbar } from '../../custom-components/snackbar/snackbar';
 import { ApiService, CreateLocationPayload, UpdateLocationPayload } from '../../services/api';
 
 @Component({
@@ -30,6 +32,7 @@ export class LocationDetails implements OnInit, OnDestroy {
     private router: Router,
     private api: ApiService,
     private dialogService: DialogService,
+    private snackBar: MatSnackBar,
   ) {
     this.form = this.fb.group({
       name: ['', [Validators.required]],
@@ -106,7 +109,7 @@ export class LocationDetails implements OnInit, OnDestroy {
       this.api.createLocation(payload).pipe(takeUntil(this.destroy$)).subscribe({
         next: (location) => {
           this.saving.set(false);
-          this.success.set('Location created');
+          this.showSnack('Location created successfully', 'add_location', '#2e7d32');
           this.router.navigate(['/locations', location.id]);
         },
         error: (err) => {
@@ -131,7 +134,7 @@ export class LocationDetails implements OnInit, OnDestroy {
     this.api.updateLocation(this.locationId, payload).pipe(takeUntil(this.destroy$)).subscribe({
       next: () => {
         this.saving.set(false);
-        this.success.set('Location saved');
+        this.showSnack('Location saved successfully', 'check_circle', '#2e7d32', true);
       },
       error: (err) => {
         this.saving.set(false);
@@ -164,6 +167,7 @@ export class LocationDetails implements OnInit, OnDestroy {
       this.api.deleteLocation(this.locationId!).pipe(takeUntil(this.destroy$)).subscribe({
         next: () => {
           this.deleting.set(false);
+          this.showSnack('Location deleted successfully', 'delete_forever', '#b71c1c');
           this.router.navigateByUrl('/locations');
         },
         error: (err) => {
@@ -176,5 +180,28 @@ export class LocationDetails implements OnInit, OnDestroy {
 
   back(): void {
     this.router.navigateByUrl('/locations');
+  }
+
+  private showSnack(text: string, icon: string, iconColor: string, withBack = false): void {
+    const snackRef = this.snackBar.openFromComponent(Snackbar, {
+      horizontalPosition: 'center',
+      verticalPosition: 'bottom',
+      panelClass: ['cm-snackbar-dark'],
+      data: {
+        text,
+        icon,
+        iconColor,
+        durationMs: 1800,
+        dismiss: 'OK',
+        back: withBack ? 'Back' : null,
+      },
+    });
+
+    if (withBack) {
+      snackRef
+        .onAction()
+        .pipe(takeUntil(this.destroy$))
+        .subscribe(() => this.back());
+    }
   }
 }

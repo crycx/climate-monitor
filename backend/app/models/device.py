@@ -25,6 +25,6 @@ class Device(db.Model):
             "name": self.name,
             "device_type": self.device_type,
             "is_active": self.is_active,
-            "last_seen": self.last_seen.isoformat() if self.last_seen else None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_seen": self.last_seen.isoformat() + 'Z' if self.last_seen else None,
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
         }

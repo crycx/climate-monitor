@@ -44,6 +44,7 @@ import { Locations } from './locations/locations';
 import { LocationDetails } from './locations/location-details/location-details';
 import { Users } from './users/users';
 import { UserDetails } from './users/user-details/user-details';
+import { TimeAgoPipe } from './pipes/time-ago.pipe';
 
 registerLocaleData(localeEt);
 
@@ -66,6 +67,7 @@ registerLocaleData(localeEt);
     LocationDetails,
     Users,
     UserDetails,
+    TimeAgoPipe,
   ],
   imports: [
     BrowserModule,

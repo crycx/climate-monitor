@@ -2,7 +2,9 @@ import { Component, OnDestroy, OnInit, signal } from '@angular/core';
 import { FormBuilder, FormGroup, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subject, takeUntil } from 'rxjs';
+import { MatSnackBar } from '@angular/material/snack-bar';
 import { DialogService } from '../../custom-components/dialog/dialog.service';
+import { Snackbar } from '../../custom-components/snackbar/snackbar';
 import {
   ApiLocation,
   ApiService,
@@ -36,6 +38,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
     private router: Router,
     private api: ApiService,
     private dialogService: DialogService,
+    private snackBar: MatSnackBar,
   ) {
     this.form = this.fb.group({
       name: ['', [Validators.required]],
@@ -137,7 +140,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
       this.api.createDevice(payload).pipe(takeUntil(this.destroy$)).subscribe({
         next: (device) => {
           this.saving.set(false);
-          this.success.set('Device created');
+          this.showSnack('Device created successfully', 'devices', '#2e7d32');
           this.router.navigate(['/devices', device.id]);
         },
         error: (err) => {
@@ -165,7 +168,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
     this.api.updateDevice(this.deviceId, payload).pipe(takeUntil(this.destroy$)).subscribe({
       next: () => {
         this.saving.set(false);
-        this.success.set('Device saved');
+        this.showSnack('Device saved successfully', 'check_circle', '#2e7d32', true);
       },
       error: (err) => {
         this.saving.set(false);
@@ -198,6 +201,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
       this.api.deleteDevice(this.deviceId!).pipe(takeUntil(this.destroy$)).subscribe({
         next: () => {
           this.deleting.set(false);
+          this.showSnack('Device deleted successfully', 'delete_forever', '#b71c1c');
           this.router.navigateByUrl('/devices');
         },
         error: (err) => {
@@ -210,6 +214,29 @@ export class DeviceDetails implements OnInit, OnDestroy {
 
   back(): void {
     this.router.navigateByUrl('/devices');
+  }
+
+  private showSnack(text: string, icon: string, iconColor: string, withBack = false): void {
+    const snackRef = this.snackBar.openFromComponent(Snackbar, {
+      horizontalPosition: 'center',
+      verticalPosition: 'bottom',
+      panelClass: ['cm-snackbar-dark'],
+      data: {
+        text,
+        icon,
+        iconColor,
+        durationMs: 1800,
+        dismiss: 'OK',
+        back: withBack ? 'Back' : null,
+      },
+    });
+
+    if (withBack) {
+      snackRef
+        .onAction()
+        .pipe(takeUntil(this.destroy$))
+        .subscribe(() => this.back());
+    }
   }
 
   generateApiKey(): void {

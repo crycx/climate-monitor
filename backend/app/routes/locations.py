@@ -30,7 +30,10 @@ def create_location(current_user: User):
     if not name:
         return jsonify({"error": "name is required"}), 400
 
-    user_id = payload.get("user_id") if current_user.is_admin else current_user.id
+    if current_user.is_admin:
+        user_id = payload.get("user_id", current_user.id)
+    else:
+        user_id = current_user.id
     if not isinstance(user_id, int) or not db.session.get(User, user_id):
         return jsonify({"error": "Invalid user_id"}), 400
 
