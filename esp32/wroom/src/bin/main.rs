@@ -111,22 +111,16 @@ async fn post_readings(
     match http.request(Method::POST, READINGS_URL).await {
         Ok(request) => {
             let headers = [("X-API-Key", API_KEY)];
-            let mut request = request
+            let mut builder = request
                 .content_type(ContentType::ApplicationJson)
                 .headers(&headers)
                 .body(body.as_bytes());
-
-            let result = embassy_time::with_timeout(Duration::from_secs(10), request.send(&mut rx_buf)).await;
-
-            match result {
-                Ok(Ok(response)) => {
+            match builder.send(&mut rx_buf).await {
+                Ok(response) => {
                     esp_println::println!("POST -> HTTP {}", response.status.0);
                 }
-                Ok(Err(error)) => {
+                Err(error) => {
                     esp_println::println!("POST error: {:?}", error);
-                }
-                Err(_) => {
-                    esp_println::println!("POST send timeout");
                 }
             }
         }
