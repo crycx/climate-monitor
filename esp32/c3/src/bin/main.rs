@@ -9,6 +9,9 @@
 #[cfg(feature = "wifi")]
 extern crate alloc;
 
+#[cfg(feature = "wifi")]
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use embedded_dht_rs::dht22::Dht22;
 use esp_backtrace as _;
 use esp_hal::{
@@ -68,7 +71,9 @@ static NET_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 #[cfg(feature = "wifi")]
 static NET_STACK: StaticCell<Stack<'static>> = StaticCell::new();
 #[cfg(feature = "wifi")]
-static TCP_STATE: StaticCell<TcpClientState<1, 4096, 4096>> = StaticCell::new();
+static TCP_STATE: StaticCell<TcpClientState<2, 4096, 4096>> = StaticCell::new();
+#[cfg(feature = "wifi")]
+static JUST_RECONNECTED: AtomicBool = AtomicBool::new(false);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NO-WIFI mode — sync DHT22 console logging
@@ -132,6 +137,7 @@ async fn connection_task(mut wifi_ctrl: esp_radio::wifi::WifiController<'static>
         match wifi_ctrl.connect_async().await {
             Ok(()) => {
                 esp_println::println!("WiFi: connected!");
+                JUST_RECONNECTED.store(true, Ordering::Relaxed);
                 // Wait until we lose the connection before retrying.
                 wifi_ctrl.wait_for_event(esp_radio::wifi::WifiEvent::StaDisconnected).await;
                 esp_println::println!("WiFi: disconnected, retrying in 30 s");
@@ -198,7 +204,7 @@ async fn main(spawner: Spawner) {
         seed,
     );
     let stack: &'static Stack<'static> = NET_STACK.init(stack);
-    let tcp_state: &'static TcpClientState<1, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
+    let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
 
     // Spawn background tasks — connection handler and net stack runner.
     spawner.spawn(connection_task(wifi_ctrl)).unwrap();
@@ -234,12 +240,19 @@ async fn main(spawner: Spawner) {
                     r.humidity
                 );
                 if stack.is_config_up() {
-                    post_readings(stack, tcp_state, r.temperature, r.humidity).await;
+                    if JUST_RECONNECTED.load(Ordering::Relaxed) {
+                        JUST_RECONNECTED.store(false, Ordering::Relaxed);
+                        esp_println::println!("Post-reconnect: waiting 5 s for network to stabilise...");
+                        Timer::after(Duration::from_secs(5)).await;
+                    }
+                    post_readings_with_retry(stack, tcp_state, r.temperature, r.humidity).await;
                 } else {
                     esp_println::println!("Network down, waiting for reconnect...");
                     stack.wait_config_up().await;
-                    esp_println::println!("Reconnected, sending reading.");
-                    post_readings(stack, tcp_state, r.temperature, r.humidity).await;
+                    JUST_RECONNECTED.store(false, Ordering::Relaxed);
+                    esp_println::println!("Reconnected, waiting 5 s before sending...");
+                    Timer::after(Duration::from_secs(5)).await;
+                    post_readings_with_retry(stack, tcp_state, r.temperature, r.humidity).await;
                 }
             }
             Err(e) => {
@@ -301,14 +314,35 @@ fn install_wifi_event_diagnostics() {
     });
 }
 
-/// Send temperature + humidity as HTTPS JSON POST to the backend API.
+/// Retry wrapper: tries up to 3 times with 10 s delay between attempts.
 #[cfg(feature = "wifi")]
-async fn post_readings(
+async fn post_readings_with_retry(
     stack: &'static Stack<'static>,
-    tcp_state: &'static TcpClientState<1, 4096, 4096>,
+    tcp_state: &'static TcpClientState<2, 4096, 4096>,
     temp: f32,
     hum: f32,
 ) {
+    for attempt in 1..=3u8 {
+        if attempt > 1 {
+            esp_println::println!("Retry {}/3 in 10 s...", attempt);
+            Timer::after(Duration::from_secs(10)).await;
+        }
+        if post_readings(stack, tcp_state, temp, hum).await {
+            return;
+        }
+    }
+    esp_println::println!("All 3 POST attempts failed, will retry next cycle.");
+}
+
+/// Send temperature + humidity as HTTPS JSON POST to the backend API.
+/// Returns true on success.
+#[cfg(feature = "wifi")]
+async fn post_readings(
+    stack: &'static Stack<'static>,
+    tcp_state: &'static TcpClientState<2, 4096, 4096>,
+    temp: f32,
+    hum: f32,
+) -> bool {
     let tcp_client = TcpClient::new(*stack, tcp_state);
     let dns = DnsSocket::new(*stack);
 
@@ -341,11 +375,20 @@ async fn post_readings(
                 .body(body.as_bytes());
             let result = builder.send(&mut rx_buf).await;
             match result {
-                Ok(r) => esp_println::println!("POST → HTTP {}", r.status.0),
-                Err(e) => esp_println::println!("POST error: {:?}", e),
+                Ok(r) => {
+                    esp_println::println!("POST → HTTP {}", r.status.0);
+                    true
+                }
+                Err(e) => {
+                    esp_println::println!("POST error: {:?}", e);
+                    false
+                }
             }
         }
-        Err(e) => esp_println::println!("HTTP connect error: {:?}", e),
+        Err(e) => {
+            esp_println::println!("HTTP connect error: {:?}", e);
+            false
+        }
     }
 }
 
