@@ -16,6 +16,7 @@
 #![no_std]
 #![no_main]
 #![feature(impl_trait_in_assoc_type)]
+#![allow(unexpected_cfgs)]
 
 extern crate alloc;
 

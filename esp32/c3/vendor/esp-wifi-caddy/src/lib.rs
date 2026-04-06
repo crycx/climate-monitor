@@ -19,8 +19,7 @@ use embassy_net::StackResources;
 use embassy_net::StaticConfigV4;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Receiver, Sender};
-use embassy_time::Duration;
-use embassy_time::Timer;
+use embassy_time::{Duration, Instant, Timer};
 use enumset::EnumSet;
 use esp_hal::peripherals::WIFI;
 use esp_hal::rng::Rng;
@@ -124,10 +123,14 @@ static WIFI_COMMAND_CHANNEL: WifiCommandChannel = WifiCommandChannel::new();
 #[cfg(feature = "config")]
 static SCAN_RESULTS_JSON: critical_section::Mutex<RefCell<Option<String>>> =
     critical_section::Mutex::new(RefCell::new(None));
+#[cfg(feature = "config")]
+static PORTAL_LOG_TEXT: critical_section::Mutex<RefCell<Option<String>>> =
+    critical_section::Mutex::new(RefCell::new(None));
 
 /// Delay before retrying STA connect after failure or disconnect (ms).
 const STA_RECONNECT_DELAY_MS: u64 = 5000;
-const AP_SCAN_REFRESH_MS: u64 = 15000;
+const AP_SCAN_REFRESH_MS: u64 = 5000;
+const PORTAL_LOG_MAX_CHARS: usize = 6000;
 
 #[cfg(feature = "config")]
 fn json_escape(input: &str) -> String {
@@ -178,6 +181,49 @@ fn clear_scan_results() {
 }
 
 #[cfg(feature = "config")]
+fn push_portal_log_line(line: &str) {
+    critical_section::with(|cs| {
+        let mut text = PORTAL_LOG_TEXT
+            .borrow_ref(cs)
+            .clone()
+            .unwrap_or_else(String::new);
+
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(line);
+
+        while text.len() > PORTAL_LOG_MAX_CHARS {
+            if let Some(next_line) = text.find('\n') {
+                text.drain(..=next_line);
+            } else {
+                text = String::from(&text[text.len().saturating_sub(PORTAL_LOG_MAX_CHARS)..]);
+                break;
+            }
+        }
+
+        *PORTAL_LOG_TEXT.borrow_ref_mut(cs) = Some(text);
+    });
+}
+
+#[cfg(feature = "config")]
+fn clear_portal_logs() {
+    critical_section::with(|cs| {
+        *PORTAL_LOG_TEXT.borrow_ref_mut(cs) = Some(String::new());
+    });
+}
+
+#[cfg(feature = "config")]
+/// Append one line to the AP portal runtime log buffer (`/wifi-log`).
+pub fn portal_log(line: &str) {
+    push_portal_log_line(line);
+}
+
+#[cfg(not(feature = "config"))]
+/// No-op when config portal support is disabled.
+pub fn portal_log(_line: &str) {}
+
+#[cfg(feature = "config")]
 #[doc(hidden)]
 pub fn scan_portal_response(path: &str) -> Option<wifi_caddy::portal::config_ui::CustomResponse> {
     if path != "/wifi-scan" {
@@ -198,6 +244,33 @@ pub fn scan_portal_response(path: &str) -> Option<wifi_caddy::portal::config_ui:
     })
 }
 
+#[cfg(feature = "config")]
+#[doc(hidden)]
+pub fn log_portal_response(path: &str) -> Option<wifi_caddy::portal::config_ui::CustomResponse> {
+    if path != "/wifi-log" {
+        return None;
+    }
+
+    let body = critical_section::with(|cs| {
+        PORTAL_LOG_TEXT
+            .borrow_ref(cs)
+            .clone()
+            .unwrap_or_else(String::new)
+    });
+
+    Some(wifi_caddy::portal::config_ui::CustomResponse {
+        status: 200,
+        content_type: "text/plain; charset=utf-8",
+        body,
+    })
+}
+
+#[cfg(feature = "config")]
+#[doc(hidden)]
+pub fn portal_custom_response(path: &str) -> Option<wifi_caddy::portal::config_ui::CustomResponse> {
+    scan_portal_response(path).or_else(|| log_portal_response(path))
+}
+
 /// STA and AP network stacks returned by [`init`].
 pub struct WifiStacks {
     /// Station (client) network stack — use for normal internet access.
@@ -213,6 +286,11 @@ pub struct WifiStacks {
 /// [`WifiCaddyCommand::StaUp`] or [`WifiCaddyCommand::APUp`] to activate.
 pub async fn init(spawner: &Spawner, wifi: WIFI<'static>) -> (WifiStacks, WifiCommandSender) {
     info!("wifi: initialize wifi");
+    #[cfg(feature = "config")]
+    {
+        clear_portal_logs();
+        push_portal_log_line("wifi: init");
+    }
     let wifi_commands = WIFI_COMMAND_CHANNEL.receiver();
     let sender = WIFI_COMMAND_CHANNEL.sender();
     let sta_config: embassy_net::Config = embassy_net::Config::dhcpv4(Default::default());
@@ -268,6 +346,7 @@ struct WifiRunner {
     ssid: String,
     pass: String,
     wifi_commands: WifiCommandReceiver,
+    last_scan_attempt: Option<Instant>,
 }
 
 impl WifiRunner {
@@ -284,6 +363,7 @@ impl WifiRunner {
             ssid: String::new(),
             pass: String::new(),
             wifi_commands,
+            last_scan_attempt: None,
         }
     }
 
@@ -383,13 +463,24 @@ impl WifiRunner {
             return;
         }
 
-        match self.controller.scan_with_config_async(ScanConfig::default()).await {
+        let now = Instant::now();
+        if let Some(last) = self.last_scan_attempt {
+            if now.duration_since(last) < Duration::from_secs(3) {
+                return;
+            }
+        }
+        self.last_scan_attempt = Some(now);
+
+        let config = ScanConfig::default().with_show_hidden(true).with_max(32);
+        match self.controller.scan_with_config_async(config).await {
             Ok(results) => {
                 info!("wifi: cached {} visible networks", results.len());
+                push_portal_log_line(alloc::format!("scan: {} networks", results.len()).as_str());
                 store_scan_results(&results);
             }
             Err(e) => {
                 warn!("wifi: scan failed: {:?}", e);
+                push_portal_log_line(alloc::format!("scan: failed ({:?})", e).as_str());
                 clear_scan_results();
             }
         }
@@ -404,15 +495,21 @@ impl WifiRunner {
                 info!("wifi: connection task: APUp command");
                 self.ap_ssid_prefix = prefix;
                 self.ap_up = true;
+                #[cfg(feature = "config")]
+                push_portal_log_line("ap: on");
             }
             WifiCaddyCommand::APDown => {
                 info!("wifi: connection task: APDown command");
                 self.ap_up = false;
                 #[cfg(feature = "config")]
                 clear_scan_results();
+                #[cfg(feature = "config")]
+                push_portal_log_line("ap: off");
             }
             WifiCaddyCommand::StaUp(new_ssid, new_pass) => {
                 info!("wifi: connection task: StaUp command");
+                #[cfg(feature = "config")]
+                push_portal_log_line(alloc::format!("sta: set ssid '{}'", new_ssid).as_str());
                 self.ssid = new_ssid;
                 self.pass = new_pass;
             }
@@ -427,12 +524,16 @@ impl WifiRunner {
             match event {
                 WifiEvent::StaConnected => {
                     info!("wifi: connection task: StaConnected");
+                    #[cfg(feature = "config")]
+                    push_portal_log_line("wifi connected (sta)");
                 }
                 WifiEvent::StaDisconnected => {
                     warn!(
                         "wifi: connection task: StaDisconnected - reconnect after {} seconds",
                         STA_RECONNECT_DELAY_MS / 1000
                     );
+                    #[cfg(feature = "config")]
+                    push_portal_log_line("wifi disconnected (sta)");
                     Timer::after(Duration::from_millis(STA_RECONNECT_DELAY_MS)).await;
                     self.try_connect_sta().await;
                 }
@@ -464,6 +565,7 @@ impl WifiRunner {
                 Either3::Second(events) => {
                     debug!("wifi: connection task: events: {:?}", events);
                     self.handle_wifi_events(events).await;
+                    self.refresh_scan_results().await;
                 }
                 Either3::Third(_) => {
                     self.refresh_scan_results().await;
@@ -608,7 +710,7 @@ macro_rules! __wifi_init_debug_worker {
                 io,
                 ui,
                 on_updated,
-                Some(&$crate::scan_portal_response),
+                Some(&$crate::portal_custom_response),
             )
             .await
         }
@@ -666,7 +768,7 @@ macro_rules! __wifi_init_workers {
                 io,
                 ui,
                 on_updated,
-                Some(&$crate::scan_portal_response),
+                Some(&$crate::portal_custom_response),
             )
             .await
         }

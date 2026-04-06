@@ -5,7 +5,28 @@ use edge_http::io::server::Connection;
 use embedded_io_async::{ErrorType, Read, Write};
 
 use super::dhcp::{AP_HOST_NAME, AP_URL};
-use super::responses::send_redirect;
+use super::responses::{send_redirect, send_text};
+
+fn host_without_port(host: &str) -> &str {
+    host.split(':').next().unwrap_or(host)
+}
+
+fn is_probe_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/connecttest.txt"
+            | "/redirect"
+            | "/hotspot-detect.html"
+            | "/generate_204"
+            | "/gen_204"
+            | "/ncsi.txt"
+            | "/success.txt"
+    )
+}
+
+fn is_windows_ncsi_text_probe(path: &str) -> bool {
+    matches!(path, "/connecttest.txt" | "/ncsi.txt")
+}
 
 /// Check if the request should be redirected to the AP URL (captive portal).
 /// Returns `true` if a redirect response was sent (caller should not process further).
@@ -17,12 +38,27 @@ where
     T: Read + Write,
 {
     let headers = conn.headers()?;
+    let path = headers.path.split_once('?').map_or(headers.path, |(p, _)| p);
+    if is_probe_path(path) {
+        info!("captive: probe path '{}' -> captive response", path);
+        if is_windows_ncsi_text_probe(path) {
+            // Returning non-Microsoft probe content keeps NCSI in captive state,
+            // which helps Windows surface the "Sign in" network flow.
+            send_text(conn, 200, "Climate Monitor captive portal").await?;
+        } else {
+            send_redirect(conn, AP_URL).await?;
+        }
+        return Ok(true);
+    }
+
     let host = headers
         .headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("Host"))
         .map(|(_, value)| value);
-    let redirect = host.map(|v| v != AP_HOST_NAME).unwrap_or(false);
+    let redirect = host
+        .map(|value| host_without_port(value) != AP_HOST_NAME)
+        .unwrap_or(true);
 
     if redirect {
         info!(

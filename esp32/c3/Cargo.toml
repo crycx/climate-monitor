@@ -22,6 +22,7 @@ wifi = [
     "dep:embassy-net",
     "dep:reqwless",
 ]
+defmt = []
 # Use plain HTTP instead of HTTPS (for local/development testing).
 # Combine with wifi: cargo run --release --features wifi,no-tls
 no-tls = []
@@ -53,7 +54,7 @@ embassy-sync      = "0.7"
 embedded-io-async = { version = "0.6", optional = true }
 static_cell       = { version = "2" }
 reqwless          = { version = "0.14", optional = true, features = ["alloc"] }
-esp-wifi-caddy = { version = "0.1.0", features = ["nightly"] }
+esp-wifi-caddy = { version = "0.1.0", features = ["nightly", "log"] }
 wifi-caddy = "0.1.0"
 wifi-caddy-proc = "0.1.0"
 enumset = { version = "1.1", default-features = false }

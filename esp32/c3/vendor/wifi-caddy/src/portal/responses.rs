@@ -82,7 +82,7 @@ where
     conn.complete().await
 }
 
-/// Send a 307 redirect response.
+/// Send a 302 redirect response.
 #[cfg(feature = "captive")]
 pub async fn send_redirect<T, const N: usize>(
     conn: &mut Connection<'_, T, N>,
@@ -92,9 +92,14 @@ where
     T: Read + Write,
 {
     conn.initiate_response(
-        307,
+        302,
         None,
-        &[("Location", location), ("Connection", "close")],
+        &[
+            ("Location", location),
+            ("Cache-Control", "no-store, no-cache, must-revalidate"),
+            ("Pragma", "no-cache"),
+            ("Connection", "close"),
+        ],
     )
     .await?;
     conn.write_all(location.as_bytes()).await?;

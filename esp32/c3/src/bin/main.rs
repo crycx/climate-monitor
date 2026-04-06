@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![cfg_attr(feature = "wifi", feature(impl_trait_in_assoc_type))]
+#![allow(unexpected_cfgs)]
 #![deny(
     clippy::mem_forget,
     reason = "mem::forget is generally not safe to do with esp_hal types, especially those \
@@ -154,6 +155,77 @@ esp_bootloader_esp_idf::esp_app_desc!();
         field.appendChild(row);
         field.appendChild(status);
 
+        var logToggle = document.createElement('button');
+        logToggle.type = 'button';
+        logToggle.textContent = 'Show device log';
+        logToggle.style.marginTop = '8px';
+
+        var logPanel = document.createElement('div');
+        logPanel.style.display = 'none';
+        logPanel.style.marginTop = '8px';
+        logPanel.style.border = '1px solid #cbd5e1';
+        logPanel.style.borderRadius = '8px';
+        logPanel.style.background = '#0b1220';
+        logPanel.style.color = '#dbeafe';
+        logPanel.style.padding = '8px';
+
+        var logText = document.createElement('pre');
+        logText.style.margin = '0';
+        logText.style.maxHeight = '180px';
+        logText.style.overflow = 'auto';
+        logText.style.whiteSpace = 'pre-wrap';
+        logText.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+        logText.style.fontSize = '12px';
+        logText.textContent = 'No log data yet.';
+        logPanel.appendChild(logText);
+
+        var logTimer = null;
+
+        function loadLog() {
+            fetch('/wifi-log')
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error('HTTP ' + response.status);
+                    }
+                    return response.text();
+                })
+                .then(function (text) {
+                    logText.textContent = text && text.trim() ? text : 'No log data yet.';
+                })
+                .catch(function (error) {
+                    logText.textContent = 'Log fetch failed: ' + error.message;
+                });
+        }
+
+        function openLogPanel() {
+            logPanel.style.display = '';
+            logToggle.textContent = 'Hide device log';
+            loadLog();
+            if (logTimer === null) {
+                logTimer = window.setInterval(loadLog, 2000);
+            }
+        }
+
+        function closeLogPanel() {
+            logPanel.style.display = 'none';
+            logToggle.textContent = 'Show device log';
+            if (logTimer !== null) {
+                window.clearInterval(logTimer);
+                logTimer = null;
+            }
+        }
+
+        logToggle.addEventListener('click', function () {
+            if (logPanel.style.display === 'none') {
+                openLogPanel();
+            } else {
+                closeLogPanel();
+            }
+        });
+
+        field.appendChild(logToggle);
+        field.appendChild(logPanel);
+
         scanNetworks();
     }
 
@@ -198,6 +270,12 @@ static TCP_STATE: StaticCell<embassy_net::tcp::client::TcpClientState<2, 4096, 4
 static BUTTON_PRESSED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "wifi")]
 static AP_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "wifi")]
+fn log_runtime_line(line: &str) {
+    esp_println::println!("{}", line);
+    esp_wifi_caddy::portal_log(line);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NO-WIFI mode — sync DHT22 console logging
@@ -271,17 +349,17 @@ async fn button_task(wifi_sender: esp_wifi_caddy::WifiCommandSender) {
         let held = press_start.elapsed();
 
         if held >= Duration::from_secs(3) {
-            esp_println::println!("Button: long press -> force AP on");
+            log_runtime_line("Button: long press -> force AP on");
             AP_ACTIVE.store(true, Ordering::Relaxed);
             wifi_sender
                 .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
                 .await;
         } else if AP_ACTIVE.load(Ordering::Relaxed) {
-            esp_println::println!("Button: short press -> AP portal off");
+            log_runtime_line("Button: short press -> AP portal off");
             AP_ACTIVE.store(false, Ordering::Relaxed);
             wifi_sender.send(WifiCaddyCommand::APDown).await;
         } else {
-            esp_println::println!("Button: short press -> AP portal on");
+            log_runtime_line("Button: short press -> AP portal on");
             AP_ACTIVE.store(true, Ordering::Relaxed);
             wifi_sender
                 .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
@@ -324,7 +402,7 @@ async fn main(spawner: Spawner) {
     {
         let cfg = config_handle.config().lock().await;
         if !cfg.wifi_ssid.is_empty() {
-            esp_println::println!("Config found: starting STA mode");
+            log_runtime_line("Config found: starting STA mode");
             wifi_sender
                 .send(WifiCaddyCommand::StaUp(
                     cfg.wifi_ssid.clone(),
@@ -332,7 +410,7 @@ async fn main(spawner: Spawner) {
                 ))
                 .await;
         } else {
-            esp_println::println!("No WiFi config: starting AP portal at 192.168.2.1");
+            log_runtime_line("No WiFi config: starting AP portal at 192.168.2.1");
             AP_ACTIVE.store(true, Ordering::Relaxed);
             wifi_sender
                 .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
@@ -353,14 +431,25 @@ async fn main(spawner: Spawner) {
 
     let mut dht22 = Dht22::new(dht22_pin, Delay::new());
 
-    let mut net_was_up = true;
+    let mut net_was_up = stack.is_config_up();
     loop {
         Timer::after(Duration::from_secs(30)).await;
+
+        let net_is_up_now = stack.is_config_up();
+        if net_is_up_now && !net_was_up {
+            log_runtime_line("WiFi connected");
+            if let Some(cfg) = stack.config_v4() {
+                log_runtime_line(format!("Got IP: {:?}", cfg.address).as_str());
+            }
+        } else if !net_is_up_now && net_was_up {
+            log_runtime_line("WiFi disconnected");
+        }
+        net_was_up = net_is_up_now;
 
         if let Ok(_changed) = config_rx.try_receive() {
             let cfg = config_handle.config().lock().await;
             if !cfg.wifi_ssid.is_empty() {
-                esp_println::println!("Config changed: reconnecting STA");
+                log_runtime_line("Config changed: reconnecting STA");
                 wifi_sender
                     .send(WifiCaddyCommand::StaUp(
                         cfg.wifi_ssid.clone(),
@@ -377,20 +466,8 @@ async fn main(spawner: Spawner) {
 
         match dht22.read() {
             Ok(r) => {
-                esp_println::println!(
-                    "DHT22: {:.1} °C  {:.1} %",
-                    r.temperature,
-                    r.humidity
-                );
+                log_runtime_line(format!("DHT22: {:.1} C  {:.1} %", r.temperature, r.humidity).as_str());
                 if stack.is_config_up() {
-                    if !net_was_up {
-                        net_was_up = true;
-                        if let Some(cfg) = stack.config_v4() {
-                            esp_println::println!("Got IP: {:?}", cfg.address);
-                        }
-                        esp_println::println!("Post-reconnect: waiting 5 s for network to stabilise...");
-                        Timer::after(Duration::from_secs(5)).await;
-                    }
                     let cfg = config_handle.config().lock().await;
                     post_readings_with_retry(
                         stack,
@@ -402,10 +479,9 @@ async fn main(spawner: Spawner) {
                     )
                     .await;
                 } else {
-                    net_was_up = false;
-                    esp_println::println!("Network down, waiting for reconnect...");
+                    log_runtime_line("Network down, waiting for reconnect...");
                     stack.wait_config_up().await;
-                    esp_println::println!("Reconnected, waiting 5 s before sending...");
+                    log_runtime_line("Reconnected, waiting 5 s before sending...");
                     Timer::after(Duration::from_secs(5)).await;
                     let cfg = config_handle.config().lock().await;
                     post_readings_with_retry(
@@ -420,7 +496,7 @@ async fn main(spawner: Spawner) {
                 }
             }
             Err(e) => {
-                esp_println::println!("DHT22 read error: {:?}", e);
+                log_runtime_line(format!("DHT22 read error: {:?}", e).as_str());
             }
         }
     }
@@ -438,14 +514,14 @@ async fn post_readings_with_retry(
 ) {
     for attempt in 1..=3u8 {
         if attempt > 1 {
-            esp_println::println!("Retry {}/3 in 10 s...", attempt);
+            log_runtime_line(format!("Retry {}/3 in 10 s...", attempt).as_str());
             Timer::after(Duration::from_secs(10)).await;
         }
         if post_readings(stack, tcp_state, api_url, api_key, temp, hum).await {
             return;
         }
     }
-    esp_println::println!("All 3 POST attempts failed, will retry next cycle.");
+    log_runtime_line("All 3 POST attempts failed, will retry next cycle.");
 }
 
 /// Send temperature + humidity as HTTPS JSON POST to the backend API.
@@ -460,7 +536,7 @@ async fn post_readings(
     hum: f32,
 ) -> bool {
     if api_url.is_empty() || api_key.is_empty() {
-        esp_println::println!("API config missing, skipping POST.");
+        log_runtime_line("API config missing, skipping POST.");
         return false;
     }
 
@@ -498,17 +574,17 @@ async fn post_readings(
             let result = builder.send(&mut rx_buf).await;
             match result {
                 Ok(r) => {
-                    esp_println::println!("POST -> HTTP {}", r.status.0);
+                    log_runtime_line(format!("POST -> HTTP {}", r.status.0).as_str());
                     true
                 }
                 Err(e) => {
-                    esp_println::println!("POST error: {:?}", e);
+                    log_runtime_line(format!("POST error: {:?}", e).as_str());
                     false
                 }
             }
         }
         Err(e) => {
-            esp_println::println!("HTTP connect error: {:?}", e);
+            log_runtime_line(format!("HTTP connect error: {:?}", e).as_str());
             false
         }
     }
