@@ -126,11 +126,14 @@ static SCAN_RESULTS_JSON: critical_section::Mutex<RefCell<Option<String>>> =
 #[cfg(feature = "config")]
 static PORTAL_LOG_TEXT: critical_section::Mutex<RefCell<Option<String>>> =
     critical_section::Mutex::new(RefCell::new(None));
+#[cfg(feature = "config")]
+static PORTAL_LOG_ENABLED: critical_section::Mutex<RefCell<bool>> =
+    critical_section::Mutex::new(RefCell::new(false));
 
 /// Delay before retrying STA connect after failure or disconnect (ms).
 const STA_RECONNECT_DELAY_MS: u64 = 5000;
 const AP_SCAN_REFRESH_MS: u64 = 5000;
-const PORTAL_LOG_MAX_CHARS: usize = 6000;
+const PORTAL_LOG_MAX_CHARS: usize = 3000;
 
 #[cfg(feature = "config")]
 fn json_escape(input: &str) -> String {
@@ -152,7 +155,7 @@ fn json_escape(input: &str) -> String {
 fn store_scan_results(networks: &[AccessPointInfo]) {
     let mut body = String::from("{\"networks\":[");
     let mut first = true;
-    for network in networks.iter().take(20) {
+    for network in networks.iter().take(12) {
         if network.ssid.is_empty() {
             continue;
         }
@@ -182,27 +185,44 @@ fn clear_scan_results() {
 
 #[cfg(feature = "config")]
 fn push_portal_log_line(line: &str) {
+    let enabled = critical_section::with(|cs| *PORTAL_LOG_ENABLED.borrow_ref(cs));
+    if !enabled {
+        return;
+    }
+
     critical_section::with(|cs| {
-        let mut text = PORTAL_LOG_TEXT
-            .borrow_ref(cs)
-            .clone()
-            .unwrap_or_else(String::new);
+        let mut slot = PORTAL_LOG_TEXT.borrow_ref_mut(cs);
+        let text = slot.get_or_insert_with(String::new);
+
+        // Keep a bounded log without cloning the whole String (important on small heaps).
+        let incoming_len = line.len().saturating_add(1);
+        if text.len().saturating_add(incoming_len) > PORTAL_LOG_MAX_CHARS {
+            let to_drop = text
+                .len()
+                .saturating_add(incoming_len)
+                .saturating_sub(PORTAL_LOG_MAX_CHARS);
+
+            if to_drop > 0 {
+                if let Some(next_line) = text[to_drop.min(text.len())..].find('\n') {
+                    let cut_from = to_drop.min(text.len()).saturating_add(next_line + 1);
+                    text.drain(..cut_from.min(text.len()));
+                } else {
+                    text.clear();
+                }
+            }
+        }
 
         if !text.is_empty() {
             text.push('\n');
         }
-        text.push_str(line);
 
-        while text.len() > PORTAL_LOG_MAX_CHARS {
-            if let Some(next_line) = text.find('\n') {
-                text.drain(..=next_line);
-            } else {
-                text = String::from(&text[text.len().saturating_sub(PORTAL_LOG_MAX_CHARS)..]);
-                break;
-            }
+        // If a single incoming line is very large, keep only its tail.
+        if line.len() > PORTAL_LOG_MAX_CHARS {
+            let start = line.len().saturating_sub(PORTAL_LOG_MAX_CHARS);
+            text.push_str(&line[start..]);
+        } else {
+            text.push_str(line);
         }
-
-        *PORTAL_LOG_TEXT.borrow_ref_mut(cs) = Some(text);
     });
 }
 
@@ -210,6 +230,13 @@ fn push_portal_log_line(line: &str) {
 fn clear_portal_logs() {
     critical_section::with(|cs| {
         *PORTAL_LOG_TEXT.borrow_ref_mut(cs) = Some(String::new());
+    });
+}
+
+#[cfg(feature = "config")]
+fn set_portal_log_enabled(enabled: bool) {
+    critical_section::with(|cs| {
+        *PORTAL_LOG_ENABLED.borrow_ref_mut(cs) = enabled;
     });
 }
 
@@ -267,8 +294,36 @@ pub fn log_portal_response(path: &str) -> Option<wifi_caddy::portal::config_ui::
 
 #[cfg(feature = "config")]
 #[doc(hidden)]
+pub fn log_control_portal_response(
+    path: &str,
+) -> Option<wifi_caddy::portal::config_ui::CustomResponse> {
+    match path {
+        "/wifi-log-enable" => {
+            set_portal_log_enabled(true);
+            Some(wifi_caddy::portal::config_ui::CustomResponse {
+                status: 200,
+                content_type: "text/plain; charset=utf-8",
+                body: String::from("ok"),
+            })
+        }
+        "/wifi-log-disable" => {
+            set_portal_log_enabled(false);
+            Some(wifi_caddy::portal::config_ui::CustomResponse {
+                status: 200,
+                content_type: "text/plain; charset=utf-8",
+                body: String::from("ok"),
+            })
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "config")]
+#[doc(hidden)]
 pub fn portal_custom_response(path: &str) -> Option<wifi_caddy::portal::config_ui::CustomResponse> {
-    scan_portal_response(path).or_else(|| log_portal_response(path))
+    scan_portal_response(path)
+        .or_else(|| log_portal_response(path))
+        .or_else(|| log_control_portal_response(path))
 }
 
 /// STA and AP network stacks returned by [`init`].
@@ -288,6 +343,7 @@ pub async fn init(spawner: &Spawner, wifi: WIFI<'static>) -> (WifiStacks, WifiCo
     info!("wifi: initialize wifi");
     #[cfg(feature = "config")]
     {
+        set_portal_log_enabled(false);
         clear_portal_logs();
         push_portal_log_line("wifi: init");
     }
@@ -471,7 +527,7 @@ impl WifiRunner {
         }
         self.last_scan_attempt = Some(now);
 
-        let config = ScanConfig::default().with_show_hidden(true).with_max(32);
+        let config = ScanConfig::default().with_show_hidden(true).with_max(16);
         match self.controller.scan_with_config_async(config).await {
             Ok(results) => {
                 info!("wifi: cached {} visible networks", results.len());

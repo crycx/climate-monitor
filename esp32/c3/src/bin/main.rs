@@ -200,10 +200,16 @@ esp_bootloader_esp_idf::esp_app_desc!();
         function openLogPanel() {
             logPanel.style.display = '';
             logToggle.textContent = 'Hide device log';
-            loadLog();
-            if (logTimer === null) {
-                logTimer = window.setInterval(loadLog, 2000);
-            }
+            fetch('/wifi-log-enable')
+                .catch(function () {
+                    // Best-effort; still try to show whatever log is available.
+                })
+                .finally(function () {
+                    loadLog();
+                    if (logTimer === null) {
+                        logTimer = window.setInterval(loadLog, 5000);
+                    }
+                });
         }
 
         function closeLogPanel() {
@@ -213,6 +219,9 @@ esp_bootloader_esp_idf::esp_app_desc!();
                 window.clearInterval(logTimer);
                 logTimer = null;
             }
+            fetch('/wifi-log-disable').catch(function () {
+                // Best-effort disable.
+            });
         }
 
         logToggle.addEventListener('click', function () {
