@@ -1,0 +1,75 @@
+<div class="container">
+  <h2>Devices</h2>
+  <div *ngIf="loading()" style="padding: 12px 0;">
+    <mat-progress-bar mode="indeterminate"></mat-progress-bar>
+  </div>
+
+  <div *ngIf="!loading()">
+    <div class="flex-between">
+      <mat-form-field class="w-50">
+        <mat-label>Filter</mat-label>
+        <input matInput [formControl]="filterCtrl" placeholder="search (id, name, type, location)" #input>
+      </mat-form-field>
+      <button matButton="elevated" color="primary" aria-label="Add device" (click)="openDevice('add')">
+        <mat-icon>add</mat-icon>Add
+      </button>
+    </div>
+
+    <p *ngIf="error()" style="color: #c00; margin-top: 8px;">{{ error() }}</p>
+
+    <div class="mat-elevation-z8 table-card" *ngIf="!error()">
+      <div class="table-scroll">
+        <table mat-table [dataSource]="dataSource" matSort>
+          <ng-container matColumnDef="id" sticky>
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>ID</th>
+            <td mat-cell *matCellDef="let row">{{ row.id }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="name" sticky>
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Name</th>
+            <td mat-cell *matCellDef="let row">{{ row.name }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="device_type">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Type</th>
+            <td mat-cell *matCellDef="let row">{{ row.device_type || '—' }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="location">
+            <th mat-header-cell *matHeaderCellDef>Location</th>
+            <td mat-cell *matCellDef="let row">{{ locationName(row.location_id) }}</td>
+          </ng-container>
+
+          <ng-container matColumnDef="is_active">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Active</th>
+            <td mat-cell *matCellDef="let row">
+              <mat-icon *ngIf="row.is_active" aria-label="Active">check_circle</mat-icon>
+              <span *ngIf="!row.is_active">—</span>
+            </td>
+          </ng-container>
+
+          <ng-container matColumnDef="last_seen">
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>Last seen</th>
+            <td mat-cell *matCellDef="let row" [matTooltip]="row.last_seen ? (row.last_seen | date:'short') : ''">{{ row.last_seen | timeAgo }}</td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+          <tr class="click-row" mat-row *matRowDef="let row; columns: displayedColumns;" (click)="openDevice(row)"></tr>
+
+          <tr class="mat-row" *matNoDataRow>
+            <td class="mat-cell" [attr.colspan]="displayedColumns.length">
+              No data matching the filter "{{ input.value }}"
+            </td>
+          </tr>
+        </table>
+      </div>
+      <mat-paginator [pageSizeOptions]="[10, 25, 100]" aria-label="Select page of devices"></mat-paginator>
+    </div>
+
+    <div class="actionButtons">
+      <button matButton="elevated" color="primary" aria-label="Add device" (click)="openDevice('add')">
+        <mat-icon>add</mat-icon>Add
+      </button>
+    </div>
+  </div>
+</div>

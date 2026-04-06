@@ -37,6 +37,7 @@ CREATE TABLE devices (
 CREATE TABLE readings (
     id BIGSERIAL PRIMARY KEY,
     device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+    location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
     sensor_type VARCHAR(50) NOT NULL,
     value DECIMAL(10, 4) NOT NULL,
     unit VARCHAR(20) NOT NULL,
@@ -49,4 +50,5 @@ CREATE INDEX idx_devices_user_id ON devices(user_id);
 CREATE INDEX idx_devices_location_id ON devices(location_id);
 CREATE INDEX idx_devices_api_key ON devices(api_key);
 CREATE INDEX idx_readings_device_id ON readings(device_id);
+CREATE INDEX idx_readings_location_id ON readings(location_id);
 CREATE INDEX idx_readings_timestamp ON readings(timestamp DESC);

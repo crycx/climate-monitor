@@ -14,6 +14,10 @@ components:
       type: apiKey
       in: cookie
       name: session
+    DeviceApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
 
   schemas:
     User:
@@ -76,6 +80,9 @@ components:
           format: int64
         device_id:
           type: integer
+        location_id:
+          type: integer
+          nullable: true
         sensor_type:
           type: string
         value:
@@ -639,6 +646,54 @@ paths:
           required: true
           schema:
             type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+        - name: location_id
+          in: query
+          schema:
+            type: integer
+        - name: sensor_type
+          in: query
+          schema:
+            type: string
+        - name: from_ts
+          in: query
+          description: ISO-8601 timestamp (inclusive)
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          description: ISO-8601 timestamp (inclusive)
+          schema:
+            type: string
+            format: date-time
+        - name: period
+          in: query
+          description: Shortcut period; cannot be combined with from_ts/to_ts
+          schema:
+            type: string
+            enum: [today, yesterday, last_24h]
+        - name: after_id
+          in: query
+          description: Return readings with id greater than this value
+          schema:
+            type: integer
+        - name: after_ts
+          in: query
+          description: Return readings newer than this ISO-8601 timestamp
+          schema:
+            type: string
+            format: date-time
       responses:
         '200':
           description: List of readings
@@ -650,9 +705,12 @@ paths:
                   $ref: '#/components/schemas/Reading'
 
     post:
-      summary: Submit reading (from ESP32)
+      summary: Submit single reading (legacy compatibility)
+      deprecated: true
       tags:
         - Readings
+      security:
+        - DeviceApiKey: []
       parameters:
         - name: id
           in: path
@@ -668,6 +726,31 @@ paths:
       responses:
         '201':
           description: Reading created
+        '400':
+          description: Validation error
+        '403':
+          description: Device id does not match API key
+
+  /readings:
+    post:
+      summary: Submit readings batch (preferred for ESP32)
+      tags:
+        - Readings
+      security:
+        - DeviceApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReadingInput'
+      responses:
+        '201':
+          description: Readings created
+        '400':
+          description: Validation error
 
   /readings/latest:
     get:
@@ -676,6 +759,55 @@ paths:
         - Readings
       security:
         - SessionAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+        - name: location_id
+          in: query
+          schema:
+            type: integer
+        - name: sensor_type
+          in: query
+          schema:
+            type: string
+        - name: from_ts
+          in: query
+          description: ISO-8601 timestamp (inclusive)
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          description: ISO-8601 timestamp (inclusive)
+          schema:
+            type: string
+            format: date-time
+        - name: period
+          in: query
+          description: Shortcut period; cannot be combined with from_ts/to_ts
+          schema:
+            type: string
+            enum: [today, yesterday, last_24h]
+        - name: after_id
+          in: query
+          description: Return readings with id greater than this value
+          schema:
+            type: integer
+        - name: after_ts
+          in: query
+          description: Return readings newer than this ISO-8601 timestamp
+          schema:
+            type: string
+            format: date-time
       responses:
         '200':
           description: Latest readings

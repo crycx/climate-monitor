@@ -1,4 +1,4 @@
-<div class="d-flex align-items-center justify-content-between" (mouseenter)="onMouseEnter()" (mouseleave)="onMouseLeave()">
+<div class="snackbar-root d-flex align-items-center justify-content-between" (mouseenter)="onMouseEnter()" (mouseleave)="onMouseLeave()">
   <div class="d-flex align-items-center">
     <mat-icon *ngIf="data.icon" [ngStyle]="{'color': data.iconColor}" [ngClass]="{'rotate-icon': data.dots}" >{{ data.icon }}</mat-icon><div class="warningText mx-2">{{ data.text }} <span *ngIf="data.dots" class="dotts">...</span></div>
   </div>

@@ -1,0 +1,17 @@
+{
+  "/api": {
+    "target": "https://climate.sinpal.ee",
+    "secure": true,
+    "changeOrigin": true
+  },
+  "/swagger": {
+    "target": "https://climate.sinpal.ee",
+    "secure": true,
+    "changeOrigin": true
+  },
+  "/openapi.yaml": {
+    "target": "https://climate.sinpal.ee",
+    "secure": true,
+    "changeOrigin": true
+  }
+}

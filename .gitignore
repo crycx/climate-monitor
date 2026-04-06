@@ -53,3 +53,11 @@ target/
 
 # Ignore .DS_Store file in mac
 **/.DS_Store
+
+
+# Deployment artifacts
+deploy/*.zip
+deploy/*.tar
+deploy/*.tar.gz
+deploy/no-registry/climate-monitor-images.tar
+esp32/c3/.cargo/config.toml

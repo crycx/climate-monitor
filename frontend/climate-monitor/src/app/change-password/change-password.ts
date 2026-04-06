@@ -53,11 +53,14 @@ export class ChangePassword {
         this.loading.set(false);
         this.form.reset();
         const snackRef = this.snackBar.openFromComponent(Snackbar, {
+          horizontalPosition: 'center',
+          verticalPosition: 'bottom',
+          panelClass: ['cm-snackbar-dark'],
           data: {
             text: 'Password changed successfully',
             icon: 'lock_reset',
             iconColor: '#2e7d32',
-            durationMs: 3000,
+            durationMs: 1800,
             dismiss: 'OK',
             back: 'Back',
           },

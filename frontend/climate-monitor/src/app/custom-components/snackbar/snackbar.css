@@ -1,3 +1,18 @@
+:host {
+	display: block;
+	color: #e5e7eb;
+}
+
+.snackbar-root {
+	min-width: 260px;
+	gap: 12px;
+}
+
+.warningText {
+	color: #e5e7eb;
+	font-weight: 500;
+}
+
 .dismiss button[mat-button] {
-	color: #000 !important;
+	color: #e5e7eb !important;
 }

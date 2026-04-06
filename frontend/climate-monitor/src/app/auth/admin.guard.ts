@@ -21,11 +21,14 @@ export class AdminGuard implements CanActivate, CanActivateChild {
         if (this.auth.user?.is_admin) return true;
 
         this.snack.openFromComponent(Snackbar, {
+          horizontalPosition: 'center',
+          verticalPosition: 'bottom',
+          panelClass: ['cm-snackbar-dark'],
           data: {
             text: 'No rights to see this page',
             icon: 'error',
             iconColor: 'red',
-            durationMs: 3000,
+            durationMs: 1800,
             dismiss: 'OK',
           },
         });

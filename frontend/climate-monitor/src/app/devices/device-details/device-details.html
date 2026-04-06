@@ -1,0 +1,75 @@
+<div class="container">
+  <div style="max-width: 640px; margin: 0 auto;">
+    <mat-card appearance="outlined">
+      <mat-card-header>
+        <mat-card-title *ngIf="!isCreateMode">Device details</mat-card-title>
+        <mat-card-title *ngIf="isCreateMode">Add device</mat-card-title>
+      </mat-card-header>
+
+      <mat-card-content>
+        <div *ngIf="loading()" style="padding: 8px 0 16px 0;">
+          <mat-progress-bar mode="indeterminate"></mat-progress-bar>
+        </div>
+
+        <p *ngIf="error()" style="color: #c00; margin-top: 8px;">{{ error() }}</p>
+        <p *ngIf="success()" style="color: #0a7f35; margin-top: 8px;">{{ success() }}</p>
+
+        <form [formGroup]="form" autocomplete="off">
+          <mat-form-field style="width: 100%;">
+            <mat-label>Name</mat-label>
+            <input matInput formControlName="name" />
+          </mat-form-field>
+
+          <mat-form-field style="width: 100%;">
+            <mat-label>Device type</mat-label>
+            <input matInput formControlName="device_type" />
+          </mat-form-field>
+
+          <mat-form-field style="width: 100%;">
+            <mat-label>Location</mat-label>
+            <mat-select formControlName="location_id">
+              <mat-option value="">No location</mat-option>
+              <mat-option *ngFor="let location of locations()" [value]="location.id">{{ location.name }}</mat-option>
+            </mat-select>
+          </mat-form-field>
+
+          <mat-checkbox formControlName="is_active">Active</mat-checkbox>
+
+          <mat-form-field style="width: 100%; margin-top: 8px;">
+            <mat-label>API key (64 chars)</mat-label>
+            <input matInput formControlName="api_key" />
+          </mat-form-field>
+
+          <button mat-stroked-button type="button" (click)="generateApiKey()" [disabled]="saving() || loading()">
+            Generate API key
+          </button>
+        </form>
+      </mat-card-content>
+
+      <mat-card-actions>
+        <button mat-button type="button" (click)="back()">Back</button>
+        <span style="margin-left: auto;"></span>
+        <button
+          matButton="elevated"
+          color="warn"
+          type="button"
+          class="btn-delete"
+          (click)="deleteDevice()"
+          [disabled]="isCreateMode || deleting() || loading()"
+        >
+          Delete
+        </button>
+        <button
+          matButton="elevated"
+          color="primary"
+          type="button"
+          class="btn-ok"
+          (click)="save()"
+          [disabled]="saving() || loading()"
+        >
+          {{ isCreateMode ? 'Create' : 'Save' }}
+        </button>
+      </mat-card-actions>
+    </mat-card>
+  </div>
+</div>

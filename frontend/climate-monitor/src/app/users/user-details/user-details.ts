@@ -231,11 +231,14 @@ export class UserDetails implements OnInit, OnDestroy {
 
   private showSnack(text: string, icon: string, iconColor: string, withBack = false): void {
     const snackRef = this.snackBar.openFromComponent(Snackbar, {
+      horizontalPosition: 'center',
+      verticalPosition: 'bottom',
+      panelClass: ['cm-snackbar-dark'],
       data: {
         text,
         icon,
         iconColor,
-        durationMs: 3000,
+        durationMs: 1800,
         dismiss: 'OK',
         back: withBack ? 'Back' : null,
       },

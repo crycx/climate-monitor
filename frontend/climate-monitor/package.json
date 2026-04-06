@@ -4,6 +4,7 @@
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
+    "start:remote": "ng serve --proxy-config proxy.conf.remote.json",
     "build": "ng build --configuration production",
     "watch": "ng build --watch --configuration development",
     "test": "ng test"
@@ -22,6 +23,7 @@
     "@angular/router": "^21.2.0",
     "@angular/service-worker": "^21.2.4",
     "bootstrap": "^5.3.8",
+    "chart.js": "^4.5.1",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },

@@ -1,0 +1,176 @@
+.home-page {
+	padding: 1.25rem;
+}
+
+.home-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-bottom: 1rem;
+}
+
+.header-actions {
+	display: flex;
+	align-items: flex-end;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+}
+
+.location-filter,
+.device-filter,
+.range-filter {
+	min-width: 180px;
+}
+
+.auto-refresh-toggle {
+	margin-bottom: 0.5rem;
+}
+
+.refresh-button {
+	margin-bottom: 0.5rem;
+}
+
+.home-header h1 {
+	margin: 0;
+	font-size: 1.8rem;
+}
+
+.home-header p {
+	margin: 0.25rem 0 0;
+	color: #5e6570;
+}
+
+.status {
+	margin: 0.5rem 0 1rem;
+	color: #4b5563;
+}
+
+.status-error {
+	color: #b42318;
+}
+
+.chart-grid {
+	display: grid;
+	gap: 1rem;
+	grid-template-columns: 1fr;
+}
+
+.chart-grid.two-col {
+	grid-template-columns: repeat(2, 1fr);
+}
+
+.chart-card {
+	background: #ffffff;
+	border: 1px solid #dfe3ea;
+	border-radius: 12px;
+	padding: 0.85rem 1rem 1rem;
+	box-shadow: 0 4px 14px rgba(16, 24, 40, 0.06);
+}
+
+.chart-card-header {
+	display: flex;
+	align-items: baseline;
+	gap: 0.5rem;
+	margin-bottom: 0.5rem;
+}
+
+.chart-card-header h2 {
+	margin: 0;
+	font-size: 1.1rem;
+}
+
+.chart-location {
+	font-size: 0.82rem;
+	color: #667085;
+}
+
+.no-devices {
+	grid-column: 1 / -1;
+	text-align: center;
+	color: #667085;
+	padding: 2rem 0;
+}
+
+.chart-shell {
+	height: 360px;
+}
+
+.updated {
+	margin-top: 0.85rem;
+	color: #667085;
+	font-size: 0.92rem;
+}
+
+@media (prefers-color-scheme: dark) {
+	.home-header p,
+	.status,
+	.updated {
+		color: #c6d0e1;
+	}
+
+	.chart-card {
+		background: #0f172a;
+		border-color: #1e293b;
+		box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+	}
+
+	.chart-card-header h2 {
+		color: #e5e7eb;
+	}
+
+	.chart-location {
+		color: #8899b0;
+	}
+
+	.chart-card-header h2 {
+		color: #e5e7eb;
+	}
+
+	.chart-location {
+		color: #8899b0;
+	}
+
+	.home-header h1 {
+		color: #f8fafc;
+	}
+}
+
+@media (max-width: 640px) {
+	.home-header {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.header-actions {
+		width: 100%;
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.location-filter {
+		min-width: 0;
+		width: 100%;
+	}
+
+	.chart-grid.two-col {
+		grid-template-columns: 1fr;
+	}
+
+	.range-filter {
+		min-width: 0;
+		width: 100%;
+	}
+
+	.auto-refresh-toggle {
+		margin-bottom: 0;
+	}
+
+	.refresh-button {
+		margin-bottom: 0;
+	}
+
+	.chart-shell {
+		height: 240px;
+	}
+}

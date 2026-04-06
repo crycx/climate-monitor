@@ -16,7 +16,7 @@ export class Snackbar implements OnInit, OnDestroy {
   constructor(public snackBarRef: MatSnackBarRef<Snackbar>, @Inject(MAT_SNACK_BAR_DATA) public data: any) { }
 
   ngOnInit(): void {
-    const configuredDuration = Number(this.data?.durationMs ?? 3000);
+    const configuredDuration = Number(this.data?.durationMs ?? 1800);
     this.remainingDurationMs = Number.isFinite(configuredDuration) && configuredDuration > 0
       ? configuredDuration
       : 0;
