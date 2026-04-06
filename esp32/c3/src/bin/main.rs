@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![cfg_attr(feature = "wifi", feature(impl_trait_in_assoc_type))]
 #![deny(
     clippy::mem_forget,
     reason = "mem::forget is generally not safe to do with esp_hal types, especially those \
@@ -10,6 +11,8 @@
 extern crate alloc;
 
 #[cfg(feature = "wifi")]
+use alloc::{format, string::String};
+#[cfg(feature = "wifi")]
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embedded_dht_rs::dht22::Dht22;
@@ -17,14 +20,14 @@ use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
     delay::Delay,
-    gpio::{DriveMode, Flex, OutputConfig, Pull},
+    gpio::{DriveMode, Flex, Input, InputConfig, Level, OutputConfig, Pull},
 };
 
 // ── WiFi-only imports ────────────────────────────────────────────────────────
 #[cfg(feature = "wifi")]
 use embassy_executor::Spawner;
 #[cfg(feature = "wifi")]
-use embassy_net::{Config as NetConfig, Stack, StackResources, dns::DnsSocket, tcp::client::{TcpClient, TcpClientState}, StaticConfigV4, Ipv4Address, Ipv4Cidr};
+use embassy_net::{Stack, dns::DnsSocket, tcp::client::TcpClientState};
 #[cfg(feature = "wifi")]
 use embassy_time::{Duration, Timer};
 #[cfg(feature = "wifi")]
@@ -32,9 +35,9 @@ use esp_hal::interrupt::software::SoftwareInterruptControl;
 #[cfg(feature = "wifi")]
 use esp_hal::timer::timg::TimerGroup;
 #[cfg(feature = "wifi")]
-use esp_radio::wifi::event::{self, EventExt};
+use esp_storage::FlashStorage;
 #[cfg(feature = "wifi")]
-use esp_radio::wifi::{ClientConfig, ModeConfig};
+use esp_wifi_caddy::WifiCaddyCommand;
 #[cfg(feature = "wifi")]
 use reqwless::{
     client::HttpClient,
@@ -45,35 +48,48 @@ use reqwless::{
 use reqwless::client::{TlsConfig, TlsVerify};
 #[cfg(feature = "wifi")]
 use static_cell::StaticCell;
+#[cfg(feature = "wifi")]
+use wifi_caddy_proc::WifiCaddyConfig;
 
 // This creates a default app-descriptor required by the ESP-IDF bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// ── WiFi credentials + API config (set in .cargo/config.toml [env]) ─────────
+// ── Flash-backed runtime config (shared with provisioning binary) ────────────
 #[cfg(feature = "wifi")]
-const WIFI_SSID: &str = env!("WIFI_SSID");
-#[cfg(feature = "wifi")]
-const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
-// Full HTTPS URL of the readings endpoint, e.g. "https://climate.sinpal.ee/api/readings"
-#[cfg(feature = "wifi")]
-const READINGS_URL: &str = concat!(env!("API_URL"), "readings");
-#[cfg(feature = "wifi")]
-const API_KEY: &str = env!("API_KEY");
-// Optional static IP (set STATIC_IP env var to use; leave empty for DHCP)
-#[cfg(feature = "wifi")]
-const STATIC_IP: &str = match option_env!("STATIC_IP") { Some(v) => v, None => "" };
+#[derive(Clone, Debug, Default, WifiCaddyConfig)]
+#[config_server]
+#[config_notify]
+#[config_ui(
+    page_heading = "Climate Monitor Setup",
+    subtitle = "Configure WiFi and API access for this device"
+)]
+pub struct AppConfig {
+    #[config_store(env_default = "WIFI_SSID", notify = "Wifi")]
+    #[config_form(fieldset = "WiFi", help = "WiFi network name")]
+    wifi_ssid: String,
+
+    #[config_store(env_default = "WIFI_PASSWORD", notify = "Wifi")]
+    #[config_form(fieldset = "WiFi", input_type = "password", help = "WiFi network password")]
+    wifi_password: String,
+
+    #[config_store(env_default = "API_URL")]
+    #[config_form(fieldset = "Backend", help = "Base API URL, e.g. https://climate.sinpal.ee/api/")]
+    api_url: String,
+
+    #[config_store(env_default = "API_KEY")]
+    #[config_form(fieldset = "Backend", input_type = "password", help = "Device API key")]
+    api_key: String,
+}
 
 // ── Static storage for embassy-net (must be 'static) ────────────────────────
 #[cfg(feature = "wifi")]
-static ESP_CTRL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
-#[cfg(feature = "wifi")]
-static NET_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
-#[cfg(feature = "wifi")]
 static NET_STACK: StaticCell<Stack<'static>> = StaticCell::new();
 #[cfg(feature = "wifi")]
-static TCP_STATE: StaticCell<TcpClientState<2, 4096, 4096>> = StaticCell::new();
+static TCP_STATE: StaticCell<embassy_net::tcp::client::TcpClientState<2, 4096, 4096>> = StaticCell::new();
 #[cfg(feature = "wifi")]
-static JUST_RECONNECTED: AtomicBool = AtomicBool::new(false);
+static BUTTON_PRESSED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "wifi")]
+static AP_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NO-WIFI mode — sync DHT22 console logging
@@ -121,32 +137,42 @@ fn main() -> ! {
 // WIFI mode — async embassy + raw TCP HTTP POST
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Drives the embassy-net stack.
 #[cfg(feature = "wifi")]
 #[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::WifiDevice<'static>>) {
-    runner.run().await;
+async fn gpio_poll_task(btn: Input<'static>) {
+    loop {
+        Timer::after(Duration::from_millis(10)).await;
+        BUTTON_PRESSED.store(btn.level() == Level::Low, Ordering::Relaxed);
+    }
 }
 
-/// Manages WiFi connection and handles reconnects automatically.
 #[cfg(feature = "wifi")]
 #[embassy_executor::task]
-async fn connection_task(mut wifi_ctrl: esp_radio::wifi::WifiController<'static>) {
+async fn button_task(wifi_sender: esp_wifi_caddy::WifiCommandSender) {
     loop {
-        esp_println::println!("WiFi: connecting to '{}'...", WIFI_SSID);
-        match wifi_ctrl.connect_async().await {
-            Ok(()) => {
-                esp_println::println!("WiFi: connected!");
-                JUST_RECONNECTED.store(true, Ordering::Relaxed);
-                // Wait until we lose the connection before retrying.
-                wifi_ctrl.wait_for_event(esp_radio::wifi::WifiEvent::StaDisconnected).await;
-                esp_println::println!("WiFi: disconnected, retrying in 30 s");
-            }
-            Err(e) => {
-                esp_println::println!("WiFi: connect error: {:?}, retrying in 30 s", e);
-            }
+        // Wait for button press.
+        while !BUTTON_PRESSED.load(Ordering::Relaxed) {
+            Timer::after(Duration::from_millis(20)).await;
         }
-        Timer::after(Duration::from_secs(30)).await;
+
+        // Wait for release (basic debounce).
+        while BUTTON_PRESSED.load(Ordering::Relaxed) {
+            Timer::after(Duration::from_millis(20)).await;
+        }
+
+        if AP_ACTIVE.load(Ordering::Relaxed) {
+            esp_println::println!("Button: AP portal off");
+            AP_ACTIVE.store(false, Ordering::Relaxed);
+            wifi_sender.send(WifiCaddyCommand::APDown).await;
+        } else {
+            esp_println::println!("Button: AP portal on");
+            AP_ACTIVE.store(true, Ordering::Relaxed);
+            wifi_sender
+                .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
+                .await;
+        }
+
+        Timer::after(Duration::from_millis(300)).await;
     }
 }
 
@@ -164,56 +190,38 @@ async fn main(spawner: Spawner) {
     let sw_ints = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
 
-    // Initialise the radio controller (checks scheduler is running).
-    let ctrl: &'static esp_radio::Controller<'static> =
-        ESP_CTRL.init(esp_radio::init().unwrap());
+    // GPIO9 = BOOT button (active-low).
+    let btn = Input::new(peripherals.GPIO9, InputConfig::default().with_pull(Pull::Up));
+    spawner.spawn(gpio_poll_task(btn)).unwrap();
 
-    // Build the WiFi client interface.
-    let (mut wifi_ctrl, interfaces) =
-        esp_radio::wifi::new(ctrl, peripherals.WIFI, Default::default()).unwrap();
+    let flash = FlashStorage::new(peripherals.FLASH);
+    let (wifi_stacks, wifi_sender, config_handle, config_rx) =
+        esp_wifi_caddy::wifi_init!(AppConfig, spawner, peripherals.WIFI, flash, "config")
+            .expect("wifi_init failed");
 
-    wifi_ctrl
-        .set_config(&ModeConfig::Client(
-            ClientConfig::default()
-                .with_ssid(WIFI_SSID.into())
-                .with_password(WIFI_PASSWORD.into()),
-        ))
-        .unwrap();
+    spawner.spawn(button_task(wifi_sender.clone())).unwrap();
 
-    install_wifi_event_diagnostics();
-
-    wifi_ctrl.start_async().await.unwrap();
-
-    // Build the embassy-net TCP/IP stack.
-    let seed = esp_hal::rng::Rng::new().random() as u64;
-    // Use static IP if STATIC_IP env var is set, otherwise fall back to DHCP.
-    let net_config = if STATIC_IP.is_empty() {
-        NetConfig::dhcpv4(Default::default())
-    } else {
-        let parts: [u8; 4] = parse_ipv4(STATIC_IP);
-        NetConfig::ipv4_static(StaticConfigV4 {
-            address: Ipv4Cidr::new(Ipv4Address::new(parts[0], parts[1], parts[2], parts[3]), 24),
-            gateway: Some(Ipv4Address::new(parts[0], parts[1], parts[2], 1)),
-            dns_servers: Default::default(),
-        })
-    };
-    let (stack, runner) = embassy_net::new(
-        interfaces.sta,
-        net_config,
-        NET_RESOURCES.init(StackResources::new()),
-        seed,
-    );
-    let stack: &'static Stack<'static> = NET_STACK.init(stack);
+    let stack: &'static Stack<'static> = NET_STACK.init(wifi_stacks.sta);
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
 
-    // Spawn background tasks — connection handler and net stack runner.
-    spawner.spawn(connection_task(wifi_ctrl)).unwrap();
-    spawner.spawn(net_task(runner)).unwrap();
-
-    // Wait until WiFi is connected and DHCP has assigned an address.
-    stack.wait_config_up().await;
-    if let Some(cfg) = stack.config_v4() {
-        esp_println::println!("Got IP: {:?}", cfg.address);
+    // Trigger station mode from persisted settings.
+    {
+        let cfg = config_handle.config().lock().await;
+        if !cfg.wifi_ssid.is_empty() {
+            esp_println::println!("Config found: starting STA mode");
+            wifi_sender
+                .send(WifiCaddyCommand::StaUp(
+                    cfg.wifi_ssid.clone(),
+                    cfg.wifi_password.clone(),
+                ))
+                .await;
+        } else {
+            esp_println::println!("No WiFi config: starting AP portal at 192.168.2.1");
+            AP_ACTIVE.store(true, Ordering::Relaxed);
+            wifi_sender
+                .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
+                .await;
+        }
     }
 
     // DHT22 on GPIO10 (open-drain, pull-up).
@@ -229,8 +237,27 @@ async fn main(spawner: Spawner) {
 
     let mut dht22 = Dht22::new(dht22_pin, Delay::new());
 
+    let mut net_was_up = true;
     loop {
         Timer::after(Duration::from_secs(30)).await;
+
+        if let Ok(_changed) = config_rx.try_receive() {
+            let cfg = config_handle.config().lock().await;
+            if !cfg.wifi_ssid.is_empty() {
+                esp_println::println!("Config changed: reconnecting STA");
+                wifi_sender
+                    .send(WifiCaddyCommand::StaUp(
+                        cfg.wifi_ssid.clone(),
+                        cfg.wifi_password.clone(),
+                    ))
+                    .await;
+
+                if AP_ACTIVE.load(Ordering::Relaxed) {
+                    AP_ACTIVE.store(false, Ordering::Relaxed);
+                    wifi_sender.send(WifiCaddyCommand::APDown).await;
+                }
+            }
+        }
 
         match dht22.read() {
             Ok(r) => {
@@ -240,19 +267,40 @@ async fn main(spawner: Spawner) {
                     r.humidity
                 );
                 if stack.is_config_up() {
-                    if JUST_RECONNECTED.load(Ordering::Relaxed) {
-                        JUST_RECONNECTED.store(false, Ordering::Relaxed);
+                    if !net_was_up {
+                        net_was_up = true;
+                        if let Some(cfg) = stack.config_v4() {
+                            esp_println::println!("Got IP: {:?}", cfg.address);
+                        }
                         esp_println::println!("Post-reconnect: waiting 5 s for network to stabilise...");
                         Timer::after(Duration::from_secs(5)).await;
                     }
-                    post_readings_with_retry(stack, tcp_state, r.temperature, r.humidity).await;
+                    let cfg = config_handle.config().lock().await;
+                    post_readings_with_retry(
+                        stack,
+                        tcp_state,
+                        cfg.api_url.as_str(),
+                        cfg.api_key.as_str(),
+                        r.temperature,
+                        r.humidity,
+                    )
+                    .await;
                 } else {
+                    net_was_up = false;
                     esp_println::println!("Network down, waiting for reconnect...");
                     stack.wait_config_up().await;
-                    JUST_RECONNECTED.store(false, Ordering::Relaxed);
                     esp_println::println!("Reconnected, waiting 5 s before sending...");
                     Timer::after(Duration::from_secs(5)).await;
-                    post_readings_with_retry(stack, tcp_state, r.temperature, r.humidity).await;
+                    let cfg = config_handle.config().lock().await;
+                    post_readings_with_retry(
+                        stack,
+                        tcp_state,
+                        cfg.api_url.as_str(),
+                        cfg.api_key.as_str(),
+                        r.temperature,
+                        r.humidity,
+                    )
+                    .await;
                 }
             }
             Err(e) => {
@@ -262,63 +310,13 @@ async fn main(spawner: Spawner) {
     }
 }
 
-#[cfg(feature = "wifi")]
-fn install_wifi_event_diagnostics() {
-    event::StaStart::update_handler(|_| {
-        esp_println::println!("[wifi-event] StaStart");
-    });
-    event::StaConnected::update_handler(|ev| {
-        esp_println::println!(
-            "[wifi-event] StaConnected: channel={}, authmode={}, aid={}",
-            ev.channel(),
-            ev.authmode(),
-            ev.aid()
-        );
-    });
-    event::StaAuthmodeChange::update_handler(|ev| {
-        esp_println::println!(
-            "[wifi-event] StaAuthmodeChange: old={}, new={}",
-            ev.old_mode(),
-            ev.new_mode()
-        );
-    });
-    event::StaBeaconTimeout::update_handler(|_| {
-        esp_println::println!("[wifi-event] StaBeaconTimeout");
-    });
-    event::StaDisconnected::update_handler(|ev| {
-        let ssid_len = (ev.ssid_len() as usize).min(ev.ssid().len());
-        let ssid = &ev.ssid()[..ssid_len];
-        let bssid = ev.bssid();
-        if bssid.len() >= 6 {
-            esp_println::println!(
-                "[wifi-event] StaDisconnected: reason={}, rssi={}, ssid={:?}, bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                ev.reason(),
-                ev.rssi(),
-                ssid,
-                bssid[0],
-                bssid[1],
-                bssid[2],
-                bssid[3],
-                bssid[4],
-                bssid[5]
-            );
-        } else {
-            esp_println::println!(
-                "[wifi-event] StaDisconnected: reason={}, rssi={}, ssid={:?}, bssid={:?}",
-                ev.reason(),
-                ev.rssi(),
-                ssid,
-                bssid
-            );
-        }
-    });
-}
-
 /// Retry wrapper: tries up to 3 times with 10 s delay between attempts.
 #[cfg(feature = "wifi")]
 async fn post_readings_with_retry(
     stack: &'static Stack<'static>,
     tcp_state: &'static TcpClientState<2, 4096, 4096>,
+    api_url: &str,
+    api_key: &str,
     temp: f32,
     hum: f32,
 ) {
@@ -327,7 +325,7 @@ async fn post_readings_with_retry(
             esp_println::println!("Retry {}/3 in 10 s...", attempt);
             Timer::after(Duration::from_secs(10)).await;
         }
-        if post_readings(stack, tcp_state, temp, hum).await {
+        if post_readings(stack, tcp_state, api_url, api_key, temp, hum).await {
             return;
         }
     }
@@ -340,10 +338,17 @@ async fn post_readings_with_retry(
 async fn post_readings(
     stack: &'static Stack<'static>,
     tcp_state: &'static TcpClientState<2, 4096, 4096>,
+    api_url: &str,
+    api_key: &str,
     temp: f32,
     hum: f32,
 ) -> bool {
-    let tcp_client = TcpClient::new(*stack, tcp_state);
+    if api_url.is_empty() || api_key.is_empty() {
+        esp_println::println!("API config missing, skipping POST.");
+        return false;
+    }
+
+    let tcp_client = embassy_net::tcp::client::TcpClient::new(*stack, tcp_state);
     let dns = DnsSocket::new(*stack);
 
     #[cfg(not(feature = "no-tls"))]
@@ -360,15 +365,16 @@ async fn post_readings(
     #[cfg(feature = "no-tls")]
     let mut http = HttpClient::new(&tcp_client, &dns);
 
-    let body = alloc::format!(
+    let body = format!(
         r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%"}}]"#,
         temp, hum
     );
+    let readings_url = format!("{}readings", api_url);
 
     let mut rx_buf = [0u8; 512];
-    match http.request(Method::POST, READINGS_URL).await {
+    match http.request(Method::POST, readings_url.as_str()).await {
         Ok(req) => {
-            let headers = [("X-API-Key", API_KEY)];
+            let headers = [("X-API-Key", api_key)];
             let mut builder = req
                 .content_type(ContentType::ApplicationJson)
                 .headers(&headers)
@@ -390,26 +396,4 @@ async fn post_readings(
             false
         }
     }
-}
-
-/// Parse a "a.b.c.d" IPv4 string into [u8; 4] at compile-time-friendly runtime.
-#[cfg(feature = "wifi")]
-fn parse_ipv4(s: &str) -> [u8; 4] {
-    let mut out = [0u8; 4];
-    let mut idx = 0;
-    let mut cur = 0u8;
-    let mut has_digit = false;
-    for b in s.bytes() {
-        if b == b'.' {
-            out[idx] = cur;
-            idx += 1;
-            cur = 0;
-            has_digit = false;
-        } else {
-            cur = cur * 10 + (b - b'0');
-            has_digit = true;
-        }
-    }
-    if has_digit { out[idx] = cur; }
-    out
 }
