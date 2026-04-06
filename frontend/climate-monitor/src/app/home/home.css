@@ -80,6 +80,33 @@
 	font-size: 1.1rem;
 }
 
+.reading-badges {
+	display: flex;
+	gap: 0.5rem;
+	margin-bottom: 0.55rem;
+	flex-wrap: wrap;
+}
+
+.reading-badge {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.2rem 0.55rem;
+	border-radius: 999px;
+	font-size: 0.8rem;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+}
+
+.reading-badge.temp {
+	background: rgba(226, 85, 35, 0.14);
+	color: #b93815;
+}
+
+.reading-badge.hum {
+	background: rgba(31, 143, 221, 0.14);
+	color: #155fa8;
+}
+
 .chart-location {
 	font-size: 0.82rem;
 	color: #667085;
@@ -121,6 +148,16 @@
 
 	.chart-location {
 		color: #8899b0;
+	}
+
+	.reading-badge.temp {
+		background: rgba(226, 85, 35, 0.2);
+		color: #ffb4a1;
+	}
+
+	.reading-badge.hum {
+		background: rgba(31, 143, 221, 0.22);
+		color: #9fd3ff;
 	}
 
 	.chart-card-header h2 {

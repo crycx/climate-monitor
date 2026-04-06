@@ -87,6 +87,10 @@
         <h2>{{ device.name }}</h2>
         <span class="chart-location" *ngIf="getLocationName(device.location_id) as locName">{{ locName }}</span>
       </div>
+      <div class="reading-badges">
+        <span class="reading-badge temp" *ngIf="getLatestValue(device.id, 'temperature') as t">{{ t | number:'1.1-1' }} °C</span>
+        <span class="reading-badge hum" *ngIf="getLatestValue(device.id, 'humidity') as h">{{ h | number:'1.1-1' }} %</span>
+      </div>
       <div class="chart-shell">
         <canvas #deviceCanvas></canvas>
       </div>

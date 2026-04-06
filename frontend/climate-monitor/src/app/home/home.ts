@@ -1,11 +1,36 @@
 import { AfterViewInit, Component, ElementRef, OnDestroy, QueryList, ViewChildren, computed, effect, signal, untracked } from '@angular/core';
 import { finalize, Subscription, timeout } from 'rxjs';
-import { Chart, type ChartConfiguration, registerables } from 'chart.js';
+import { Chart, type ChartConfiguration, type Plugin, registerables } from 'chart.js';
 import { MatSnackBar, MatSnackBarRef } from '@angular/material/snack-bar';
 import { ApiDevice, ApiLocation, ApiReading, ApiService } from '../services/api';
 import { Snackbar } from '../custom-components/snackbar/snackbar';
 
 Chart.register(...registerables);
+
+const crosshairPlugin: Plugin<'line'> = {
+  id: 'crosshair',
+  afterDatasetsDraw(chart) {
+    const tooltip = chart.tooltip;
+    if (!tooltip || !tooltip.getActiveElements().length) {
+      return;
+    }
+
+    const { ctx, chartArea } = chart;
+    const x = tooltip.caretX;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x, chartArea.top);
+    ctx.lineTo(x, chartArea.bottom);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.65)';
+    ctx.setLineDash([4, 4]);
+    ctx.stroke();
+    ctx.restore();
+  },
+};
+
+Chart.register(crosshairPlugin);
 
 type ReadingPoint = {
   ts: string;
@@ -273,6 +298,14 @@ export class Home implements AfterViewInit, OnDestroy {
     return this.locations().find((l) => l.id === locationId)?.name ?? null;
   }
 
+  getLatestValue(deviceId: number, sensorType: 'temperature' | 'humidity'): number | null {
+    const latest = this.readings()
+      .filter((reading) => reading.device_id === deviceId && reading.sensor_type === sensorType && reading.timestamp)
+      .sort((a, b) => new Date(b.timestamp as string).getTime() - new Date(a.timestamp as string).getTime())[0];
+
+    return latest ? latest.value : null;
+  }
+
   private renderCharts(readings: ApiReading[], visibleDevices: ApiDevice[]): void {
     const visibleIds = new Set(visibleDevices.map((d) => d.id));
     for (const [id, chart] of this.deviceCharts) {
@@ -320,6 +353,22 @@ export class Home implements AfterViewInit, OnDestroy {
     const dark = this.isDarkMode();
     const axisColor = dark ? '#d0d5dd' : '#344054';
     const gridColor = dark ? 'rgba(208, 213, 221, 0.18)' : 'rgba(52, 64, 84, 0.14)';
+
+    const nearestValue = (points: TimePoint[], x: number): number | null => {
+      if (!points.length) {
+        return null;
+      }
+      let best = points[0];
+      let bestDistance = Math.abs(points[0].x - x);
+      for (let i = 1; i < points.length; i += 1) {
+        const distance = Math.abs(points[i].x - x);
+        if (distance < bestDistance) {
+          best = points[i];
+          bestDistance = distance;
+        }
+      }
+      return best.y;
+    };
 
     if (existing) {
       const tempDataset = existing.data.datasets[0];
@@ -409,6 +458,11 @@ export class Home implements AfterViewInit, OnDestroy {
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
+        interaction: {
+          mode: 'nearest',
+          axis: 'x',
+          intersect: false,
+        },
         plugins: {
           legend: {
             labels: {
@@ -416,6 +470,7 @@ export class Home implements AfterViewInit, OnDestroy {
             },
           },
           tooltip: {
+            intersect: false,
             callbacks: {
               title: (items) => {
                 const item = items[0];
@@ -425,6 +480,19 @@ export class Home implements AfterViewInit, OnDestroy {
                 }
                 return new Date(raw.x).toLocaleString(this.appLocale);
               },
+              // footer: (items) => {
+              //   const item = items[0];
+              //   const raw = item?.raw as TimePoint | undefined;
+              //   if (!raw) {
+              //     return '';
+              //   }
+
+              //   const temp = nearestValue(temperatureData, raw.x);
+              //   const hum = nearestValue(humidityData, raw.x);
+              //   const tempText = temp === null ? '-' : temp.toFixed(1);
+              //   const humText = hum === null ? '-' : hum.toFixed(1);
+              //   return `T: ${tempText} °C   H: ${humText} %`;
+              // },
             },
           },
         },
