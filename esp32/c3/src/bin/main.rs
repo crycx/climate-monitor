@@ -107,20 +107,29 @@ esp_bootloader_esp_idf::esp_app_desc!();
     }
 
     /* ── Scan ── */
-    function doScan(btn, statusEl, selects) {
+    function doScan(btn, statusEl, selects, isRetry) {
         btn.disabled = true;
-        if (statusEl) statusEl.textContent = 'Scanning...';
+        if (statusEl) statusEl.textContent = isRetry ? 'Retrying scan...' : 'Scanning...';
         fetch('/wifi-scan')
             .then(function (r) { return r.ok ? r.json() : { networks: [] }; })
             .then(function (d) {
                 cachedNetworks = (d.networks || []).filter(function (n) { return n && n.ssid; });
                 selects.forEach(function (sel) { fillSelect(sel, cachedNetworks); });
-                if (statusEl) statusEl.textContent = cachedNetworks.length
-                    ? 'Found ' + cachedNetworks.length + ' network(s).'
-                    : 'No networks found.';
+                if (cachedNetworks.length) {
+                    if (statusEl) statusEl.textContent = 'Found ' + cachedNetworks.length + ' network(s).';
+                    btn.disabled = false;
+                } else if (!isRetry) {
+                    if (statusEl) statusEl.textContent = 'No networks yet, retrying in 4 s...';
+                    setTimeout(function () { doScan(btn, statusEl, selects, true); }, 4000);
+                } else {
+                    if (statusEl) statusEl.textContent = 'No networks found.';
+                    btn.disabled = false;
+                }
             })
-            .catch(function () { if (statusEl) statusEl.textContent = 'Scan failed.'; })
-            .finally(function () { btn.disabled = false; });
+            .catch(function () {
+                if (statusEl) statusEl.textContent = 'Scan failed.';
+                btn.disabled = false;
+            });
     }
 
     function fillSelect(sel, networks) {
@@ -155,7 +164,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
         statusEl.style.cssText = 'font-size:12px;color:#666;margin-top:4px';
 
         sel.addEventListener('change', function () { if (sel.value) ssidInput.value = sel.value; });
-        btn.addEventListener('click', function () { doScan(btn, statusEl, [sel]); });
+        btn.addEventListener('click', function () { doScan(btn, statusEl, [sel], false); });
 
         row.appendChild(btn);
         row.appendChild(sel);
@@ -686,11 +695,41 @@ async fn main(spawner: Spawner) {
                 wifi_sender.send(WifiCaddyCommand::StaUp(ssid, pass)).await;
             }
             if AP_ACTIVE.load(Ordering::Relaxed) {
+                // Wait for the HTTP response to be flushed to the browser before
+                // dropping the AP — otherwise the save POST never completes.
+                log_runtime_line("Config saved: closing AP portal in 3 s...");
+                Timer::after(Duration::from_secs(3)).await;
                 AP_ACTIVE.store(false, Ordering::Relaxed);
                 wifi_sender.send(WifiCaddyCommand::APDown).await;
-                log_runtime_line("AP portal closed, returning to normal mode.");
+                log_runtime_line("AP portal closed, checking WiFi connection (up to 30 s)...");
+
+                let connected = embassy_time::with_timeout(
+                    Duration::from_secs(30),
+                    stack.wait_config_up(),
+                )
+                .await
+                .is_ok();
+
+                if connected {
+                    if let Some(cfg) = stack.config_v4() {
+                        log_runtime_line(format!("WiFi connected, IP: {:?}", cfg.address).as_str());
+                    } else {
+                        log_runtime_line("WiFi connected.");
+                    }
+                    net_was_up = true;
+                } else {
+                    log_runtime_line("WiFi connect timed out, re-opening AP portal.");
+                    AP_ACTIVE.store(true, Ordering::Relaxed);
+                    wifi_sender.send(WifiCaddyCommand::APUp("ClimateMonitor-".into())).await;
+                }
             }
             continue; // skip sensor read this cycle
+        }
+
+        // AP portal is active — skip sensor read and POST until portal closes.
+        if AP_ACTIVE.load(Ordering::Relaxed) {
+            log_runtime_line("AP active: skipping sensor post");
+            continue;
         }
 
         match dht22.read() {

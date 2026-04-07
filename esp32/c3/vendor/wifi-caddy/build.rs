@@ -6,8 +6,8 @@ fn env_or(key: &str, default: &str) -> String {
 fn main() {
     let handler_tasks = env_or("WIFI_CADDY_HANDLER_TASKS", "4");
     let tcp_buf_size = env_or("WIFI_CADDY_TCP_BUF_SIZE", "2048");
-    let http_buf_size = env_or("WIFI_CADDY_HTTP_BUF_SIZE", "4096");
-    let keepalive_ms = env_or("WIFI_CADDY_KEEPALIVE_TIMEOUT_MS", "3000");
+    let http_buf_size = env_or("WIFI_CADDY_HTTP_BUF_SIZE", "8192");
+    let keepalive_ms = env_or("WIFI_CADDY_KEEPALIVE_TIMEOUT_MS", "10000");
 
     let out = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("server_tuning.rs");
 

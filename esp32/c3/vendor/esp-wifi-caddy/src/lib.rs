@@ -586,6 +586,9 @@ impl WifiRunner {
             if now.duration_since(last) < Duration::from_secs(3) {
                 return;
             }
+        } else {
+            // First scan after AP came up — wait 1 s for hardware to stabilise.
+            Timer::after(Duration::from_secs(1)).await;
         }
         self.last_scan_attempt = Some(now);
 
@@ -599,7 +602,8 @@ impl WifiRunner {
             Err(e) => {
                 warn!("wifi: scan failed: {:?}", e);
                 push_portal_log_line(alloc::format!("scan: failed ({:?})", e).as_str());
-                clear_scan_results();
+                // Do NOT clear previous good results — keep stale results so the
+                // portal still shows the last known networks instead of an empty list.
             }
         }
     }
