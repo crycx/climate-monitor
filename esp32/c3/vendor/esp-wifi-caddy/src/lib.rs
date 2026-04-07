@@ -409,8 +409,8 @@ pub async fn init(spawner: &Spawner, wifi: WIFI<'static>) -> (WifiStacks, WifiCo
     let sender = WIFI_COMMAND_CHANNEL.sender();
     let sta_config: embassy_net::Config = embassy_net::Config::dhcpv4(Default::default());
     let ap_config = embassy_net::Config::ipv4_static(StaticConfigV4 {
-        address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 2, 1), 24),
-        gateway: Some(Ipv4Address::new(192, 168, 2, 1)),
+        address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 4, 1), 24),
+        gateway: Some(Ipv4Address::new(192, 168, 4, 1)),
         dns_servers: Default::default(),
     });
 

@@ -42,6 +42,19 @@ type TimePoint = {
   y: number;
 };
 
+type DeviceStats = {
+  tempLatest: number | null;
+  tempMin: number | null;
+  tempMax: number | null;
+  tempAvg: number | null;
+  tempDelta: number | null;
+  humLatest: number | null;
+  humMin: number | null;
+  humMax: number | null;
+  humAvg: number | null;
+  humDelta: number | null;
+};
+
 type LocationOption = {
   id: number | null;
   label: string;
@@ -68,7 +81,7 @@ export class Home implements AfterViewInit, OnDestroy {
   locations = signal<ApiLocation[]>([]);
   devices = signal<ApiDevice[]>([]);
   selectedDeviceIds = signal<number[]>([]);
-  gridCols = signal<1 | 2>(2);
+  viewMode = signal<1 | 2 | 3>(2);
   locationOptions = computed<LocationOption[]>(() => [
     { id: null, label: 'All locations' },
     ...this.locations().map((location) => ({ id: location.id, label: location.name })),
@@ -81,6 +94,48 @@ export class Home implements AfterViewInit, OnDestroy {
     if (selected.length === 0) return withReadings;
     return withReadings.filter((d) => selected.includes(d.id));
   });
+  deviceStats = computed(() => {
+    const readings = this.readings();
+    const devices = this.visibleDevices();
+    const map = new Map<number, DeviceStats>();
+
+    const seriesValues = (deviceId: number, sensorType: string): number[] =>
+      readings
+        .filter((r) => r.device_id === deviceId && r.sensor_type === sensorType && r.timestamp !== null)
+        .sort((a, b) => new Date(a.timestamp as string).getTime() - new Date(b.timestamp as string).getTime())
+        .map((r) => r.value);
+
+    const stat = (vals: number[]) => {
+      if (!vals.length) return { latest: null, min: null, max: null, avg: null, delta: null };
+      const latest = vals[vals.length - 1];
+      return {
+        latest,
+        min: Math.min(...vals),
+        max: Math.max(...vals),
+        avg: vals.reduce((s, v) => s + v, 0) / vals.length,
+        delta: vals.length >= 2 ? latest - vals[0] : null,
+      };
+    };
+
+    for (const device of devices) {
+      const t = stat(seriesValues(device.id, 'temperature'));
+      const h = stat(seriesValues(device.id, 'humidity'));
+      map.set(device.id, {
+        tempLatest: t.latest,
+        tempMin: t.min,
+        tempMax: t.max,
+        tempAvg: t.avg,
+        tempDelta: t.delta,
+        humLatest: h.latest,
+        humMin: h.min,
+        humMax: h.max,
+        humAvg: h.avg,
+        humDelta: h.delta,
+      });
+    }
+
+    return map;
+  });
   rangeOptions: RangeOption[] = [
     { hours: 1, label: 'Last 1 h' },
     { hours: 3, label: 'Last 3 h' },
@@ -90,6 +145,9 @@ export class Home implements AfterViewInit, OnDestroy {
     { hours: 48, label: 'Last 48 h' },
     { hours: null, label: 'All' },
   ];
+  rangeLabel = computed(() =>
+    this.rangeOptions.find((o) => o.hours === this.selectedRangeHours())?.label ?? 'All',
+  );
   selectedLocationId = signal<number | null>(null);
   selectedRangeHours = signal<number | null>(6);
   refreshRequest = signal<{ nonce: number; incremental: boolean }>({ nonce: 0, incremental: false });
@@ -106,6 +164,7 @@ export class Home implements AfterViewInit, OnDestroy {
   private readonly autoRefreshMs = 30000;
   private readonly renderDebounceMs = 120;
   private readonly rangeStorageKey = 'home.selectedRangeHours';
+  private readonly viewModeStorageKey = 'home.viewMode';
   private readonly appLocale = 'et-EE';
   private lastSelectedLocationId: number | null | undefined;
   private loadingSnackRef?: MatSnackBarRef<Snackbar>;
@@ -194,7 +253,7 @@ export class Home implements AfterViewInit, OnDestroy {
       const readings = this.readings();
       const visibleDevices = this.visibleDevices();
       this.isDarkMode();
-      this.gridCols();
+      this.viewMode();
 
       const debounceId = window.setTimeout(() => {
         this.renderCharts(readings, visibleDevices);
@@ -229,6 +288,11 @@ export class Home implements AfterViewInit, OnDestroy {
     const storedRange = this.readStoredRangeHours();
     if (storedRange !== undefined) {
       this.selectedRangeHours.set(storedRange);
+    }
+
+    const storedViewMode = this.readStoredViewMode();
+    if (storedViewMode !== undefined) {
+      this.viewMode.set(storedViewMode);
     }
   }
 
@@ -285,12 +349,33 @@ export class Home implements AfterViewInit, OnDestroy {
     this.selectedDeviceIds.set(ids);
   }
 
-  onGridColsChange(cols: 1 | 2): void {
+  onViewModeChange(mode: 1 | 2 | 3): void {
     for (const chart of this.deviceCharts.values()) {
       chart.destroy();
     }
     this.deviceCharts.clear();
-    this.gridCols.set(cols);
+    this.viewMode.set(mode);
+    this.persistViewMode(mode);
+  }
+
+  deltaDirection(value: number | null): 'positive' | 'negative' | 'unchanged' | 'none' {
+    if (value === null) return 'none';
+    if (value > 0.05) return 'positive';
+    if (value < -0.05) return 'negative';
+    return 'unchanged';
+  }
+
+  deltaIcon(value: number | null): string {
+    const dir = this.deltaDirection(value);
+    if (dir === 'positive') return 'trending_up';
+    if (dir === 'negative') return 'trending_down';
+    return 'trending_flat';
+  }
+
+  formatDelta(value: number | null, unit: string): string {
+    if (value === null) return '';
+    const sign = value > 0.05 ? '+' : '';
+    return `${sign}${value.toFixed(1)} ${unit}`;
   }
 
   getLocationName(locationId: number | null): string | null {
@@ -635,6 +720,32 @@ export class Home implements AfterViewInit, OnDestroy {
     } catch {
       // Ignore localStorage write errors (private mode/quota/security restrictions).
     }
+  }
+
+  private persistViewMode(mode: 1 | 2 | 3): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(this.viewModeStorageKey, String(mode));
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }
+
+  private readStoredViewMode(): 1 | 2 | 3 | undefined {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    try {
+      const raw = window.localStorage.getItem(this.viewModeStorageKey);
+      if (raw === '1' || raw === '2' || raw === '3') {
+        return Number(raw) as 1 | 2 | 3;
+      }
+    } catch {
+      // ignore
+    }
+    return undefined;
   }
 
   private readStoredRangeHours(): number | null | undefined {

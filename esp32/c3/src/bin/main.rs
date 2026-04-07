@@ -82,190 +82,271 @@ esp_bootloader_esp_idf::esp_app_desc!();
         subtitle = "Configure WiFi and API access for this device",
         extra_js = r#"
 (function () {
-    function installWifiScanUi() {
-        var ssidInput = document.getElementById('wifi_ssid');
-        if (!ssidInput || document.getElementById('wifi_scan_select')) {
-            return;
-        }
+    var MAX_SLOTS = 5;
+    var cachedNetworks = [];
+    var originalPasswords = {}; // slot index -> original password string
 
-        var field = ssidInput.closest('.config-form-group');
-        if (!field) {
-            return;
-        }
+    function ssidId(i) { return i === 1 ? 'wifi_ssid' : 'wifi_ssid_' + i; }
+    function passId(i) { return i === 1 ? 'wifi_password' : 'wifi_password_' + i; }
+    function getVal(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+    function setVal(id, v) { var el = document.getElementById(id); if (el) el.value = v; }
+
+    function findFieldsets() {
+        var fss = {};
+        document.querySelectorAll('fieldset').forEach(function (fs) {
+            var leg = fs.querySelector('legend');
+            if (leg) fss[leg.textContent.trim()] = fs;
+        });
+        return fss;
+    }
+
+    function hideWifiFieldsets(fss) {
+        var labels = ['WiFi'];
+        for (var i = 2; i <= MAX_SLOTS; i++) labels.push('WiFi slot ' + i);
+        labels.forEach(function (l) { if (fss[l]) fss[l].style.display = 'none'; });
+    }
+
+    /* ── Scan ── */
+    function doScan(btn, statusEl, selects) {
+        btn.disabled = true;
+        if (statusEl) statusEl.textContent = 'Scanning...';
+        fetch('/wifi-scan')
+            .then(function (r) { return r.ok ? r.json() : { networks: [] }; })
+            .then(function (d) {
+                cachedNetworks = (d.networks || []).filter(function (n) { return n && n.ssid; });
+                selects.forEach(function (sel) { fillSelect(sel, cachedNetworks); });
+                if (statusEl) statusEl.textContent = cachedNetworks.length
+                    ? 'Found ' + cachedNetworks.length + ' network(s).'
+                    : 'No networks found.';
+            })
+            .catch(function () { if (statusEl) statusEl.textContent = 'Scan failed.'; })
+            .finally(function () { btn.disabled = false; });
+    }
+
+    function fillSelect(sel, networks) {
+        var cur = sel.value;
+        sel.innerHTML = '<option value="">\u2014 select \u2014</option>';
+        networks.forEach(function (n) {
+            var o = document.createElement('option');
+            o.value = n.ssid;
+            o.textContent = n.ssid + ' (' + n.rssi + ' dBm)';
+            sel.appendChild(o);
+        });
+        sel.value = cur;
+    }
+
+    function makeScanRow(ssidInput) {
+        var wrap = document.createElement('div');
+        wrap.style.cssText = 'margin-top:8px';
 
         var row = document.createElement('div');
-        row.style.display = 'flex';
-        row.style.gap = '8px';
-        row.style.marginTop = '8px';
-        row.style.alignItems = 'center';
+        row.style.cssText = 'display:flex;gap:6px;align-items:center';
 
-        var scanBtn = document.createElement('button');
-        scanBtn.type = 'button';
-        scanBtn.textContent = 'Scan nearby WiFi';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Scan WiFi';
+        btn.style.cssText = 'padding:4px 10px;font-size:13px;cursor:pointer;flex-shrink:0';
 
-        var select = document.createElement('select');
-        select.id = 'wifi_scan_select';
-        select.style.flex = '1';
+        var sel = document.createElement('select');
+        sel.style.cssText = 'flex:1;font-size:13px';
+        if (cachedNetworks.length) fillSelect(sel, cachedNetworks);
 
-        var placeholder = document.createElement('option');
-        placeholder.value = '';
-        placeholder.textContent = 'Select a network';
-        select.appendChild(placeholder);
+        var statusEl = document.createElement('div');
+        statusEl.style.cssText = 'font-size:12px;color:#666;margin-top:4px';
 
-        var status = document.createElement('div');
-        status.className = 'config-form-help';
-        status.style.marginTop = '6px';
+        sel.addEventListener('change', function () { if (sel.value) ssidInput.value = sel.value; });
+        btn.addEventListener('click', function () { doScan(btn, statusEl, [sel]); });
 
-        function populate(networks) {
-            select.innerHTML = '';
-
-            var initial = document.createElement('option');
-            initial.value = '';
-            initial.textContent = networks.length ? 'Select a network' : 'No networks found yet';
-            select.appendChild(initial);
-
-            networks.forEach(function (network) {
-                var option = document.createElement('option');
-                option.value = network.ssid;
-                option.textContent = network.ssid + ' (' + network.rssi + ' dBm)';
-                select.appendChild(option);
-            });
-        }
-
-        function scanNetworks() {
-            scanBtn.disabled = true;
-            status.textContent = 'Scanning nearby networks...';
-
-            fetch('/wifi-scan')
-                .then(function (response) {
-                    if (!response.ok) {
-                        throw new Error('HTTP ' + response.status);
-                    }
-                    return response.json();
-                })
-                .then(function (data) {
-                    var networks = Array.isArray(data.networks) ? data.networks.filter(function (item) {
-                        return item && item.ssid;
-                    }) : [];
-                    populate(networks);
-                    status.textContent = networks.length
-                        ? 'Found ' + networks.length + ' nearby network(s).'
-                        : 'Scan completed, but no visible networks were returned yet.';
-                })
-                .catch(function (error) {
-                    status.textContent = 'Scan failed: ' + error.message;
-                })
-                .finally(function () {
-                    scanBtn.disabled = false;
-                });
-        }
-
-        select.addEventListener('change', function () {
-            if (select.value) {
-                ssidInput.value = select.value;
-            }
-        });
-
-        scanBtn.addEventListener('click', scanNetworks);
-        row.appendChild(scanBtn);
-        row.appendChild(select);
-        field.appendChild(row);
-        field.appendChild(status);
-
-        var logToggle = document.createElement('button');
-        logToggle.type = 'button';
-        logToggle.textContent = 'Show device log';
-        logToggle.style.marginTop = '8px';
-
-        var logPanel = document.createElement('div');
-        logPanel.style.display = 'none';
-        logPanel.style.marginTop = '8px';
-        logPanel.style.border = '1px solid #cbd5e1';
-        logPanel.style.borderRadius = '8px';
-        logPanel.style.background = '#0b1220';
-        logPanel.style.color = '#dbeafe';
-        logPanel.style.padding = '8px';
-
-        var logText = document.createElement('pre');
-        logText.style.margin = '0';
-        logText.style.maxHeight = '180px';
-        logText.style.overflow = 'auto';
-        logText.style.whiteSpace = 'pre-wrap';
-        logText.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-        logText.style.fontSize = '12px';
-        logText.textContent = 'No log data yet.';
-        logPanel.appendChild(logText);
-
-        var logTimer = null;
-
-        function loadLog() {
-            fetch('/wifi-log')
-                .then(function (response) {
-                    if (!response.ok) {
-                        throw new Error('HTTP ' + response.status);
-                    }
-                    return response.text();
-                })
-                .then(function (text) {
-                    logText.textContent = text && text.trim() ? text : 'No log data yet.';
-                })
-                .catch(function (error) {
-                    logText.textContent = 'Log fetch failed: ' + error.message;
-                });
-        }
-
-        function openLogPanel() {
-            logPanel.style.display = '';
-            logToggle.textContent = 'Hide device log';
-            fetch('/wifi-log-enable')
-                .catch(function () {
-                    // Best-effort; still try to show whatever log is available.
-                })
-                .finally(function () {
-                    loadLog();
-                    if (logTimer === null) {
-                        logTimer = window.setInterval(loadLog, 5000);
-                    }
-                });
-        }
-
-        function closeLogPanel() {
-            logPanel.style.display = 'none';
-            logToggle.textContent = 'Show device log';
-            if (logTimer !== null) {
-                window.clearInterval(logTimer);
-                logTimer = null;
-            }
-            fetch('/wifi-log-disable').catch(function () {
-                // Best-effort disable.
-            });
-        }
-
-        logToggle.addEventListener('click', function () {
-            if (logPanel.style.display === 'none') {
-                openLogPanel();
-            } else {
-                closeLogPanel();
-            }
-        });
-
-        field.appendChild(logToggle);
-        field.appendChild(logPanel);
-
-        scanNetworks();
+        row.appendChild(btn);
+        row.appendChild(sel);
+        wrap.appendChild(row);
+        wrap.appendChild(statusEl);
+        return wrap;
     }
 
-    var originalLoadMain = window.loadConfig_main;
-    if (typeof originalLoadMain === 'function') {
-        window.loadConfig_main = function () {
-            return Promise.resolve(originalLoadMain()).then(function (result) {
-                installWifiScanUi();
-                return result;
+    /* ── Network card ── */
+    function makeCard(slot, ssid, isNew) {
+        var card = document.createElement('div');
+        card.dataset.wifiSlot = slot;
+        card.style.cssText = 'background:#f8f9fa;border:1px solid #ddd;border-radius:8px;padding:12px 14px;margin-bottom:8px';
+
+        /* SSID row */
+        var ssidRow = document.createElement('div');
+        ssidRow.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:8px';
+
+        var ssidLbl = document.createElement('label');
+        ssidLbl.textContent = 'SSID';
+        ssidLbl.style.cssText = 'width:78px;font-size:13px;font-weight:600;flex-shrink:0';
+
+        var ssidInput = document.createElement('input');
+        ssidInput.type = 'text';
+        ssidInput.value = ssid;
+        ssidInput.style.cssText = 'flex:1;padding:5px 8px;font-size:13px;border:1px solid #ccc;border-radius:4px';
+        ssidInput.addEventListener('input', function () { setVal(ssidId(slot), ssidInput.value); });
+
+        var delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.textContent = '\u2715';
+        delBtn.title = 'Remove this network';
+        delBtn.style.cssText = 'padding:4px 9px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px;flex-shrink:0';
+        delBtn.addEventListener('click', function () {
+            setVal(ssidId(slot), '');
+            setVal(passId(slot), '');
+            originalPasswords[slot] = '';
+            renderList();
+        });
+
+        ssidRow.appendChild(ssidLbl);
+        ssidRow.appendChild(ssidInput);
+        ssidRow.appendChild(delBtn);
+        card.appendChild(ssidRow);
+
+        /* Password row */
+        var passRow = document.createElement('div');
+        passRow.style.cssText = 'display:flex;gap:8px;align-items:center';
+
+        var passLbl = document.createElement('label');
+        passLbl.textContent = 'Password';
+        passLbl.style.cssText = 'width:78px;font-size:13px;font-weight:600;flex-shrink:0';
+
+        var passInput = document.createElement('input');
+        passInput.type = 'password';
+        var origPass = originalPasswords[slot] || '';
+        passInput.placeholder = (!isNew && origPass) ? '(unchanged)' : '';
+        passInput.style.cssText = 'flex:1;padding:5px 8px;font-size:13px;border:1px solid #ccc;border-radius:4px';
+
+        /* No-password checkbox */
+        var noPassWrap = document.createElement('label');
+        noPassWrap.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:13px;white-space:nowrap;flex-shrink:0;cursor:pointer';
+        var noPassChk = document.createElement('input');
+        noPassChk.type = 'checkbox';
+        // Open network = saved SSID but password was empty string
+        noPassChk.checked = !isNew && ssid && origPass === '';
+        noPassChk.addEventListener('change', function () {
+            passInput.disabled = noPassChk.checked;
+            if (noPassChk.checked) passInput.value = '';
+        });
+        if (noPassChk.checked) passInput.disabled = true;
+        noPassWrap.appendChild(noPassChk);
+        noPassWrap.appendChild(document.createTextNode('No password'));
+
+        passRow.appendChild(passLbl);
+        passRow.appendChild(passInput);
+        passRow.appendChild(noPassWrap);
+        card.appendChild(passRow);
+
+        /* Scan row only for new networks */
+        if (isNew) card.appendChild(makeScanRow(ssidInput));
+
+        /* Expose refs for pre-save sync */
+        card._passInput = passInput;
+        card._noPassChk = noPassChk;
+        card._slot = slot;
+
+        return card;
+    }
+
+    /* ── List renderer ── */
+    var listEl, addBtn;
+
+    function renderList() {
+        listEl.innerHTML = '';
+        var count = 0;
+        for (var i = 1; i <= MAX_SLOTS; i++) {
+            var ssid = getVal(ssidId(i));
+            if (ssid) { listEl.appendChild(makeCard(i, ssid, false)); count++; }
+        }
+        if (count === 0) {
+            var empty = document.createElement('p');
+            empty.textContent = 'No networks saved yet. Click \u201c+ Add network\u201d to add one.';
+            empty.style.cssText = 'color:#888;font-size:14px;margin:4px 0 12px';
+            listEl.appendChild(empty);
+        }
+        addBtn.style.display = count >= MAX_SLOTS ? 'none' : '';
+    }
+
+    /* ── Manager widget ── */
+    function buildManager() {
+        var wrap = document.createElement('div');
+
+        var h3 = document.createElement('h3');
+        h3.textContent = 'WiFi Networks';
+        h3.style.cssText = 'margin:0 0 10px;font-size:16px';
+        wrap.appendChild(h3);
+
+        listEl = document.createElement('div');
+        wrap.appendChild(listEl);
+
+        addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.textContent = '+ Add network';
+        addBtn.style.cssText = 'padding:6px 14px;cursor:pointer;font-size:14px';
+        addBtn.addEventListener('click', function () {
+            for (var i = 1; i <= MAX_SLOTS; i++) {
+                if (!getVal(ssidId(i))) {
+                    // Remove "no networks" message
+                    var empty = listEl.querySelector('p');
+                    if (empty) listEl.removeChild(empty);
+                    listEl.appendChild(makeCard(i, '', true));
+                    var count = listEl.querySelectorAll('[data-wifi-slot]').length;
+                    addBtn.style.display = count >= MAX_SLOTS ? 'none' : '';
+                    break;
+                }
+            }
+        });
+        wrap.appendChild(addBtn);
+        return wrap;
+    }
+
+    /* ── Pre-save: sync password fields from card state ── */
+    function hookSave() {
+        var form = document.querySelector('form');
+        if (!form) return;
+        form.addEventListener('submit', function () {
+            listEl.querySelectorAll('[data-wifi-slot]').forEach(function (card) {
+                var slot = card._slot;
+                var pi = card._passInput;
+                var nc = card._noPassChk;
+                if (nc && nc.checked) {
+                    setVal(passId(slot), '');
+                } else if (pi && pi.value === '') {
+                    // Empty input = keep original password
+                    setVal(passId(slot), originalPasswords[slot] || '');
+                } else if (pi) {
+                    setVal(passId(slot), pi.value);
+                }
             });
+        }, true);
+    }
+
+    /* ── Install ── */
+    function install() {
+        if (document.getElementById('wifi-mgr')) return;
+
+        // Snapshot original passwords before hiding
+        for (var i = 1; i <= MAX_SLOTS; i++) {
+            originalPasswords[i] = getVal(passId(i));
+        }
+
+        var fss = findFieldsets();
+        var wifiFs = fss['WiFi'];
+        if (!wifiFs) return;
+
+        var mgr = buildManager();
+        mgr.id = 'wifi-mgr';
+        wifiFs.parentNode.insertBefore(mgr, wifiFs);
+        hideWifiFieldsets(fss);
+        renderList();
+        hookSave();
+    }
+
+    var origLoad = window.loadConfig_main;
+    if (typeof origLoad === 'function') {
+        window.loadConfig_main = function () {
+            return Promise.resolve(origLoad()).then(function (r) { install(); return r; });
         };
     }
-
-    window.addEventListener('load', installWifiScanUi);
+    window.addEventListener('load', install);
 })();
 "#
 )]
@@ -301,6 +382,22 @@ pub struct AppConfig {
     #[config_store(env_default = "WIFI_PASSWORD_3", notify = "Wifi")]
     #[config_form(fieldset = "WiFi slot 3", label = "Password", input_type = "password", help = "Optional third network password")]
     wifi_password_3: String,
+
+    #[config_store(env_default = "WIFI_SSID_4", notify = "Wifi")]
+    #[config_form(fieldset = "WiFi slot 4", label = "SSID", help = "Optional fourth network name")]
+    wifi_ssid_4: String,
+
+    #[config_store(env_default = "WIFI_PASSWORD_4", notify = "Wifi")]
+    #[config_form(fieldset = "WiFi slot 4", label = "Password", input_type = "password", help = "Optional fourth network password")]
+    wifi_password_4: String,
+
+    #[config_store(env_default = "WIFI_SSID_5", notify = "Wifi")]
+    #[config_form(fieldset = "WiFi slot 5", label = "SSID", help = "Optional fifth network name")]
+    wifi_ssid_5: String,
+
+    #[config_store(env_default = "WIFI_PASSWORD_5", notify = "Wifi")]
+    #[config_form(fieldset = "WiFi slot 5", label = "Password", input_type = "password", help = "Optional fifth network password")]
+    wifi_password_5: String,
 
     #[config_store(env_default = "TEMP_OFFSET")]
     #[config_form(fieldset = "Calibration", label = "Temperature offset (°C)", help = "Added to raw reading. Positive = suuremaks, negatiivne = väiksemaks. Näiteks -1.7")]
@@ -457,6 +554,8 @@ fn find_best_ssid(cfg: &AppConfig) -> Option<(String, String)> {
         (cfg.wifi_ssid.as_str(), cfg.wifi_password.as_str()),
         (cfg.wifi_ssid_2.as_str(), cfg.wifi_password_2.as_str()),
         (cfg.wifi_ssid_3.as_str(), cfg.wifi_password_3.as_str()),
+        (cfg.wifi_ssid_4.as_str(), cfg.wifi_password_4.as_str()),
+        (cfg.wifi_ssid_5.as_str(), cfg.wifi_password_5.as_str()),
     ];
     // Prefer a network that is visible in the latest scan results.
     for (ssid, pass) in slots {
@@ -503,18 +602,38 @@ async fn main(spawner: Spawner) {
     let stack: &'static Stack<'static> = NET_STACK.init(wifi_stacks.sta);
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
 
-    // Startup: connect directly to the first configured WiFi network.
+    // Startup: scan first to pick the best visible network.
     {
-        let best = {
+        let has_config = {
             let cfg = config_handle.config().lock().await;
-            find_best_ssid(&cfg)
+            !cfg.wifi_ssid.is_empty()
+                || !cfg.wifi_ssid_2.is_empty()
+                || !cfg.wifi_ssid_3.is_empty()
+                || !cfg.wifi_ssid_4.is_empty()
+                || !cfg.wifi_ssid_5.is_empty()
         };
 
-        if let Some((ssid, pass)) = best {
-            log_runtime_line(format!("Config found: connecting to {}", ssid).as_str());
-            wifi_sender.send(WifiCaddyCommand::StaUp(ssid, pass)).await;
+        if has_config {
+            // Start AP briefly so the caddy runner can scan visible networks.
+            AP_ACTIVE.store(true, Ordering::Relaxed);
+            wifi_sender.send(WifiCaddyCommand::APUp("ClimateMonitor-".into())).await;
+            log_runtime_line("Boot: scanning for visible networks (5 s)...");
+            Timer::after(Duration::from_secs(5)).await;
+
+            // find_best_ssid now has scan results: prefers visible slots, falls back to slot 1.
+            let best = {
+                let cfg = config_handle.config().lock().await;
+                find_best_ssid(&cfg)
+            };
+
+            if let Some((ssid, pass)) = best {
+                log_runtime_line(format!("Boot scan: connecting to {}", ssid).as_str());
+                wifi_sender.send(WifiCaddyCommand::StaUp(ssid, pass)).await;
+                AP_ACTIVE.store(false, Ordering::Relaxed);
+                wifi_sender.send(WifiCaddyCommand::APDown).await;
+            }
         } else {
-            log_runtime_line("No WiFi config: starting AP portal at 192.168.2.1");
+            log_runtime_line("No WiFi config: starting AP portal at 192.168.4.1");
             AP_ACTIVE.store(true, Ordering::Relaxed);
             wifi_sender
                 .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
@@ -537,7 +656,13 @@ async fn main(spawner: Spawner) {
 
     let mut net_was_up = stack.is_config_up();
     loop {
-        Timer::after(Duration::from_secs(30)).await;
+        // Wait up to 30 s OR react immediately when config is saved in the portal.
+        let config_changed = embassy_time::with_timeout(
+            Duration::from_secs(30),
+            config_rx.receive(),
+        )
+        .await
+        .is_ok();
 
         let net_is_up_now = stack.is_config_up();
         if net_is_up_now && !net_was_up {
@@ -550,22 +675,22 @@ async fn main(spawner: Spawner) {
         }
         net_was_up = net_is_up_now;
 
-        if let Ok(_changed) = config_rx.try_receive() {
-            // AP is still up (user was in the portal), so scan results are fresh.
-            // Pick the best visible network from all configured slots.
+        if config_changed {
+            // Scan results are fresh (AP was up during portal use).
             let best = {
                 let cfg = config_handle.config().lock().await;
                 find_best_ssid(&cfg)
             };
             if let Some((ssid, pass)) = best {
-                log_runtime_line(format!("Config changed: connecting to {}", ssid).as_str());
+                log_runtime_line(format!("Config saved: connecting to {}", ssid).as_str());
                 wifi_sender.send(WifiCaddyCommand::StaUp(ssid, pass)).await;
-
-                if AP_ACTIVE.load(Ordering::Relaxed) {
-                    AP_ACTIVE.store(false, Ordering::Relaxed);
-                    wifi_sender.send(WifiCaddyCommand::APDown).await;
-                }
             }
+            if AP_ACTIVE.load(Ordering::Relaxed) {
+                AP_ACTIVE.store(false, Ordering::Relaxed);
+                wifi_sender.send(WifiCaddyCommand::APDown).await;
+                log_runtime_line("AP portal closed, returning to normal mode.");
+            }
+            continue; // skip sensor read this cycle
         }
 
         match dht22.read() {

@@ -9,19 +9,19 @@ use edge_nal_embassy::{Udp, UdpBuffers};
 use embassy_net::Stack;
 
 /// AP IP address (gateway and DNS for clients).
-pub const AP_IP_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 2, 1);
+pub const AP_IP_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
 
 #[cfg(feature = "captive")]
 /// Host name used for captive redirect (IP as string).
-pub const AP_HOST_NAME: &str = "192.168.2.1";
+pub const AP_HOST_NAME: &str = "192.168.4.1";
 
 #[cfg(feature = "captive")]
 /// URL to which non-captive requests are redirected.
-pub const AP_URL: &str = "http://192.168.2.1/";
+pub const AP_URL: &str = "http://192.168.4.1/";
 
-const AP_DNS_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 2, 1);
-const AP_POOL_START: Ipv4Addr = Ipv4Addr::new(192, 168, 2, 100);
-const AP_POOL_END: Ipv4Addr = Ipv4Addr::new(192, 168, 2, 200);
+const AP_DNS_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
+const AP_POOL_START: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 100);
+const AP_POOL_END: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 200);
 
 /// Embassy task: run the DHCP server on the AP stack, leasing addresses to connected clients.
 #[embassy_executor::task]

@@ -40,16 +40,21 @@ pub async fn serve_loop<H: Handler>(stack: Stack<'static>, handler: H) {
         KEEPALIVE_TIMEOUT_MS
     );
     let tcp_buffers = TcpBuffers::<{ HANDLER_TASKS }, { TCP_BUF_SIZE }, { TCP_BUF_SIZE }>::new();
-    let tcp = Tcp::new(stack, &tcp_buffers);
 
-    let acceptor = match tcp
-        .bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80)))
-        .await
-    {
-        Ok(a) => a,
-        Err(_e) => {
-            error!("http: TCP bind error on port 80");
-            return;
+    // Wait until the AP radio link is actually up before trying to bind.
+    stack.wait_link_up().await;
+
+    let tcp = Tcp::new(stack, &tcp_buffers);
+    let acceptor = loop {
+        match tcp
+            .bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80)))
+            .await
+        {
+            Ok(a) => break a,
+            Err(_e) => {
+                error!("http: TCP bind error on port 80, retrying in 2 s");
+                embassy_time::Timer::after(embassy_time::Duration::from_secs(2)).await;
+            }
         }
     };
 
