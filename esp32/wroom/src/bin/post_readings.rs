@@ -24,6 +24,7 @@ pub async fn post_readings(
     stack: &'static Stack<'static>,
     tcp_state: &'static TcpClientState<1, 4096, 4096>,
     body: &[u8],
+    wifi_connected: Option<bool>,
 ) -> PostResult {
     let tcp_client = TcpClient::new(*stack, tcp_state);
     let dns = DnsSocket::new(*stack);
@@ -44,6 +45,7 @@ pub async fn post_readings(
     .await
     {
         Err(_) => {
+            let _ = crate::network::verify_dns(stack, wifi_connected).await;
             return fail(alloc::format!(
                 "HTTP connect timeout after {}s",
                 HTTP_CONNECT_TIMEOUT_SECS

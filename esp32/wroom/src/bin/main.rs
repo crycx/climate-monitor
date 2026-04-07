@@ -112,7 +112,7 @@ async fn main(spawner: Spawner) {
         }
     }
 
-    if !verify_dns(stack).await {
+    if !verify_dns(stack, controller.is_connected().ok()).await {
         logln!("DNS verification failed, restarting...");
         esp_hal::system::software_reset();
     }
@@ -156,9 +156,10 @@ async fn main(spawner: Spawner) {
                     },
                 ];
                 let body = body::build_body(&values);
+                let wifi_connected = controller.is_connected().ok();
                 let (post_ok, server_unix_sec, post_error) = match embassy_time::with_timeout(
                     Duration::from_secs(POST_TOTAL_TIMEOUT_SECS),
-                    post_readings(stack, tcp_state, body.as_bytes()),
+                    post_readings(stack, tcp_state, body.as_bytes(), wifi_connected),
                 )
                 .await
                 {
