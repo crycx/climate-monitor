@@ -12,9 +12,7 @@ extern crate alloc;
 use embedded_dht_rs::dht22::Dht22;
 use embassy_executor::Spawner;
 use embassy_net::{
-    dns::DnsQueryType,
-    dns::DnsSocket,
-    tcp::client::{TcpClient, TcpClientState},
+    tcp::client::TcpClientState,
     Config as NetConfig,
     Stack,
     StackResources,
@@ -27,21 +25,20 @@ use esp_hal::{
     gpio::{DriveMode, Flex, OutputConfig, Pull},
     timer::timg::TimerGroup,
 };
-use esp_radio::wifi::{ClientConfig, ModeConfig, ScanConfig};
 use esp_rtos as _;
-use reqwless::{
-    client::{HttpClient, TlsConfig, TlsVerify},
-    headers::ContentType,
-    request::{Method, RequestBuilder},
-};
 use log_utils::set_time_sync_from_unix;
-use server_time_response::extract_server_unix_from_headers;
+use network::{net_task, verify_dns};
+use post_readings::post_readings;
+use wifi::connect_to_wifi;
 
 use static_cell::StaticCell;
 
 mod log_utils;
+mod network;
+mod post_readings;
 mod server_time_response;
 mod time_utils;
+mod wifi;
 
 // This creates a default app-descriptor required by the ESP-IDF bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -68,116 +65,6 @@ static TCP_STATE: StaticCell<TcpClientState<1, 4096, 4096>> = StaticCell::new();
 
 // logln! macro is available at crate root due to #[macro_export]
 
-#[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::WifiDevice<'static>>) {
-    runner.run().await;
-}
-
-async fn verify_dns(stack: &'static Stack<'static>) -> bool {
-    let hostname = {
-        let after_scheme = READINGS_URL
-            .find("://")
-            .map(|i| &READINGS_URL[i + 3..])
-            .unwrap_or(READINGS_URL);
-        after_scheme
-            .find('/')
-            .map(|i| &after_scheme[..i])
-            .unwrap_or(after_scheme)
-    };
-
-    logln!("Resolving {} ...", hostname);
-    match stack.dns_query(hostname, DnsQueryType::A).await {
-        Ok(addresses) => {
-            logln!("DNS resolved: {:?}", addresses);
-            true
-        }
-        Err(error) => {
-            logln!("DNS query failed: {:?}", error);
-            false
-        }
-    }
-}
-
-async fn post_readings(
-    stack: &'static Stack<'static>,
-    tcp_state: &'static TcpClientState<1, 4096, 4096>,
-    temp: f32,
-    hum: f32,
-) -> (bool, Option<u64>, Option<alloc::string::String>) {
-    let tcp_client = TcpClient::new(*stack, tcp_state);
-    let dns = DnsSocket::new(*stack);
-
-    let tls_seed = esp_hal::rng::Rng::new().random() as u64;
-    let mut tls_rx = [0u8; 4096];
-    let mut tls_tx = [0u8; 4096];
-    let tls = TlsConfig::new(tls_seed, &mut tls_rx, &mut tls_tx, TlsVerify::None);
-
-    let mut http = HttpClient::new_with_tls(&tcp_client, &dns, tls);
-
-    let body = alloc::format!(
-        r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%"}}]"#,
-        temp, hum
-    );
-    let mut rx_buf = [0u8; 512];
-
-    match embassy_time::with_timeout(
-        Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS),
-        http.request(Method::POST, READINGS_URL),
-    )
-    .await
-    {
-        Err(_) => {
-            let msg = alloc::format!("HTTP connect timeout after {}s", HTTP_CONNECT_TIMEOUT_SECS);
-            logln!("{}", msg);
-            (false, None, Some(msg))
-        }
-        Ok(request) => {
-            let request = match request {
-                Ok(request) => request,
-                Err(error) => {
-                    let msg = alloc::format!("HTTP connect error: {:?}", error);
-                    logln!("{}", msg);
-                    return (false, None, Some(msg));
-                }
-            };
-
-            let headers = [("X-API-Key", API_KEY)];
-            let mut builder = request
-                .content_type(ContentType::ApplicationJson)
-                .headers(&headers)
-                .body(body.as_bytes());
-            match embassy_time::with_timeout(
-                Duration::from_secs(HTTP_SEND_TIMEOUT_SECS),
-                builder.send(&mut rx_buf),
-            )
-            .await
-            {
-                Err(_) => {
-                    let msg = alloc::format!("POST send timeout after {}s", HTTP_SEND_TIMEOUT_SECS);
-                    logln!("{}", msg);
-                    (false, None, Some(msg))
-                }
-                Ok(response) => {
-                    match response {
-                        Ok(response) => {
-                            let sec = extract_server_unix_from_headers(response.headers());
-                            logln!("POST -> HTTP {}", response.status.0);
-                            return (true, sec, None);
-                        }
-                        Err(error) => {
-                            let msg = alloc::format!("POST error: {:?}", error);
-                            logln!("{}", msg);
-                            (false, None, Some(msg))
-                        }
-                    }
-                }
-            }
-        }
-        // Err(error) => {
-        //     esp_println::println!("HTTP connect error: {:?}", error);
-        // }
-    }
-}
 
 #[allow(clippy::large_stack_frames, reason = "it's not unusual to allocate larger buffers etc. in main")]
 #[esp_rtos::main]
@@ -199,81 +86,7 @@ async fn main(spawner: Spawner) {
     let (mut controller, interfaces) =
         esp_radio::wifi::new(esp_radio_ctrl, peripherals.WIFI, Default::default()).unwrap();
 
-    controller
-        .set_config(&ModeConfig::Client(
-            ClientConfig::default()
-                .with_ssid(WIFI_SSID.into())
-                .with_password(WIFI_PASSWORD.into()),
-        ))
-        .unwrap();
-
-    controller.start().unwrap();
-
-    delay.delay_millis(1000);
-
-    loop {
-        logln!("Scanning for '{}'...", WIFI_SSID);
-        match controller.scan_with_config(ScanConfig::default()) {
-            Ok(results) => {
-                logln!("Found {} networks:", results.len());
-                for ap in &results {
-                    logln!(
-                        "  SSID: {}, Signal: {}, Auth: {:?}",
-                        ap.ssid,
-                        ap.signal_strength,
-                        ap.auth_method
-                    );
-                }
-
-                if results.iter().any(|ap| ap.ssid == WIFI_SSID) {
-                    logln!("Network '{}' found, attempting to connect...", WIFI_SSID);
-                    break;
-                }
-            }
-            Err(error) => {
-                logln!("Scan failed: {:?}", error);
-            }
-        }
-
-        logln!("'{}' not found, rescanning in 3s...", WIFI_SSID);
-        delay.delay_millis(3000);
-    }
-
-    logln!("Connecting to '{}'...", WIFI_SSID);
-
-    let mut retries = 0;
-    loop {
-        match controller.connect() {
-            Ok(()) => {}
-            Err(error) => {
-                logln!("connect() error: {:?}", error);
-            }
-        }
-
-        delay.delay_millis(2000);
-
-        match controller.is_connected() {
-            Ok(true) => {
-                logln!("Wi-Fi connected!");
-                break;
-            }
-            Ok(false) => {
-                logln!("Waiting for Wi-Fi... (attempt {})", retries);
-            }
-            Err(error) => {
-                logln!(
-                    "Wi-Fi status: {:?}, retrying... (attempt {})",
-                    error,
-                    retries
-                );
-            }
-        }
-
-        retries += 1;
-        if retries > 20 {
-            logln!("Failed to connect after 20 attempts, restarting...");
-        }
-    }
+    connect_to_wifi(&mut controller, &delay, WIFI_SSID, WIFI_PASSWORD);
 
     let seed = esp_hal::rng::Rng::new().random() as u64;
     let (stack, runner) = embassy_net::new(
@@ -341,7 +154,7 @@ async fn main(spawner: Spawner) {
                     sensor_reading.temperature,
                     sensor_reading.humidity
                 );
-                let mut post_error_str: Option<alloc::string::String> = None;
+                let post_error_str: Option<alloc::string::String> = None;
                 let (post_ok, server_unix_sec, post_error) = match embassy_time::with_timeout(
                     Duration::from_secs(POST_TOTAL_TIMEOUT_SECS),
                     post_readings(
