@@ -32,9 +32,6 @@ pub async fn run(stack: Stack<'static>) {
     info!("dhcp: start DHCP task");
 
     loop {
-        // Wait for the AP interface to be ready before binding.
-        stack.wait_link_up().await;
-
         let buffers = UdpBuffers::<1, 1500, 1500, 2>::new();
         let udp = Udp::new(stack, &buffers);
 

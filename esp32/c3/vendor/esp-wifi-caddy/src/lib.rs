@@ -87,6 +87,8 @@ pub enum WifiCaddyCommand {
     APDown,
     /// Set STA credentials (ssid, pass) and enable STA.
     StaUp(String, String),
+    /// Disable STA by clearing credentials.
+    StaDown,
 }
 
 #[cfg(feature = "defmt")]
@@ -99,6 +101,7 @@ impl defmt::Format for WifiCaddyCommand {
             WifiCaddyCommand::StaUp(ssid, pass) => {
                 write!(f, "StaUp({}, {})", ssid.as_str(), pass.as_str())
             }
+            WifiCaddyCommand::StaDown => write!(f, "StaDown"),
         }
     }
 }
@@ -461,8 +464,18 @@ struct WifiRunner {
     pass: String,
     wifi_commands: WifiCommandReceiver,
     last_scan_attempt: Option<Instant>,
+    started_mode: u8,
+    scan_refresh_enabled: bool,
 }
-
+/// Returns a small discriminant (0=None, 1=Client, 2=ApSta) for a `ModeConfig`.
+fn mode_variant(config: &ModeConfig) -> u8 {
+    match config {
+        ModeConfig::None => 0,
+        ModeConfig::Client(_) => 1,
+        ModeConfig::ApSta(_, _) => 2,
+        _ => 3,
+    }
+}
 impl WifiRunner {
     fn new(
         controller: WifiController<'static>,
@@ -478,6 +491,8 @@ impl WifiRunner {
             pass: String::new(),
             wifi_commands,
             last_scan_attempt: None,
+            started_mode: 0,
+            scan_refresh_enabled: false,
         }
     }
 
@@ -532,11 +547,18 @@ impl WifiRunner {
         if matches!(config, ModeConfig::None) {
             return;
         }
+        let new_variant = mode_variant(config);
         if matches!(self.controller.is_started(), Ok(true)) {
-            // Stop WiFi before reconfiguring — esp-radio does not support
-            // live mode transitions (e.g. Client → ApSta) and will panic with
-            // an unreachable!() if we call set_config while running.
-            debug!("wifi: ensure_wifi_started_with_config: stopping wifi for reconfigure");
+            if self.started_mode == new_variant {
+                // Same mode (e.g. ApSta→ApSta): update credentials without full
+                // stop+restart so the AP stays up and the HTTP server is uninterrupted.
+                debug!("wifi: ensure_wifi_started_with_config: same mode, updating config in-place");
+                self.apply_config(config);
+                return;
+            }
+            // Mode variant changed (e.g. Client→ApSta): must stop before reconfiguring.
+            // esp-radio panics on live mode transitions.
+            debug!("wifi: ensure_wifi_started_with_config: stopping wifi for mode change");
             if let Err(e) = self.controller.stop_async().await {
                 warn!("wifi: ensure_wifi_started_with_config: stop failed: {:?}", e);
             }
@@ -546,6 +568,7 @@ impl WifiRunner {
         debug!("wifi: ensure_wifi_started_with_config: starting wifi");
         self.controller.start_async().await.unwrap();
         debug!("wifi: ensure_wifi_started_with_config: started wifi!");
+        self.started_mode = new_variant;
     }
 
     async fn try_connect_sta(&mut self) {
@@ -577,6 +600,12 @@ impl WifiRunner {
 
     #[cfg(feature = "config")]
     async fn refresh_scan_results(&mut self) {
+        // Keep AP portal HTTP stable: periodic scans can interrupt the TCP acceptor
+        // and cause short windows of connection-refused in browsers.
+        if !self.scan_refresh_enabled {
+            return;
+        }
+
         if !self.ap_up {
             return;
         }
@@ -634,6 +663,13 @@ impl WifiRunner {
                 push_portal_log_line(alloc::format!("sta: set ssid '{}'", new_ssid).as_str());
                 self.ssid = new_ssid;
                 self.pass = new_pass;
+            }
+            WifiCaddyCommand::StaDown => {
+                info!("wifi: connection task: StaDown command");
+                #[cfg(feature = "config")]
+                push_portal_log_line("sta: off");
+                self.ssid.clear();
+                self.pass.clear();
             }
         }
     }

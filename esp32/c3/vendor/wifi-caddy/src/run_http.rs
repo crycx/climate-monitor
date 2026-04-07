@@ -69,11 +69,11 @@ pub async fn run_http_config_loop<C, S>(
         };
 
         portal::serve_loop(stack, handler).await;
-        info!("http: serve_loop exited, restarting after 500 ms");
+        info!("http: serve_loop exited, restarting after 50 ms");
 
         // AP link went down (APDown command). Wait briefly before the next
         // wait_link_up() so we don't spin instantly.
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(500)).await;
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(50)).await;
     }
 }
 

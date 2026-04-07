@@ -29,7 +29,7 @@ extern crate alloc;
 #[cfg(feature = "wifi")]
 use alloc::{format, string::String};
 #[cfg(feature = "wifi")]
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embedded_dht_rs::dht22::Dht22;
 use esp_backtrace as _;
@@ -428,11 +428,124 @@ static BUTTON_PRESSED: AtomicBool = AtomicBool::new(false);
 static AP_ACTIVE: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "wifi")]
 static SENDING: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "wifi")]
+static BUTTON_EVENT: AtomicU8 = AtomicU8::new(BUTTON_EVENT_NONE);
+
+#[cfg(feature = "wifi")]
+const AP_SSID_PREFIX: &str = "ClimateMonitor-";
+#[cfg(feature = "wifi")]
+const SENSOR_INTERVAL_SECS: u64 = 30;
+#[cfg(feature = "wifi")]
+const MAIN_LOOP_TICK_MS: u64 = 250;
+#[cfg(feature = "wifi")]
+const BUTTON_EVENT_NONE: u8 = 0;
+#[cfg(feature = "wifi")]
+const BUTTON_EVENT_SHORT: u8 = 1;
+#[cfg(feature = "wifi")]
+const BUTTON_EVENT_LONG: u8 = 2;
 
 #[cfg(feature = "wifi")]
 fn log_runtime_line(line: &str) {
     esp_println::println!("{}", line);
     esp_wifi_caddy::portal_log(line);
+}
+
+#[cfg(feature = "wifi")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ButtonEvent {
+    ShortPress,
+    LongPress,
+}
+
+#[cfg(feature = "wifi")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PortalMode {
+    /// AP is down, normal sensor-post mode.
+    Off,
+    /// AP opened because no WiFi credentials are configured.
+    MissingConfig,
+    /// User manually opened the portal via button.
+    Manual,
+    /// AP reopened automatically because STA reconnect failed.
+    Recovery,
+}
+
+#[cfg(feature = "wifi")]
+impl PortalMode {
+    fn is_open(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
+#[cfg(feature = "wifi")]
+fn take_button_event() -> Option<ButtonEvent> {
+    let raw = BUTTON_EVENT.load(Ordering::Relaxed);
+    if raw == BUTTON_EVENT_NONE {
+        return None;
+    }
+
+    BUTTON_EVENT.store(BUTTON_EVENT_NONE, Ordering::Relaxed);
+    match raw {
+        BUTTON_EVENT_SHORT => Some(ButtonEvent::ShortPress),
+        BUTTON_EVENT_LONG => Some(ButtonEvent::LongPress),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "wifi")]
+fn has_wifi_config(cfg: &AppConfig) -> bool {
+    !cfg.wifi_ssid.is_empty()
+        || !cfg.wifi_ssid_2.is_empty()
+        || !cfg.wifi_ssid_3.is_empty()
+        || !cfg.wifi_ssid_4.is_empty()
+        || !cfg.wifi_ssid_5.is_empty()
+}
+
+#[cfg(feature = "wifi")]
+async fn set_portal_mode(
+    wifi_sender: &esp_wifi_caddy::WifiCommandSender,
+    portal_mode: &mut PortalMode,
+    next_mode: PortalMode,
+    log_line: &str,
+) {
+    if *portal_mode == next_mode {
+        return;
+    }
+
+    let was_open = portal_mode.is_open();
+    let will_open = next_mode.is_open();
+
+    log_runtime_line(log_line);
+
+    match (was_open, will_open) {
+        (false, true) => {
+            wifi_sender
+                .send(WifiCaddyCommand::APUp(AP_SSID_PREFIX.into()))
+                .await;
+        }
+        (true, false) => {
+            wifi_sender.send(WifiCaddyCommand::APDown).await;
+        }
+        _ => {}
+    }
+
+    *portal_mode = next_mode;
+    AP_ACTIVE.store(will_open, Ordering::Relaxed);
+}
+
+#[cfg(feature = "wifi")]
+async fn connect_best_configured_wifi(
+    wifi_sender: &esp_wifi_caddy::WifiCommandSender,
+    cfg: &AppConfig,
+    context: &str,
+) -> bool {
+    if let Some((ssid, pass)) = find_best_ssid(cfg) {
+        log_runtime_line(format!("{}{}", context, ssid).as_str());
+        wifi_sender.send(WifiCaddyCommand::StaUp(ssid, pass)).await;
+        true
+    } else {
+        false
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -516,7 +629,7 @@ async fn gpio_poll_task(btn: Input<'static>) {
 
 #[cfg(feature = "wifi")]
 #[embassy_executor::task]
-async fn button_task(wifi_sender: esp_wifi_caddy::WifiCommandSender) {
+async fn button_task() {
     loop {
         // Wait for press.
         while !BUTTON_PRESSED.load(Ordering::Relaxed) {
@@ -531,21 +644,9 @@ async fn button_task(wifi_sender: esp_wifi_caddy::WifiCommandSender) {
         let held = press_start.elapsed();
 
         if held >= Duration::from_secs(3) {
-            log_runtime_line("Button: long press -> force AP on");
-            AP_ACTIVE.store(true, Ordering::Relaxed);
-            wifi_sender
-                .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
-                .await;
-        } else if AP_ACTIVE.load(Ordering::Relaxed) {
-            log_runtime_line("Button: short press -> AP portal off");
-            AP_ACTIVE.store(false, Ordering::Relaxed);
-            wifi_sender.send(WifiCaddyCommand::APDown).await;
+            BUTTON_EVENT.store(BUTTON_EVENT_LONG, Ordering::Relaxed);
         } else {
-            log_runtime_line("Button: short press -> AP portal on");
-            AP_ACTIVE.store(true, Ordering::Relaxed);
-            wifi_sender
-                .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
-                .await;
+            BUTTON_EVENT.store(BUTTON_EVENT_SHORT, Ordering::Relaxed);
         }
 
         Timer::after(Duration::from_millis(300)).await;
@@ -554,8 +655,8 @@ async fn button_task(wifi_sender: esp_wifi_caddy::WifiCommandSender) {
 
 /// Selects the best WiFi credential to use.
 ///
-/// If scan results are available, prefers the first slot whose SSID is
-/// currently visible over-the-air (strongest known network wins in slot order).
+/// If scan results are available, prefers the first configured slot whose SSID is
+/// currently visible over-the-air.
 /// Falls back to the first non-empty slot when no scan data is present.
 #[cfg(feature = "wifi")]
 fn find_best_ssid(cfg: &AppConfig) -> Option<(String, String)> {
@@ -606,47 +707,48 @@ async fn main(spawner: Spawner) {
         esp_wifi_caddy::wifi_init!(AppConfig, spawner, peripherals.WIFI, flash, "config")
             .expect("wifi_init failed");
 
-    spawner.spawn(button_task(wifi_sender.clone())).unwrap();
+    spawner.spawn(button_task()).unwrap();
 
     let stack: &'static Stack<'static> = NET_STACK.init(wifi_stacks.sta);
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
+    let mut portal_mode = PortalMode::Off;
 
-    // Startup: scan first to pick the best visible network.
     {
-        let has_config = {
-            let cfg = config_handle.config().lock().await;
-            !cfg.wifi_ssid.is_empty()
-                || !cfg.wifi_ssid_2.is_empty()
-                || !cfg.wifi_ssid_3.is_empty()
-                || !cfg.wifi_ssid_4.is_empty()
-                || !cfg.wifi_ssid_5.is_empty()
-        };
+        let cfg = config_handle.config().lock().await;
+        if has_wifi_config(&cfg) {
+            connect_best_configured_wifi(&wifi_sender, &cfg, "Boot: connecting to ").await;
+        } else {
+            wifi_sender.send(WifiCaddyCommand::StaDown).await;
+            set_portal_mode(
+                &wifi_sender,
+                &mut portal_mode,
+                PortalMode::MissingConfig,
+                "No WiFi config: starting AP portal at 192.168.4.1",
+            )
+            .await;
+        }
+    }
 
-        if has_config {
-            // Start AP briefly so the caddy runner can scan visible networks.
-            AP_ACTIVE.store(true, Ordering::Relaxed);
-            wifi_sender.send(WifiCaddyCommand::APUp("ClimateMonitor-".into())).await;
-            log_runtime_line("Boot: scanning for visible networks (5 s)...");
-            Timer::after(Duration::from_secs(5)).await;
+    if portal_mode == PortalMode::Off {
+        log_runtime_line("Boot: waiting up to 15 s for STA connection...");
+        let connected = embassy_time::with_timeout(Duration::from_secs(15), stack.wait_config_up())
+            .await
+            .is_ok();
 
-            // find_best_ssid now has scan results: prefers visible slots, falls back to slot 1.
-            let best = {
-                let cfg = config_handle.config().lock().await;
-                find_best_ssid(&cfg)
-            };
-
-            if let Some((ssid, pass)) = best {
-                log_runtime_line(format!("Boot scan: connecting to {}", ssid).as_str());
-                wifi_sender.send(WifiCaddyCommand::StaUp(ssid, pass)).await;
-                AP_ACTIVE.store(false, Ordering::Relaxed);
-                wifi_sender.send(WifiCaddyCommand::APDown).await;
+        if connected {
+            log_runtime_line("WiFi connected during boot.");
+            if let Some(cfg) = stack.config_v4() {
+                log_runtime_line(format!("Got IP: {:?}", cfg.address).as_str());
             }
         } else {
-            log_runtime_line("No WiFi config: starting AP portal at 192.168.4.1");
-            AP_ACTIVE.store(true, Ordering::Relaxed);
-            wifi_sender
-                .send(WifiCaddyCommand::APUp("ClimateMonitor-".into()))
-                .await;
+            wifi_sender.send(WifiCaddyCommand::StaDown).await;
+            set_portal_mode(
+                &wifi_sender,
+                &mut portal_mode,
+                PortalMode::Recovery,
+                "Boot: STA connect timeout, starting AP portal at 192.168.4.1",
+            )
+            .await;
         }
     }
 
@@ -664,14 +766,47 @@ async fn main(spawner: Spawner) {
     let mut dht22 = Dht22::new(dht22_pin, Delay::new());
 
     let mut net_was_up = stack.is_config_up();
+    let mut next_sensor_at = Instant::now() + Duration::from_secs(SENSOR_INTERVAL_SECS);
     loop {
-        // Wait up to 30 s OR react immediately when config is saved in the portal.
         let config_changed = embassy_time::with_timeout(
-            Duration::from_secs(30),
+            Duration::from_millis(MAIN_LOOP_TICK_MS),
             config_rx.receive(),
         )
         .await
         .is_ok();
+
+        if let Some(event) = take_button_event() {
+            match event {
+                ButtonEvent::LongPress => {
+                    set_portal_mode(
+                        &wifi_sender,
+                        &mut portal_mode,
+                        PortalMode::Manual,
+                        "Button: long press -> opening AP portal",
+                    )
+                    .await;
+                }
+                ButtonEvent::ShortPress => {
+                    if portal_mode.is_open() {
+                        set_portal_mode(
+                            &wifi_sender,
+                            &mut portal_mode,
+                            PortalMode::Off,
+                            "Button: short press -> closing AP portal",
+                        )
+                        .await;
+                    } else {
+                        set_portal_mode(
+                            &wifi_sender,
+                            &mut portal_mode,
+                            PortalMode::Manual,
+                            "Button: short press -> opening AP portal",
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
 
         let net_is_up_now = stack.is_config_up();
         if net_is_up_now && !net_was_up {
@@ -685,23 +820,29 @@ async fn main(spawner: Spawner) {
         net_was_up = net_is_up_now;
 
         if config_changed {
-            // Scan results are fresh (AP was up during portal use).
-            let best = {
+            let has_config = {
                 let cfg = config_handle.config().lock().await;
-                find_best_ssid(&cfg)
+                if has_wifi_config(&cfg) {
+                    connect_best_configured_wifi(&wifi_sender, &cfg, "Config saved: connecting to ")
+                        .await;
+                    true
+                } else {
+                    false
+                }
             };
-            if let Some((ssid, pass)) = best {
-                log_runtime_line(format!("Config saved: connecting to {}", ssid).as_str());
-                wifi_sender.send(WifiCaddyCommand::StaUp(ssid, pass)).await;
-            }
-            if AP_ACTIVE.load(Ordering::Relaxed) {
+
+            if portal_mode.is_open() && has_config {
                 // Wait for the HTTP response to be flushed to the browser before
                 // dropping the AP — otherwise the save POST never completes.
                 log_runtime_line("Config saved: closing AP portal in 3 s...");
                 Timer::after(Duration::from_secs(3)).await;
-                AP_ACTIVE.store(false, Ordering::Relaxed);
-                wifi_sender.send(WifiCaddyCommand::APDown).await;
-                log_runtime_line("AP portal closed, checking WiFi connection (up to 30 s)...");
+                set_portal_mode(
+                    &wifi_sender,
+                    &mut portal_mode,
+                    PortalMode::Off,
+                    "Config saved: AP portal closed, checking WiFi connection (up to 30 s)...",
+                )
+                .await;
 
                 let connected = embassy_time::with_timeout(
                     Duration::from_secs(30),
@@ -718,17 +859,37 @@ async fn main(spawner: Spawner) {
                     }
                     net_was_up = true;
                 } else {
-                    log_runtime_line("WiFi connect timed out, re-opening AP portal.");
-                    AP_ACTIVE.store(true, Ordering::Relaxed);
-                    wifi_sender.send(WifiCaddyCommand::APUp("ClimateMonitor-".into())).await;
+                    wifi_sender.send(WifiCaddyCommand::StaDown).await;
+                    set_portal_mode(
+                        &wifi_sender,
+                        &mut portal_mode,
+                        PortalMode::Recovery,
+                        "WiFi connect timed out, re-opening AP portal.",
+                    )
+                    .await;
                 }
+            } else if !has_config {
+                wifi_sender.send(WifiCaddyCommand::StaDown).await;
+                set_portal_mode(
+                    &wifi_sender,
+                    &mut portal_mode,
+                    PortalMode::MissingConfig,
+                    "Config saved without WiFi credentials: AP portal remains available.",
+                )
+                .await;
             }
-            continue; // skip sensor read this cycle
+
+            next_sensor_at = Instant::now() + Duration::from_secs(SENSOR_INTERVAL_SECS);
+            continue;
         }
 
-        // AP portal is active — skip sensor read and POST until portal closes.
-        if AP_ACTIVE.load(Ordering::Relaxed) {
-            log_runtime_line("AP active: skipping sensor post");
+        if Instant::now() < next_sensor_at {
+            continue;
+        }
+        next_sensor_at = Instant::now() + Duration::from_secs(SENSOR_INTERVAL_SECS);
+
+        if portal_mode.is_open() {
+            log_runtime_line("AP active: sensor post paused");
             continue;
         }
 
@@ -774,7 +935,14 @@ async fn main(spawner: Spawner) {
                         )
                         .await;
                     } else {
-                        log_runtime_line("Reconnect timed out after 60 s, will retry next cycle.");
+                        wifi_sender.send(WifiCaddyCommand::StaDown).await;
+                        set_portal_mode(
+                            &wifi_sender,
+                            &mut portal_mode,
+                            PortalMode::Recovery,
+                            "Reconnect timed out after 60 s, opening AP portal for recovery.",
+                        )
+                        .await;
                     }
                 }
             }
