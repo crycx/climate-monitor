@@ -3,6 +3,7 @@ edition      = "2024"
 name         = "wroom"
 rust-version = "1.88"
 version      = "0.1.0"
+autobins     = false
 
 [[bin]]
 name = "wroom"
@@ -10,6 +11,7 @@ path = "./src/bin/main.rs"
 
 [dependencies]
 embedded-dht-rs = { version = "0.5.0", features = ["dht22"] }
+embedded-hal = "1.0.0"
 
 # Keep esp-backtrace/esp-println aligned with esp-hal 1.x.
 esp-backtrace = { version = "0.18.1", features = [
