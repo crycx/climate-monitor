@@ -109,9 +109,12 @@
       <div class="dash-card-header">
         <span class="dash-device-name">{{ device.name }}</span>
         <span class="dash-location" *ngIf="getLocationName(device.location_id) as loc">{{ loc }}</span>
-        <div class="dash-period-badge" *ngIf="deviceStats().get(device.id)">
+        <div class="dash-period-badge" *ngIf="deviceStats().get(device.id) as stats">
           <mat-icon class="period-icon">schedule</mat-icon>
           {{ rangeLabel() }}
+          <span class="dash-last-seen" *ngIf="stats.lastSeenTs">
+            &middot; {{ stats.lastSeenTs | timeAgo }}
+          </span>
         </div>
       </div>
       <ng-container *ngIf="deviceStats().get(device.id) as stats">

@@ -43,6 +43,7 @@ type TimePoint = {
 };
 
 type DeviceStats = {
+  lastSeenTs: string | null;
   tempLatest: number | null;
   tempMin: number | null;
   tempMax: number | null;
@@ -120,7 +121,14 @@ export class Home implements AfterViewInit, OnDestroy {
     for (const device of devices) {
       const t = stat(seriesValues(device.id, 'temperature'));
       const h = stat(seriesValues(device.id, 'humidity'));
+      const lastReading = readings
+        .filter((r) => r.device_id === device.id && r.timestamp !== null)
+        .reduce<string | null>((best, r) => {
+          if (!best) return r.timestamp as string;
+          return (r.timestamp as string) > best ? (r.timestamp as string) : best;
+        }, null);
       map.set(device.id, {
+        lastSeenTs: lastReading,
         tempLatest: t.latest,
         tempMin: t.min,
         tempMax: t.max,

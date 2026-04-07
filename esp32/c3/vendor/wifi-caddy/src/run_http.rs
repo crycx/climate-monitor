@@ -50,24 +50,30 @@ pub async fn run_http_config_loop<C, S>(
 {
     info!("Starting HTTP config server...");
 
-    let handler = ConfigHandler {
-        config,
-        io,
-        default_group: ui.default_group,
-        page_heading: ui.page_heading,
-        title: ui.title,
-        subtitle: ui.subtitle,
-        nav_left: ui.nav_left,
-        nav_right: ui.nav_right,
-        extra_css: ui.extra_css,
-        extra_js: ui.extra_js,
-        on_updated,
-        custom_get,
-        #[cfg(feature = "captive")]
-        captive: true,
-    };
+    loop {
+        let handler = ConfigHandler {
+            config,
+            io,
+            default_group: ui.default_group,
+            page_heading: ui.page_heading,
+            title: ui.title,
+            subtitle: ui.subtitle,
+            nav_left: ui.nav_left,
+            nav_right: ui.nav_right,
+            extra_css: ui.extra_css,
+            extra_js: ui.extra_js,
+            on_updated,
+            custom_get,
+            #[cfg(feature = "captive")]
+            captive: true,
+        };
 
-    portal::serve_loop(stack, handler).await;
+        portal::serve_loop(stack, handler).await;
+
+        // AP link went down (APDown command). Wait briefly before the next
+        // wait_link_up() so we don't spin instantly.
+        embassy_time::Timer::after(embassy_time::Duration::from_secs(2)).await;
+    }
 }
 
 /// Debug HTTP config loop: runs on the STA interface without DHCP, DNS, or captive portal.

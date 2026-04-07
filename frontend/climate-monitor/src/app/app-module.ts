@@ -96,7 +96,7 @@ registerLocaleData(localeEt);
     MatButtonToggleModule,
     ServiceWorkerModule.register('ngsw-worker.js', {
       enabled: environment.production,
-      registrationStrategy: 'registerWhenStable:30000',
+      registrationStrategy: 'registerImmediately',
     }),
     AppRoutingModule,
   ],
