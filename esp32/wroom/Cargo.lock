@@ -1983,6 +1983,7 @@ dependencies = [
  "embassy-net",
  "embassy-time",
  "embedded-dht-rs",
+ "embedded-hal 1.0.0",
  "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",

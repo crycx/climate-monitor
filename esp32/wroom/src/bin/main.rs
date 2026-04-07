@@ -19,12 +19,7 @@ use embassy_net::{
 };
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
-use esp_hal::{
-    clock::CpuClock,
-    delay::Delay,
-    gpio::{DriveMode, Flex, OutputConfig, Pull},
-    timer::timg::TimerGroup,
-};
+use esp_hal::{clock::CpuClock, delay::Delay, timer::timg::TimerGroup};
 use esp_rtos as _;
 use log_utils::set_time_sync_from_unix;
 use network::{net_task, verify_dns};
@@ -34,6 +29,8 @@ use wifi::connect_to_wifi;
 use static_cell::StaticCell;
 
 mod log_utils;
+mod body;
+mod dht22;
 mod network;
 mod post_readings;
 mod server_time_response;
@@ -120,16 +117,7 @@ async fn main(spawner: Spawner) {
         esp_hal::system::software_reset();
     }
 
-    let mut dht22_pin = Flex::new(peripherals.GPIO4);
-    dht22_pin.apply_output_config(
-        &OutputConfig::default()
-            .with_drive_mode(DriveMode::OpenDrain)
-            .with_pull(Pull::None),
-    );
-    dht22_pin.set_output_enable(true);
-    dht22_pin.set_input_enable(true);
-    dht22_pin.set_high();
-
+    let dht22_pin = dht22::init_dht22_pin(peripherals.GPIO4);
     let mut dht22 = Dht22::new(dht22_pin, Delay::new());
     let mut consecutive_post_errors: u8 = 0;
     let mut last_post_error: Option<alloc::string::String> = None;
@@ -147,7 +135,7 @@ async fn main(spawner: Spawner) {
             );
         }
 
-        match dht22.read() {
+        match dht22::read(&mut dht22) {
             Ok(sensor_reading) => {
                 logln!(
                     "DHT22 Sensor - Temperature: {} °C, humidity: {} %",
@@ -155,16 +143,22 @@ async fn main(spawner: Spawner) {
                     sensor_reading.humidity
                 );
                 let post_error_str: Option<alloc::string::String> = None;
+                let values = [
+                    body::SensorValue {
+                        sensor_type: "temperature",
+                        value: sensor_reading.temperature,
+                        unit: "C",
+                    },
+                    body::SensorValue {
+                        sensor_type: "humidity",
+                        value: sensor_reading.humidity,
+                        unit: "%",
+                    },
+                ];
+                let body = body::build_body(&values);
                 let (post_ok, server_unix_sec, post_error) = match embassy_time::with_timeout(
                     Duration::from_secs(POST_TOTAL_TIMEOUT_SECS),
-                    {
-                        let body = alloc::format!(
-                            r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%"}}]"#,
-                            sensor_reading.temperature,
-                            sensor_reading.humidity
-                        );
-                        post_readings(stack, tcp_state, body.as_bytes())
-                    },
+                    post_readings(stack, tcp_state, body.as_bytes()),
                 )
                 .await
                 {
