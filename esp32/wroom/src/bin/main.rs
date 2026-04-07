@@ -157,12 +157,14 @@ async fn main(spawner: Spawner) {
                 let post_error_str: Option<alloc::string::String> = None;
                 let (post_ok, server_unix_sec, post_error) = match embassy_time::with_timeout(
                     Duration::from_secs(POST_TOTAL_TIMEOUT_SECS),
-                    post_readings(
-                        stack,
-                        tcp_state,
-                        sensor_reading.temperature,
-                        sensor_reading.humidity,
-                    ),
+                    {
+                        let body = alloc::format!(
+                            r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%"}}]"#,
+                            sensor_reading.temperature,
+                            sensor_reading.humidity
+                        );
+                        post_readings(stack, tcp_state, body.as_bytes())
+                    },
                 )
                 .await
                 {

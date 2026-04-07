@@ -23,8 +23,7 @@ fn fail(msg: alloc::string::String) -> PostResult {
 pub async fn post_readings(
     stack: &'static Stack<'static>,
     tcp_state: &'static TcpClientState<1, 4096, 4096>,
-    temp: f32,
-    hum: f32,
+    body: &[u8],
 ) -> PostResult {
     let tcp_client = TcpClient::new(*stack, tcp_state);
     let dns = DnsSocket::new(*stack);
@@ -36,10 +35,6 @@ pub async fn post_readings(
 
     let mut http = HttpClient::new_with_tls(&tcp_client, &dns, tls);
 
-    let body = alloc::format!(
-        r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%"}}]"#,
-        temp, hum
-    );
     let mut rx_buf = [0u8; 512];
 
     let request = match embassy_time::with_timeout(
@@ -64,7 +59,7 @@ pub async fn post_readings(
     let mut builder = request
         .content_type(ContentType::ApplicationJson)
         .headers(&headers)
-        .body(body.as_bytes());
+        .body(body);
 
     let response = match embassy_time::with_timeout(
         Duration::from_secs(HTTP_SEND_TIMEOUT_SECS),
