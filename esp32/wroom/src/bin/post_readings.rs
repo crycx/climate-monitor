@@ -13,12 +13,19 @@ use reqwless::{
 use crate::server_time_response::extract_server_unix_from_headers;
 use crate::{API_KEY, HTTP_CONNECT_TIMEOUT_SECS, HTTP_SEND_TIMEOUT_SECS, READINGS_URL};
 
+type PostResult = (bool, Option<u64>, Option<alloc::string::String>);
+
+fn fail(msg: alloc::string::String) -> PostResult {
+    crate::logln!("{}", msg);
+    (false, None, Some(msg))
+}
+
 pub async fn post_readings(
     stack: &'static Stack<'static>,
     tcp_state: &'static TcpClientState<1, 4096, 4096>,
     temp: f32,
     hum: f32,
-) -> (bool, Option<u64>, Option<alloc::string::String>) {
+) -> PostResult {
     let tcp_client = TcpClient::new(*stack, tcp_state);
     let dns = DnsSocket::new(*stack);
 
@@ -35,56 +42,51 @@ pub async fn post_readings(
     );
     let mut rx_buf = [0u8; 512];
 
-    match embassy_time::with_timeout(
+    let request = match embassy_time::with_timeout(
         Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS),
         http.request(Method::POST, READINGS_URL),
     )
     .await
     {
         Err(_) => {
-            let msg = alloc::format!("HTTP connect timeout after {}s", HTTP_CONNECT_TIMEOUT_SECS);
-            crate::logln!("{}", msg);
-            (false, None, Some(msg))
+            return fail(alloc::format!(
+                "HTTP connect timeout after {}s",
+                HTTP_CONNECT_TIMEOUT_SECS
+            ));
         }
-        Ok(request) => {
-            let request = match request {
-                Ok(request) => request,
-                Err(error) => {
-                    let msg = alloc::format!("HTTP connect error: {:?}", error);
-                    crate::logln!("{}", msg);
-                    return (false, None, Some(msg));
-                }
-            };
+        Ok(Err(error)) => {
+            return fail(alloc::format!("HTTP connect error: {:?}", error));
+        }
+        Ok(Ok(request)) => request,
+    };
 
-            let headers = [("X-API-Key", API_KEY)];
-            let mut builder = request
-                .content_type(ContentType::ApplicationJson)
-                .headers(&headers)
-                .body(body.as_bytes());
-            match embassy_time::with_timeout(
-                Duration::from_secs(HTTP_SEND_TIMEOUT_SECS),
-                builder.send(&mut rx_buf),
-            )
-            .await
-            {
-                Err(_) => {
-                    let msg = alloc::format!("POST send timeout after {}s", HTTP_SEND_TIMEOUT_SECS);
-                    crate::logln!("{}", msg);
-                    (false, None, Some(msg))
-                }
-                Ok(response) => match response {
-                    Ok(response) => {
-                        let sec = extract_server_unix_from_headers(response.headers());
-                        crate::logln!("POST -> HTTP {}", response.status.0);
-                        (true, sec, None)
-                    }
-                    Err(error) => {
-                        let msg = alloc::format!("POST error: {:?}", error);
-                        crate::logln!("{}", msg);
-                        (false, None, Some(msg))
-                    }
-                },
-            }
+    let headers = [("X-API-Key", API_KEY)];
+    let mut builder = request
+        .content_type(ContentType::ApplicationJson)
+        .headers(&headers)
+        .body(body.as_bytes());
+
+    let response = match embassy_time::with_timeout(
+        Duration::from_secs(HTTP_SEND_TIMEOUT_SECS),
+        builder.send(&mut rx_buf),
+    )
+    .await
+    {
+        Err(_) => {
+            return fail(alloc::format!(
+                "POST send timeout after {}s",
+                HTTP_SEND_TIMEOUT_SECS
+            ));
         }
+        Ok(response) => response,
+    };
+
+    match response {
+        Ok(response) => {
+            let sec = extract_server_unix_from_headers(response.headers());
+            crate::logln!("POST -> HTTP {}", response.status.0);
+            (true, sec, None)
+        }
+        Err(error) => fail(alloc::format!("POST error: {:?}", error)),
     }
 }
