@@ -189,7 +189,7 @@
 
 .dash-readings {
 	display: grid;
-	grid-template-columns: 1fr 1fr;
+	grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 	gap: 0.75rem;
 }
 
@@ -447,6 +447,14 @@
 	.range-filter {
 		min-width: 0;
 		width: 100%;
+	}
+
+	.layout-toggle {
+		width: 100%;
+	}
+
+	.layout-toggle mat-button-toggle {
+		flex: 1;
 	}
 
 	.auto-refresh-toggle {
