@@ -9,11 +9,8 @@ version      = "0.1.0"
 name = "wroom"
 path = "./src/bin/main.rs"
 
-[[bin]]
-name = "provision"
-path = "./src/bin/provision.rs"
-
 [features]
+default = ["wifi"]
 wifi = [
     "dep:esp-radio",
     "dep:esp-rtos",
@@ -21,6 +18,13 @@ wifi = [
     "dep:embassy-executor",
     "dep:embassy-net",
     "dep:reqwless",
+    "dep:esp-wifi-caddy",
+    "dep:wifi-caddy",
+    "dep:wifi-caddy-proc",
+    "dep:enumset",
+    "dep:serde",
+    "dep:serde-json-core",
+    "dep:der",
 ]
 defmt = []
 # Use plain HTTP instead of HTTPS (for local/development testing).
@@ -33,7 +37,6 @@ embedded-dht-rs = { version = "0.5.0", features = ["dht22"] }
 # Keep esp-backtrace/esp-println aligned with esp-hal 1.x.
 esp-backtrace = { version = "0.18.1", features = [
     "esp32c3",
-    "panic-handler",
     "println",
 ] }
 
@@ -54,13 +57,13 @@ embassy-sync      = "0.7"
 embedded-io-async = { version = "0.6", optional = true }
 static_cell       = { version = "2" }
 reqwless          = { version = "0.14", optional = true, features = ["alloc"] }
-esp-wifi-caddy = { version = "0.1.0", features = ["nightly", "log"] }
-wifi-caddy = "0.1.0"
-wifi-caddy-proc = "0.1.0"
-enumset = { version = "1.1", default-features = false }
-serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
-serde-json-core = "0.6"
-der = { version = "0.8", features = ["heapless", "derive"] }
+esp-wifi-caddy = { version = "0.1.0", optional = true, features = ["nightly", "log"] }
+wifi-caddy = { version = "0.1.0", optional = true }
+wifi-caddy-proc = { version = "0.1.0", optional = true }
+enumset = { version = "1.1", default-features = false, optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"], optional = true }
+serde-json-core = { version = "0.6", optional = true }
+der = { version = "0.8", features = ["heapless", "derive"], optional = true }
 
 
 [profile.dev]
@@ -81,3 +84,4 @@ overflow-checks  = false
 esp-wifi-caddy = { path = "vendor/esp-wifi-caddy" }
 wifi-caddy = { path = "vendor/wifi-caddy" }
 wifi-caddy-proc = { path = "vendor/wifi-caddy-proc" }
+esp-radio = { path = "vendor/esp-radio" }

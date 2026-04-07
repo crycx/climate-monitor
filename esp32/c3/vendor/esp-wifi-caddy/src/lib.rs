@@ -123,6 +123,11 @@ static WIFI_COMMAND_CHANNEL: WifiCommandChannel = WifiCommandChannel::new();
 #[cfg(feature = "config")]
 static SCAN_RESULTS_JSON: critical_section::Mutex<RefCell<Option<String>>> =
     critical_section::Mutex::new(RefCell::new(None));
+/// Flat newline-separated list of SSIDs seen in the last scan.
+/// `None` = no scan done yet; `Some("")` = scan done, nothing found.
+#[cfg(feature = "config")]
+static SCAN_SSIDS_FLAT: critical_section::Mutex<RefCell<Option<String>>> =
+    critical_section::Mutex::new(RefCell::new(None));
 #[cfg(feature = "config")]
 static PORTAL_LOG_TEXT: critical_section::Mutex<RefCell<Option<String>>> =
     critical_section::Mutex::new(RefCell::new(None));
@@ -171,8 +176,20 @@ fn store_scan_results(networks: &[AccessPointInfo]) {
     }
     body.push_str("]}");
 
+    let mut flat = String::new();
+    for network in networks.iter().take(12) {
+        if network.ssid.is_empty() {
+            continue;
+        }
+        if !flat.is_empty() {
+            flat.push('\n');
+        }
+        flat.push_str(network.ssid.as_str());
+    }
+
     critical_section::with(|cs| {
         *SCAN_RESULTS_JSON.borrow_ref_mut(cs) = Some(body);
+        *SCAN_SSIDS_FLAT.borrow_ref_mut(cs) = Some(flat);
     });
 }
 
@@ -180,7 +197,48 @@ fn store_scan_results(networks: &[AccessPointInfo]) {
 fn clear_scan_results() {
     critical_section::with(|cs| {
         *SCAN_RESULTS_JSON.borrow_ref_mut(cs) = Some(String::from("{\"networks\":[]}"));
+        *SCAN_SSIDS_FLAT.borrow_ref_mut(cs) = Some(String::new());
     });
+}
+
+/// Returns `true` if the given SSID appeared in the most recent WiFi scan.
+///
+/// Requires at least one scan to have been completed (AP mode must have been
+/// active at some point so that [`refresh_scan_results`] could run).
+/// Returns `false` for an empty SSID or if no scan has been done yet.
+#[cfg(feature = "config")]
+pub fn scan_ssid_visible(ssid: &str) -> bool {
+    if ssid.is_empty() {
+        return false;
+    }
+    critical_section::with(|cs| {
+        SCAN_SSIDS_FLAT
+            .borrow_ref(cs)
+            .as_deref()
+            .map(|flat| flat.lines().any(|line| line == ssid))
+            .unwrap_or(false)
+    })
+}
+
+/// Returns `true` once the first WiFi scan has completed.
+///
+/// Use this to wait for scan results to be available before calling
+/// [`scan_ssid_visible`].
+#[cfg(feature = "config")]
+pub fn scan_complete() -> bool {
+    critical_section::with(|cs| SCAN_SSIDS_FLAT.borrow_ref(cs).is_some())
+}
+
+#[cfg(not(feature = "config"))]
+/// No-op stub when config/scan support is disabled.
+pub fn scan_ssid_visible(_ssid: &str) -> bool {
+    false
+}
+
+#[cfg(not(feature = "config"))]
+/// Always returns `false` when config/scan support is disabled.
+pub fn scan_complete() -> bool {
+    false
 }
 
 #[cfg(feature = "config")]
@@ -474,16 +532,20 @@ impl WifiRunner {
         if matches!(config, ModeConfig::None) {
             return;
         }
-        if !matches!(self.controller.is_started(), Ok(true)) {
-            debug!("wifi: ensure_wifi_started_with_config: configuring wifi");
-            self.apply_config(config);
-            debug!("wifi: ensure_wifi_started_with_config: starting wifi");
-            self.controller.start_async().await.unwrap();
-            debug!("wifi: ensure_wifi_started_with_config: started wifi!");
-        } else {
-            debug!("wifi: ensure_wifi_started_with_config: update wifi config");
-            self.apply_config(config);
+        if matches!(self.controller.is_started(), Ok(true)) {
+            // Stop WiFi before reconfiguring — esp-radio does not support
+            // live mode transitions (e.g. Client → ApSta) and will panic with
+            // an unreachable!() if we call set_config while running.
+            debug!("wifi: ensure_wifi_started_with_config: stopping wifi for reconfigure");
+            if let Err(e) = self.controller.stop_async().await {
+                warn!("wifi: ensure_wifi_started_with_config: stop failed: {:?}", e);
+            }
         }
+        debug!("wifi: ensure_wifi_started_with_config: configuring wifi");
+        self.apply_config(config);
+        debug!("wifi: ensure_wifi_started_with_config: starting wifi");
+        self.controller.start_async().await.unwrap();
+        debug!("wifi: ensure_wifi_started_with_config: started wifi!");
     }
 
     async fn try_connect_sta(&mut self) {

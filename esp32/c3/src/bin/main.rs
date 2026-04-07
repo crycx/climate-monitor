@@ -8,6 +8,21 @@
     holding buffers for the duration of a data transfer."
 )]
 
+/// Panic handler: prindib vea consolesse ja vilgub GPIO8 LED-i kiiresti (100 ms).
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    esp_println::println!("\n\n*** PANIC ***\n{}", info);
+
+    // Steal peripherals — normaalne omandus puudub paanika ajal.
+    let p = unsafe { esp_hal::peripherals::Peripherals::steal() };
+    let mut led = esp_hal::gpio::Output::new(p.GPIO8, esp_hal::gpio::Level::High, esp_hal::gpio::OutputConfig::default());
+    let delay = esp_hal::delay::Delay::new();
+    loop {
+        led.toggle();
+        delay.delay_millis(100);
+    }
+}
+
 #[cfg(feature = "wifi")]
 extern crate alloc;
 
@@ -21,8 +36,10 @@ use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
     delay::Delay,
-    gpio::{DriveMode, Flex, Input, InputConfig, Level, OutputConfig, Pull},
+    gpio::{DriveMode, Flex, OutputConfig, Pull},
 };
+#[cfg(feature = "wifi")]
+use esp_hal::gpio::{Input, InputConfig, Level, Output};
 
 // ── WiFi-only imports ────────────────────────────────────────────────────────
 #[cfg(feature = "wifi")]
@@ -55,7 +72,7 @@ use wifi_caddy_proc::WifiCaddyConfig;
 // This creates a default app-descriptor required by the ESP-IDF bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// ── Flash-backed runtime config (shared with provisioning binary) ────────────
+// ── Flash-backed runtime config ──────────────────────────────────────────────
 #[cfg(feature = "wifi")]
 #[derive(Clone, Debug, Default, WifiCaddyConfig)]
 #[config_server]
@@ -268,6 +285,30 @@ pub struct AppConfig {
     #[config_store(env_default = "API_KEY")]
     #[config_form(fieldset = "Backend", input_type = "text", help = "Device API key")]
     api_key: String,
+
+    #[config_store(env_default = "WIFI_SSID_2", notify = "Wifi")]
+    #[config_form(fieldset = "WiFi slot 2", label = "SSID", help = "Optional second network name")]
+    wifi_ssid_2: String,
+
+    #[config_store(env_default = "WIFI_PASSWORD_2", notify = "Wifi")]
+    #[config_form(fieldset = "WiFi slot 2", label = "Password", input_type = "password", help = "Optional second network password")]
+    wifi_password_2: String,
+
+    #[config_store(env_default = "WIFI_SSID_3", notify = "Wifi")]
+    #[config_form(fieldset = "WiFi slot 3", label = "SSID", help = "Optional third network name")]
+    wifi_ssid_3: String,
+
+    #[config_store(env_default = "WIFI_PASSWORD_3", notify = "Wifi")]
+    #[config_form(fieldset = "WiFi slot 3", label = "Password", input_type = "password", help = "Optional third network password")]
+    wifi_password_3: String,
+
+    #[config_store(env_default = "TEMP_OFFSET")]
+    #[config_form(fieldset = "Calibration", label = "Temperature offset (°C)", help = "Added to raw reading. Positive = suuremaks, negatiivne = väiksemaks. Näiteks -1.7")]
+    temp_offset: String,
+
+    #[config_store(env_default = "HUM_OFFSET")]
+    #[config_form(fieldset = "Calibration", label = "Humidity offset (%)", help = "Added to raw reading. Positive = suuremaks, negatiivne = väiksemaks. Näiteks -7.0")]
+    hum_offset: String,
 }
 
 // ── Static storage for embassy-net (must be 'static) ────────────────────────
@@ -279,6 +320,8 @@ static TCP_STATE: StaticCell<embassy_net::tcp::client::TcpClientState<2, 4096, 4
 static BUTTON_PRESSED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "wifi")]
 static AP_ACTIVE: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "wifi")]
+static SENDING: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "wifi")]
 fn log_runtime_line(line: &str) {
@@ -300,7 +343,7 @@ fn main() -> ! {
 
     let delay = Delay::new();
 
-    let mut dht22_pin = Flex::new(peripherals.GPIO10);
+    let mut dht22_pin = Flex::new(peripherals.GPIO5);
     dht22_pin.apply_output_config(
         &OutputConfig::default()
             .with_drive_mode(DriveMode::OpenDrain)
@@ -316,9 +359,11 @@ fn main() -> ! {
         delay.delay_millis(10000);
         match dht22.read() {
             Ok(r) => {
+                let temp = r.temperature - 1.7;
+                let hum = (r.humidity - 7.0).max(0.0);
                 esp_println::println!(
-                    "DHT22 - Temperature: {} °C, Humidity: {} %",
-                    r.temperature, r.humidity
+                    "DHT22 - Temperature: {:.1} °C, Humidity: {:.1} %",
+                    temp, hum
                 );
             }
             Err(e) => {
@@ -331,6 +376,28 @@ fn main() -> ! {
 // ═══════════════════════════════════════════════════════════════════════════
 // WIFI mode — async embassy + raw TCP HTTP POST
 // ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(feature = "wifi")]
+#[embassy_executor::task]
+async fn led_task(mut led: Output<'static>) {
+    loop {
+        if AP_ACTIVE.load(Ordering::Relaxed) {
+            // AP portal aktiivne: vilgub aeglaselt 500 ms (aktiiv-LOW: low=sees)
+            led.set_low();
+            Timer::after(Duration::from_millis(500)).await;
+            led.set_high();
+            Timer::after(Duration::from_millis(500)).await;
+        } else if SENDING.load(Ordering::Relaxed) {
+            // Andmete saatmine: LED püsivalt sees
+            led.set_low();
+            Timer::after(Duration::from_millis(50)).await;
+        } else {
+            // Ooteseisund: LED väljas
+            led.set_high();
+            Timer::after(Duration::from_millis(100)).await;
+        }
+    }
+}
 
 #[cfg(feature = "wifi")]
 #[embassy_executor::task]
@@ -379,6 +446,31 @@ async fn button_task(wifi_sender: esp_wifi_caddy::WifiCommandSender) {
     }
 }
 
+/// Selects the best WiFi credential to use.
+///
+/// If scan results are available, prefers the first slot whose SSID is
+/// currently visible over-the-air (strongest known network wins in slot order).
+/// Falls back to the first non-empty slot when no scan data is present.
+#[cfg(feature = "wifi")]
+fn find_best_ssid(cfg: &AppConfig) -> Option<(String, String)> {
+    let slots = [
+        (cfg.wifi_ssid.as_str(), cfg.wifi_password.as_str()),
+        (cfg.wifi_ssid_2.as_str(), cfg.wifi_password_2.as_str()),
+        (cfg.wifi_ssid_3.as_str(), cfg.wifi_password_3.as_str()),
+    ];
+    // Prefer a network that is visible in the latest scan results.
+    for (ssid, pass) in slots {
+        if !ssid.is_empty() && esp_wifi_caddy::scan_ssid_visible(ssid) {
+            return Some((String::from(ssid), String::from(pass)));
+        }
+    }
+    // Fall back to the first configured slot.
+    slots
+        .into_iter()
+        .find(|(ssid, _)| !ssid.is_empty())
+        .map(|(ssid, pass)| (String::from(ssid), String::from(pass)))
+}
+
 #[cfg(feature = "wifi")]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
@@ -397,6 +489,10 @@ async fn main(spawner: Spawner) {
     let btn = Input::new(peripherals.GPIO9, InputConfig::default().with_pull(Pull::Up));
     spawner.spawn(gpio_poll_task(btn)).unwrap();
 
+    // GPIO8 = built-in LED, vilgub kui AP portal on aktiivne.
+    let led = Output::new(peripherals.GPIO8, Level::High, OutputConfig::default());
+    spawner.spawn(led_task(led)).unwrap();
+
     let flash = FlashStorage::new(peripherals.FLASH);
     let (wifi_stacks, wifi_sender, config_handle, config_rx) =
         esp_wifi_caddy::wifi_init!(AppConfig, spawner, peripherals.WIFI, flash, "config")
@@ -407,17 +503,16 @@ async fn main(spawner: Spawner) {
     let stack: &'static Stack<'static> = NET_STACK.init(wifi_stacks.sta);
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
 
-    // Trigger station mode from persisted settings.
+    // Startup: connect directly to the first configured WiFi network.
     {
-        let cfg = config_handle.config().lock().await;
-        if !cfg.wifi_ssid.is_empty() {
-            log_runtime_line("Config found: starting STA mode");
-            wifi_sender
-                .send(WifiCaddyCommand::StaUp(
-                    cfg.wifi_ssid.clone(),
-                    cfg.wifi_password.clone(),
-                ))
-                .await;
+        let best = {
+            let cfg = config_handle.config().lock().await;
+            find_best_ssid(&cfg)
+        };
+
+        if let Some((ssid, pass)) = best {
+            log_runtime_line(format!("Config found: connecting to {}", ssid).as_str());
+            wifi_sender.send(WifiCaddyCommand::StaUp(ssid, pass)).await;
         } else {
             log_runtime_line("No WiFi config: starting AP portal at 192.168.2.1");
             AP_ACTIVE.store(true, Ordering::Relaxed);
@@ -427,8 +522,8 @@ async fn main(spawner: Spawner) {
         }
     }
 
-    // DHT22 on GPIO10 (open-drain, pull-up).
-    let mut dht22_pin = Flex::new(peripherals.GPIO10);
+    // DHT22 on GPIO5 (open-drain, pull-up).
+    let mut dht22_pin = Flex::new(peripherals.GPIO5);
     dht22_pin.apply_output_config(
         &OutputConfig::default()
             .with_drive_mode(DriveMode::OpenDrain)
@@ -456,15 +551,15 @@ async fn main(spawner: Spawner) {
         net_was_up = net_is_up_now;
 
         if let Ok(_changed) = config_rx.try_receive() {
-            let cfg = config_handle.config().lock().await;
-            if !cfg.wifi_ssid.is_empty() {
-                log_runtime_line("Config changed: reconnecting STA");
-                wifi_sender
-                    .send(WifiCaddyCommand::StaUp(
-                        cfg.wifi_ssid.clone(),
-                        cfg.wifi_password.clone(),
-                    ))
-                    .await;
+            // AP is still up (user was in the portal), so scan results are fresh.
+            // Pick the best visible network from all configured slots.
+            let best = {
+                let cfg = config_handle.config().lock().await;
+                find_best_ssid(&cfg)
+            };
+            if let Some((ssid, pass)) = best {
+                log_runtime_line(format!("Config changed: connecting to {}", ssid).as_str());
+                wifi_sender.send(WifiCaddyCommand::StaUp(ssid, pass)).await;
 
                 if AP_ACTIVE.load(Ordering::Relaxed) {
                     AP_ACTIVE.store(false, Ordering::Relaxed);
@@ -475,33 +570,48 @@ async fn main(spawner: Spawner) {
 
         match dht22.read() {
             Ok(r) => {
-                log_runtime_line(format!("DHT22: {:.1} C  {:.1} %", r.temperature, r.humidity).as_str());
-                if stack.is_config_up() {
+                let (temp_offset, hum_offset, api_url, api_key) = {
                     let cfg = config_handle.config().lock().await;
+                    let t: f32 = cfg.temp_offset.parse().unwrap_or(-1.7);
+                    let h: f32 = cfg.hum_offset.parse().unwrap_or(-7.0);
+                    (t, h, cfg.api_url.clone(), cfg.api_key.clone())
+                };
+                let temp = r.temperature + temp_offset;
+                let hum = (r.humidity + hum_offset).max(0.0);
+                log_runtime_line(format!("DHT22: {:.1} C  {:.1} %", temp, hum).as_str());
+                if stack.is_config_up() {
                     post_readings_with_retry(
                         stack,
                         tcp_state,
-                        cfg.api_url.as_str(),
-                        cfg.api_key.as_str(),
-                        r.temperature,
-                        r.humidity,
+                        api_url.as_str(),
+                        api_key.as_str(),
+                        temp,
+                        hum,
                     )
                     .await;
                 } else {
                     log_runtime_line("Network down, waiting for reconnect...");
-                    stack.wait_config_up().await;
-                    log_runtime_line("Reconnected, waiting 5 s before sending...");
-                    Timer::after(Duration::from_secs(5)).await;
-                    let cfg = config_handle.config().lock().await;
-                    post_readings_with_retry(
-                        stack,
-                        tcp_state,
-                        cfg.api_url.as_str(),
-                        cfg.api_key.as_str(),
-                        r.temperature,
-                        r.humidity,
+                    let reconnected = embassy_time::with_timeout(
+                        Duration::from_secs(60),
+                        stack.wait_config_up(),
                     )
-                    .await;
+                    .await
+                    .is_ok();
+                    if reconnected {
+                        log_runtime_line("Reconnected, waiting 5 s before sending...");
+                        Timer::after(Duration::from_secs(5)).await;
+                        post_readings_with_retry(
+                            stack,
+                            tcp_state,
+                            api_url.as_str(),
+                            api_key.as_str(),
+                            temp,
+                            hum,
+                        )
+                        .await;
+                    } else {
+                        log_runtime_line("Reconnect timed out after 60 s, will retry next cycle.");
+                    }
                 }
             }
             Err(e) => {
@@ -521,15 +631,18 @@ async fn post_readings_with_retry(
     temp: f32,
     hum: f32,
 ) {
+    SENDING.store(true, Ordering::Relaxed);
     for attempt in 1..=3u8 {
         if attempt > 1 {
             log_runtime_line(format!("Retry {}/3 in 10 s...", attempt).as_str());
             Timer::after(Duration::from_secs(10)).await;
         }
         if post_readings(stack, tcp_state, api_url, api_key, temp, hum).await {
+            SENDING.store(false, Ordering::Relaxed);
             return;
         }
     }
+    SENDING.store(false, Ordering::Relaxed);
     log_runtime_line("All 3 POST attempts failed, will retry next cycle.");
 }
 
