@@ -20,6 +20,7 @@ use edge_http::io::server::{Handler, Server};
 use edge_nal::TcpBind;
 use edge_nal_embassy::{Tcp, TcpBuffers};
 use embassy_executor::Spawner;
+use embassy_futures::select::{select, Either};
 use embassy_net::Stack;
 
 include!(concat!(env!("OUT_DIR"), "/server_tuning.rs"));
@@ -39,31 +40,59 @@ pub async fn serve_loop<H: Handler>(stack: Stack<'static>, handler: H) {
         "serve_loop: KEEPALIVE_TIMEOUT_MS = {}",
         KEEPALIVE_TIMEOUT_MS
     );
-    let tcp_buffers = TcpBuffers::<{ HANDLER_TASKS }, { TCP_BUF_SIZE }, { TCP_BUF_SIZE }>::new();
 
-    let tcp = Tcp::new(stack, &tcp_buffers);
-    let acceptor = loop {
-        match tcp
-            .bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80)))
-            .await
-        {
-            Ok(a) => {
-                info!("http: listening on 0.0.0.0:80");
-                break a;
+    loop {
+        // Wait for the AP network interface to be ready before binding.
+        // Without this, TCP bind succeeds structurally but packets are never delivered.
+        if !stack.is_link_up() {
+            info!("http: waiting for AP link...");
+            stack.wait_link_up().await;
+            info!("http: AP link is up");
+        }
+
+        let tcp_buffers =
+            TcpBuffers::<{ HANDLER_TASKS }, { TCP_BUF_SIZE }, { TCP_BUF_SIZE }>::new();
+        let tcp = Tcp::new(stack, &tcp_buffers);
+        let acceptor = loop {
+            match tcp
+                .bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80)))
+                .await
+            {
+                Ok(a) => {
+                    info!("http: listening on 0.0.0.0:80");
+                    break a;
+                }
+                Err(_e) => {
+                    error!("http: TCP bind error on port 80, retrying in 200 ms");
+                    embassy_time::Timer::after(embassy_time::Duration::from_millis(200)).await;
+                }
             }
-            Err(_e) => {
-                error!("http: TCP bind error on port 80, retrying in 200 ms");
-                embassy_time::Timer::after(embassy_time::Duration::from_millis(200)).await;
+        };
+
+        let mut server = Server::<{ HANDLER_TASKS }, { HTTP_BUF_SIZE }>::new();
+        match select(
+            server.run(Some(KEEPALIVE_TIMEOUT_MS), acceptor, &handler),
+            stack.wait_link_down(),
+        )
+        .await
+        {
+            Either::First(result) => {
+                if let Err(e) = result {
+                    error!("http: server error: {}", crate::fmt::DisplayFmt(&e));
+                }
+                // server.run() returned — exit serve_loop so run_http_config_loop
+                // can restart with a fresh handler.
+                info!("http: server exited, serve_loop returning");
+                return;
+            }
+            Either::Second(_) => {
+                // AP link went down (WiFi restart, APDown, or transient bounce).
+                // Drop acceptor + buffers, wait for link-up, then rebind.
+                info!("http: AP link went down, rebinding after link-up...");
+                embassy_time::Timer::after(embassy_time::Duration::from_millis(100)).await;
+                // loop back → wait_link_up → fresh bind
             }
         }
-    };
-
-    let mut server = Server::<{ HANDLER_TASKS }, { HTTP_BUF_SIZE }>::new();
-    if let Err(e) = server
-        .run(Some(KEEPALIVE_TIMEOUT_MS), acceptor, handler)
-        .await
-    {
-        error!("http: server error: {}", crate::fmt::DisplayFmt(&e));
     }
 }
 

@@ -61,6 +61,7 @@ embassy-net = { version = "0.8.0", optional = true, features = [
     "udp",
     "dns",
 ] }
+embassy-futures = { version = "0.1" }
 embassy-time = { version = "0.5.0", optional = true }
 embedded-io-async = { version = "0.7", optional = true }
 serde = { version = "1.0", optional = true, default-features = false, features = [

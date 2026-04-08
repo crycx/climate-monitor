@@ -6,6 +6,7 @@ use edge_dhcp::io::DEFAULT_SERVER_PORT;
 use edge_dhcp::server::{Server, ServerOptions};
 use edge_nal::UdpBind;
 use edge_nal_embassy::{Udp, UdpBuffers};
+use embassy_futures::select::{select, Either};
 use embassy_net::Stack;
 
 /// AP IP address (gateway and DNS for clients).
@@ -32,6 +33,14 @@ pub async fn run(stack: Stack<'static>) {
     info!("dhcp: start DHCP task");
 
     loop {
+        // Wait for the AP interface link before binding — the UDP socket needs
+        // a live interface to receive and send DHCP broadcasts.
+        if !stack.is_link_up() {
+            info!("dhcp: waiting for AP link...");
+            stack.wait_link_up().await;
+            info!("dhcp: AP link is up, starting DHCP server");
+        }
+
         let buffers = UdpBuffers::<1, 1500, 1500, 2>::new();
         let udp = Udp::new(stack, &buffers);
 
@@ -60,10 +69,15 @@ pub async fn run(stack: Stack<'static>) {
         server_options.dns = &dns;
 
         let mut buf = [0; 1500];
-        if let Err(_e) =
-            edge_dhcp::io::server::run(&mut server, &server_options, &mut socket, &mut buf).await
+        match select(
+            edge_dhcp::io::server::run(&mut server, &server_options, &mut socket, &mut buf),
+            stack.wait_link_down(),
+        )
+        .await
         {
-            error!("dhcp: server error, restarting in 1 s");
+            Either::First(Ok(())) => {}
+            Either::First(Err(_e)) => error!("dhcp: server error, restarting in 1 s"),
+            Either::Second(_) => info!("dhcp: AP link went down, restarting"),
         }
 
         // Brief pause before looping back to wait_link_up().

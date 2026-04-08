@@ -220,22 +220,27 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
         var passInput = document.createElement('input');
         passInput.type = 'password';
-        var origPass = originalPasswords[slot] || '';
-        passInput.placeholder = (!isNew && origPass) ? '(unchanged)' : '';
+        // Server always returns "" for passwords (security redaction), so we cannot
+        // distinguish "saved empty password" from "saved non-empty password" via origPass.
+        // For existing networks: show "(unchanged)" hint; never pre-check "No password".
+        passInput.placeholder = !isNew ? '(unchanged)' : '';
         passInput.style.cssText = 'flex:1;padding:5px 8px;font-size:13px;border:1px solid #ccc;border-radius:4px';
+        // Keep hidden form field in sync as user types (safety net alongside hookSave).
+        passInput.addEventListener('input', function () { setVal(passId(slot), passInput.value); });
 
         /* No-password checkbox */
         var noPassWrap = document.createElement('label');
         noPassWrap.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:13px;white-space:nowrap;flex-shrink:0;cursor:pointer';
         var noPassChk = document.createElement('input');
         noPassChk.type = 'checkbox';
-        // Open network = saved SSID but password was empty string
-        noPassChk.checked = !isNew && ssid && origPass === '';
+        // Never pre-check "No password": passwords are redacted in GET so we cannot know
+        // whether the saved password is empty or non-empty. User must check this explicitly
+        // for open (passwordless) networks.
+        noPassChk.checked = false;
         noPassChk.addEventListener('change', function () {
             passInput.disabled = noPassChk.checked;
-            if (noPassChk.checked) passInput.value = '';
+            if (noPassChk.checked) { passInput.value = ''; setVal(passId(slot), ''); }
         });
-        if (noPassChk.checked) passInput.disabled = true;
         noPassWrap.appendChild(noPassChk);
         noPassWrap.appendChild(document.createTextNode('No password'));
 
@@ -293,10 +298,11 @@ esp_bootloader_esp_idf::esp_app_desc!();
         addBtn.addEventListener('click', function () {
             for (var i = 1; i <= MAX_SLOTS; i++) {
                 if (!getVal(ssidId(i))) {
-                    // Remove "no networks" message
                     var empty = listEl.querySelector('p');
                     if (empty) listEl.removeChild(empty);
-                    listEl.appendChild(makeCard(i, '', true));
+                    var card = makeCard(i, '', true);
+                    listEl.appendChild(card);
+                    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                     var count = listEl.querySelectorAll('[data-wifi-slot]').length;
                     addBtn.style.display = count >= MAX_SLOTS ? 'none' : '';
                     break;
@@ -332,11 +338,6 @@ esp_bootloader_esp_idf::esp_app_desc!();
     function install() {
         if (document.getElementById('wifi-mgr')) return;
 
-        // Snapshot original passwords before hiding
-        for (var i = 1; i <= MAX_SLOTS; i++) {
-            originalPasswords[i] = getVal(passId(i));
-        }
-
         var fss = findFieldsets();
         var wifiFs = fss['WiFi'];
         if (!wifiFs) return;
@@ -345,17 +346,29 @@ esp_bootloader_esp_idf::esp_app_desc!();
         mgr.id = 'wifi-mgr';
         wifiFs.parentNode.insertBefore(mgr, wifiFs);
         hideWifiFieldsets(fss);
-        renderList();
         hookSave();
+    }
+
+    // Called after each config fetch-and-populate so the list reflects live values.
+    function refresh() {
+        for (var i = 1; i <= MAX_SLOTS; i++) {
+            originalPasswords[i] = getVal(passId(i));
+        }
+        if (listEl) renderList();
     }
 
     var origLoad = window.loadConfig_main;
     if (typeof origLoad === 'function') {
         window.loadConfig_main = function () {
-            return Promise.resolve(origLoad()).then(function (r) { install(); return r; });
+            return Promise.resolve(origLoad()).then(function (r) {
+                if (!document.getElementById('wifi-mgr')) install();
+                refresh();
+                return r;
+            });
         };
     }
-    window.addEventListener('load', install);
+    // Show empty skeleton immediately; refresh() fills it once fetch completes.
+    window.addEventListener('load', function () { install(); renderList && listEl && renderList(); });
 })();
 "#
 )]
@@ -409,11 +422,11 @@ pub struct AppConfig {
     wifi_password_5: String,
 
     #[config_store(env_default = "TEMP_OFFSET")]
-    #[config_form(fieldset = "Calibration", label = "Temperature offset (°C)", help = "Added to raw reading. Positive = suuremaks, negatiivne = väiksemaks. Näiteks -1.7")]
+    #[config_form(fieldset = "Calibration", label = "Temperature offset (°C)", help = "Added to raw reading. Positive = higher, negative = lower. For example, -1.7")]
     temp_offset: String,
 
     #[config_store(env_default = "HUM_OFFSET")]
-    #[config_form(fieldset = "Calibration", label = "Humidity offset (%)", help = "Added to raw reading. Positive = suuremaks, negatiivne = väiksemaks. Näiteks -7.0")]
+    #[config_form(fieldset = "Calibration", label = "Humidity offset (%)", help = "Added to raw reading. Positive = higher, negative = lower. For example, -7.0")]
     hum_offset: String,
 }
 
@@ -713,9 +726,71 @@ async fn main(spawner: Spawner) {
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
     let mut portal_mode = PortalMode::Off;
 
+    // ── Boot: multi-scan + retry connect ────────────────────────────────────
+    const BOOT_SCAN_ROUNDS: u32 = 3;
+    const BOOT_SCAN_WAIT_MS: u64 = 2500; // wait per ScanOnce for results
+    const BOOT_CONNECT_ATTEMPTS: u32 = 5;
+    const BOOT_CONNECT_TIMEOUT_SECS: u64 = 20; // per attempt
+
     {
         let cfg = config_handle.config().lock().await;
         if has_wifi_config(&cfg) {
+            // Bring WiFi hardware up via AP so we can scan.
+            wifi_sender.send(WifiCaddyCommand::APUp(AP_SSID_PREFIX.into())).await;
+
+            // Run multiple scans and accumulate the union of all found SSIDs.
+            let mut seen: alloc::collections::BTreeSet<String> = alloc::collections::BTreeSet::new();
+            for round in 1..=BOOT_SCAN_ROUNDS {
+                log_runtime_line(format!("Boot: scan {}/{}...", round, BOOT_SCAN_ROUNDS).as_str());
+                wifi_sender.send(WifiCaddyCommand::ScanOnce).await;
+                Timer::after(Duration::from_millis(BOOT_SCAN_WAIT_MS)).await;
+                if let Some(flat) = esp_wifi_caddy::scan_results_flat() {
+                    for ssid in flat.lines() {
+                        if !ssid.is_empty() {
+                            seen.insert(String::from(ssid));
+                        }
+                    }
+                }
+            }
+
+            // Store accumulated union so scan_ssid_visible() reflects all rounds.
+            let union_flat = seen.iter().enumerate().fold(
+                String::new(),
+                |mut acc, (i, s)| { if i > 0 { acc.push('\n'); } acc.push_str(s); acc },
+            );
+            esp_wifi_caddy::scan_set_results_flat(union_flat);
+
+            // Log all visible networks.
+            if seen.is_empty() {
+                log_runtime_line("Boot: no networks found in scan");
+            } else {
+                log_runtime_line("Boot: visible networks:");
+                for ssid in &seen {
+                    log_runtime_line(format!("Boot:   {}", ssid).as_str());
+                }
+            }
+
+            // Log visibility of each configured SSID slot.
+            let slots = [
+                cfg.wifi_ssid.as_str(),
+                cfg.wifi_ssid_2.as_str(),
+                cfg.wifi_ssid_3.as_str(),
+                cfg.wifi_ssid_4.as_str(),
+                cfg.wifi_ssid_5.as_str(),
+            ];
+            for ssid in slots {
+                if !ssid.is_empty() {
+                    log_runtime_line(
+                        format!(
+                            "Boot: config '{}' {}",
+                            ssid,
+                            if esp_wifi_caddy::scan_ssid_visible(ssid) { "[visible]" } else { "[not visible]" }
+                        ).as_str(),
+                    );
+                }
+            }
+
+            // Kick off first connection attempt.
             connect_best_configured_wifi(&wifi_sender, &cfg, "Boot: connecting to ").await;
         } else {
             wifi_sender.send(WifiCaddyCommand::StaDown).await;
@@ -730,23 +805,47 @@ async fn main(spawner: Spawner) {
     }
 
     if portal_mode == PortalMode::Off {
-        log_runtime_line("Boot: waiting up to 15 s for STA connection...");
-        let connected = embassy_time::with_timeout(Duration::from_secs(15), stack.wait_config_up())
+        let mut boot_connected = false;
+        for attempt in 1..=BOOT_CONNECT_ATTEMPTS {
+            log_runtime_line(
+                format!("Boot: waiting for WiFi... ({}/{})", attempt, BOOT_CONNECT_ATTEMPTS).as_str()
+            );
+            let ok = embassy_time::with_timeout(
+                Duration::from_secs(BOOT_CONNECT_TIMEOUT_SECS),
+                stack.wait_config_up(),
+            )
             .await
             .is_ok();
 
-        if connected {
+            if ok || stack.is_config_up() {
+                boot_connected = true;
+                break;
+            }
+
+            if attempt < BOOT_CONNECT_ATTEMPTS {
+                log_runtime_line(
+                    format!("Boot: attempt {}/{} failed, retrying...", attempt, BOOT_CONNECT_ATTEMPTS).as_str()
+                );
+                // Re-send StaUp so the runner triggers a fresh connect immediately.
+                let cfg = config_handle.config().lock().await;
+                connect_best_configured_wifi(&wifi_sender, &cfg, "Boot: retry connecting to ").await;
+            }
+        }
+
+        if boot_connected {
             log_runtime_line("WiFi connected during boot.");
             if let Some(cfg) = stack.config_v4() {
                 log_runtime_line(format!("Got IP: {:?}", cfg.address).as_str());
             }
+            // AP was opened for scanning — close it now that STA is up.
+            wifi_sender.send(WifiCaddyCommand::APDown).await;
         } else {
             wifi_sender.send(WifiCaddyCommand::StaDown).await;
             set_portal_mode(
                 &wifi_sender,
                 &mut portal_mode,
                 PortalMode::Recovery,
-                "Boot: STA connect timeout, starting AP portal at 192.168.4.1",
+                "Boot: WiFi connect failed after all attempts, starting AP portal at 192.168.4.1",
             )
             .await;
         }

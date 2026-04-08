@@ -149,3 +149,6 @@ default-features = false
 [dependencies.serde-json-core]
 version = "0.6"
 optional = true
+
+[dependencies.embassy-futures]
+version = "0.1"

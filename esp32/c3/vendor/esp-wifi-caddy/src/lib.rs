@@ -89,6 +89,9 @@ pub enum WifiCaddyCommand {
     StaUp(String, String),
     /// Disable STA by clearing credentials.
     StaDown,
+    /// Trigger a one-time WiFi scan immediately (WiFi must already be started).
+    /// Results become available via `scan_complete()` / `scan_ssid_visible()`.
+    ScanOnce,
 }
 
 #[cfg(feature = "defmt")]
@@ -102,6 +105,7 @@ impl defmt::Format for WifiCaddyCommand {
                 write!(f, "StaUp({}, {})", ssid.as_str(), pass.as_str())
             }
             WifiCaddyCommand::StaDown => write!(f, "StaDown"),
+            WifiCaddyCommand::ScanOnce => write!(f, "ScanOnce"),
         }
     }
 }
@@ -232,6 +236,22 @@ pub fn scan_complete() -> bool {
     critical_section::with(|cs| SCAN_SSIDS_FLAT.borrow_ref(cs).is_some())
 }
 
+/// Returns the flat newline-separated list of SSIDs from the last scan,
+/// or `None` if no scan has been done yet.
+#[cfg(feature = "config")]
+pub fn scan_results_flat() -> Option<String> {
+    critical_section::with(|cs| SCAN_SSIDS_FLAT.borrow_ref(cs).clone())
+}
+
+/// Overwrite the flat SSID list directly (e.g. to store an accumulated union
+/// from multiple boot scans), and mark scan as complete.
+#[cfg(feature = "config")]
+pub fn scan_set_results_flat(flat: String) {
+    critical_section::with(|cs| {
+        *SCAN_SSIDS_FLAT.borrow_ref_mut(cs) = Some(flat);
+    });
+}
+
 #[cfg(not(feature = "config"))]
 /// No-op stub when config/scan support is disabled.
 pub fn scan_ssid_visible(_ssid: &str) -> bool {
@@ -243,6 +263,16 @@ pub fn scan_ssid_visible(_ssid: &str) -> bool {
 pub fn scan_complete() -> bool {
     false
 }
+
+#[cfg(not(feature = "config"))]
+/// No-op stub when config/scan support is disabled.
+pub fn scan_results_flat() -> Option<String> {
+    None
+}
+
+#[cfg(not(feature = "config"))]
+/// No-op stub when config/scan support is disabled.
+pub fn scan_set_results_flat(_flat: String) {}
 
 #[cfg(feature = "config")]
 fn push_portal_log_line(line: &str) {
@@ -640,6 +670,32 @@ impl WifiRunner {
     #[cfg(not(feature = "config"))]
     async fn refresh_scan_results(&mut self) {}
 
+    /// One-shot scan: immediately scans and stores results regardless of `scan_refresh_enabled`.
+    /// WiFi must already be started (e.g. after `APUp` or `StaUp` was processed).
+    #[cfg(feature = "config")]
+    async fn do_scan_once(&mut self) {
+        if !matches!(self.controller.is_started(), Ok(true)) {
+            warn!("wifi: scan_once: WiFi not started, marking scan complete with empty results");
+            clear_scan_results();
+            return;
+        }
+        let config = ScanConfig::default().with_show_hidden(true).with_max(16);
+        match self.controller.scan_with_config_async(config).await {
+            Ok(results) => {
+                info!("wifi: scan_once: {} networks found", results.len());
+                store_scan_results(&results);
+            }
+            Err(e) => {
+                warn!("wifi: scan_once: failed: {:?}", e);
+                // Mark scan complete with empty results so callers don't wait forever.
+                clear_scan_results();
+            }
+        }
+    }
+
+    #[cfg(not(feature = "config"))]
+    async fn do_scan_once(&mut self) {}
+
     async fn handle_command(&mut self, cmd: WifiCaddyCommand) {
         match cmd {
             WifiCaddyCommand::APUp(prefix) => {
@@ -670,6 +726,10 @@ impl WifiRunner {
                 push_portal_log_line("sta: off");
                 self.ssid.clear();
                 self.pass.clear();
+            }
+            WifiCaddyCommand::ScanOnce => {
+                info!("wifi: connection task: ScanOnce command");
+                self.do_scan_once().await;
             }
         }
     }

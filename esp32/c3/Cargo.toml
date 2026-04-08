@@ -58,7 +58,7 @@ embedded-io-async = { version = "0.6", optional = true }
 static_cell       = { version = "2" }
 reqwless          = { version = "0.14", optional = true, features = ["alloc"] }
 esp-wifi-caddy = { version = "0.1.0", optional = true, features = ["nightly", "log"] }
-wifi-caddy = { version = "0.1.0", optional = true }
+wifi-caddy = { version = "0.1.0", optional = true, features = ["log"] }
 wifi-caddy-proc = { version = "0.1.0", optional = true }
 enumset = { version = "1.1", default-features = false, optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"], optional = true }
