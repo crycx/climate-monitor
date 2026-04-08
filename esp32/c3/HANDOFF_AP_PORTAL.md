@@ -1,7 +1,13 @@
-# AP Portal Debug Handoff (2026-04-08)
+# AP Portal Debug Handoff (2026-04-08, updated)
 
 ## Eesmärk
 Lahendada olukord, kus AP portal aadressil 192.168.4.1 avaneb korraks ja seejärel brauser näitab `ERR_CONNECTION_REFUSED`.
+
+## Viimati tuvastatud juurpõhjus (2026-04-08, v2)
+
+**Probleem:** Kui WiFi ühendus boot'il õnnestus, saadeti `APDown` → WiFi läks `Client` (STA-only) mode'i. Nupu vajutamisel saadeti `APUp` → mode muutus `Client→ApSta` (variant 1→2) → esp-radio nõuab stop/restart → HTTP server ei saadanud vastuseid mitu sekundit → brauser sai `ERR_CONNECTION_REFUSED`.
+
+**Lahendus:** AP ei lülitata enam välja pärast STA ühendumist bootis ega portali sulgemisel. WiFi jääb `ApSta` mode'i (in-place credentials update, ei stop+restart). HTTP server jookseb katkematult.
 
 ## Muudetud failid
 - `esp32/c3/src/bin/main.rs`

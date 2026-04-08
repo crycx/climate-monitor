@@ -837,7 +837,8 @@ async fn main(spawner: Spawner) {
             if let Some(cfg) = stack.config_v4() {
                 log_runtime_line(format!("Got IP: {:?}", cfg.address).as_str());
             }
-            // AP was opened for scanning — close it now that STA is up.
+            // Close AP after successful boot connect; manual portal open will
+            // re-enable AP on demand.
             wifi_sender.send(WifiCaddyCommand::APDown).await;
         } else {
             wifi_sender.send(WifiCaddyCommand::StaDown).await;
@@ -877,11 +878,13 @@ async fn main(spawner: Spawner) {
         if let Some(event) = take_button_event() {
             match event {
                 ButtonEvent::LongPress => {
+                    // Keep AP stable by dropping STA before entering manual portal.
+                    wifi_sender.send(WifiCaddyCommand::StaDown).await;
                     set_portal_mode(
                         &wifi_sender,
                         &mut portal_mode,
                         PortalMode::Manual,
-                        "Button: long press -> opening AP portal",
+                        "Button: long press -> AP portal opening: http://192.168.4.1/",
                     )
                     .await;
                 }
@@ -891,15 +894,27 @@ async fn main(spawner: Spawner) {
                             &wifi_sender,
                             &mut portal_mode,
                             PortalMode::Off,
-                            "Button: short press -> closing AP portal",
+                            "Button: short press -> AP portal closed, reconnecting WiFi",
                         )
                         .await;
+
+                        let cfg = config_handle.config().lock().await;
+                        if has_wifi_config(&cfg) {
+                            connect_best_configured_wifi(
+                                &wifi_sender,
+                                &cfg,
+                                "Button: reconnecting to ",
+                            )
+                            .await;
+                        }
                     } else {
+                        // Keep AP stable by dropping STA before entering manual portal.
+                        wifi_sender.send(WifiCaddyCommand::StaDown).await;
                         set_portal_mode(
                             &wifi_sender,
                             &mut portal_mode,
                             PortalMode::Manual,
-                            "Button: short press -> opening AP portal",
+                            "Button: short press -> AP portal opening: http://192.168.4.1/",
                         )
                         .await;
                     }

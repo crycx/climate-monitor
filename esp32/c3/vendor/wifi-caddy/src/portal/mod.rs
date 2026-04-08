@@ -59,7 +59,7 @@ pub async fn serve_loop<H: Handler>(stack: Stack<'static>, handler: H) {
                 .await
             {
                 Ok(a) => {
-                    info!("http: listening on 0.0.0.0:80");
+                    info!("http: *** SERVER READY: http://192.168.4.1/ (port 80) ***");
                     break a;
                 }
                 Err(_e) => {
