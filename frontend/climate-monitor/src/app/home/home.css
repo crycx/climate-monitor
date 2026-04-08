@@ -23,6 +23,10 @@
 	min-width: 180px;
 }
 
+.filter-toggle-btn {
+	display: none;
+}
+
 .auto-refresh-toggle {
 	margin-bottom: 0.5rem;
 }
@@ -425,14 +429,32 @@
 
 @media (max-width: 640px) {
 	.home-header {
-		flex-direction: column;
-		align-items: flex-start;
+		flex-wrap: wrap;
+		align-items: center;
+	}
+
+	.home-title {
+		flex: 1;
+	}
+
+	.filter-toggle-btn {
+		display: inline-flex;
+		margin-left: auto;
+	}
+
+	.filter-toggle-active {
+		color: #1976d2;
 	}
 
 	.header-actions {
+		display: none;
 		width: 100%;
 		align-items: stretch;
 		flex-direction: column;
+	}
+
+	.header-actions.is-open {
+		display: flex;
 	}
 
 	.location-filter {

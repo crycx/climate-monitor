@@ -79,6 +79,7 @@ export class Home implements AfterViewInit, OnDestroy {
   loading = signal(true);
   error = signal('');
   lastUpdated = signal('');
+  filtersOpen = signal(false);
   locations = signal<ApiLocation[]>([]);
   devices = signal<ApiDevice[]>([]);
   selectedDeviceIds = signal<number[]>([]);
@@ -336,6 +337,10 @@ export class Home implements AfterViewInit, OnDestroy {
       nonce: request.nonce + 1,
       incremental: true,
     }));
+  }
+
+  toggleFilters(): void {
+    this.filtersOpen.update((v) => !v);
   }
 
   onLocationChange(value: number | null): void {

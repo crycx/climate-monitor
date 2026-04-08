@@ -1,10 +1,20 @@
 <div class="home-page">
   <div class="home-header">
-    <div>
+    <div class="home-title">
       <h1>Climate Overview</h1>
       <p>Temperature and humidity per device.</p>
     </div>
-    <div class="header-actions">
+    <button
+      class="filter-toggle-btn"
+      mat-icon-button
+      type="button"
+      (click)="toggleFilters()"
+      [class.filter-toggle-active]="filtersOpen()"
+      [matTooltip]="filtersOpen() ? 'Hide controls' : 'Show controls'"
+    >
+      <mat-icon>tune</mat-icon>
+    </button>
+    <div class="header-actions" [class.is-open]="filtersOpen()">
       <mat-form-field class="location-filter" appearance="outline" subscriptSizing="dynamic">
         <mat-label>Location</mat-label>
         <mat-select
