@@ -377,77 +377,114 @@ fn hex_nibble(b: u8) -> u8 {
 fn apply_wifi_slot(
     old_ssid: &str,
     old_pass: &str,
+    old_location: &str,
     new_ssid: String,
     new_pass: String,
+    new_location: String,
     no_password: bool,
-) -> (String, String) {
+) -> (String, String, String) {
     if new_ssid.is_empty() {
-        return (String::new(), String::new());
+        return (String::new(), String::new(), String::new());
     }
+    let location = if new_location.is_empty() {
+        old_location.into()
+    } else {
+        new_location
+    };
     if no_password {
-        return (new_ssid, String::new());
+        return (new_ssid, String::new(), location);
     }
     if !new_pass.is_empty() {
-        return (new_ssid, new_pass);
+        return (new_ssid, new_pass, location);
     }
     if old_ssid == new_ssid {
-        return (new_ssid, old_pass.into());
+        return (new_ssid, old_pass.into(), location);
     }
-    (new_ssid, String::new())
+    (new_ssid, String::new(), location)
 }
 
 fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     let mut next = current.clone();
 
-    let (ssid, pass) = apply_wifi_slot(
+    let (ssid, pass, location) = apply_wifi_slot(
         &current.wifi_ssid,
         &current.wifi_password,
+        &current.wifi_location,
         query_param(full_path, "wifi_ssid").unwrap_or_default(),
         query_param(full_path, "wifi_password").unwrap_or_default(),
+        query_param(full_path, "wifi_location")
+            .unwrap_or_default()
+            .trim()
+            .into(),
         query_checkbox(full_path, "wifi_no_password_1"),
     );
     next.wifi_ssid = ssid;
     next.wifi_password = pass;
+    next.wifi_location = location;
 
-    let (ssid, pass) = apply_wifi_slot(
+    let (ssid, pass, location) = apply_wifi_slot(
         &current.wifi_ssid_2,
         &current.wifi_password_2,
+        &current.wifi_location_2,
         query_param(full_path, "wifi_ssid_2").unwrap_or_default(),
         query_param(full_path, "wifi_password_2").unwrap_or_default(),
+        query_param(full_path, "wifi_location_2")
+            .unwrap_or_default()
+            .trim()
+            .into(),
         query_checkbox(full_path, "wifi_no_password_2"),
     );
     next.wifi_ssid_2 = ssid;
     next.wifi_password_2 = pass;
+    next.wifi_location_2 = location;
 
-    let (ssid, pass) = apply_wifi_slot(
+    let (ssid, pass, location) = apply_wifi_slot(
         &current.wifi_ssid_3,
         &current.wifi_password_3,
+        &current.wifi_location_3,
         query_param(full_path, "wifi_ssid_3").unwrap_or_default(),
         query_param(full_path, "wifi_password_3").unwrap_or_default(),
+        query_param(full_path, "wifi_location_3")
+            .unwrap_or_default()
+            .trim()
+            .into(),
         query_checkbox(full_path, "wifi_no_password_3"),
     );
     next.wifi_ssid_3 = ssid;
     next.wifi_password_3 = pass;
+    next.wifi_location_3 = location;
 
-    let (ssid, pass) = apply_wifi_slot(
+    let (ssid, pass, location) = apply_wifi_slot(
         &current.wifi_ssid_4,
         &current.wifi_password_4,
+        &current.wifi_location_4,
         query_param(full_path, "wifi_ssid_4").unwrap_or_default(),
         query_param(full_path, "wifi_password_4").unwrap_or_default(),
+        query_param(full_path, "wifi_location_4")
+            .unwrap_or_default()
+            .trim()
+            .into(),
         query_checkbox(full_path, "wifi_no_password_4"),
     );
     next.wifi_ssid_4 = ssid;
     next.wifi_password_4 = pass;
+    next.wifi_location_4 = location;
 
-    let (ssid, pass) = apply_wifi_slot(
+    let (ssid, pass, location) = apply_wifi_slot(
         &current.wifi_ssid_5,
         &current.wifi_password_5,
+        &current.wifi_location_5,
         query_param(full_path, "wifi_ssid_5").unwrap_or_default(),
         query_param(full_path, "wifi_password_5").unwrap_or_default(),
+        query_param(full_path, "wifi_location_5")
+            .unwrap_or_default()
+            .trim()
+            .into(),
         query_checkbox(full_path, "wifi_no_password_5"),
     );
     next.wifi_ssid_5 = ssid;
     next.wifi_password_5 = pass;
+    next.wifi_location_5 = location;
 
     next.api_url = query_param(full_path, "api_url").unwrap_or_default();
     next.api_key = query_param(full_path, "api_key").unwrap_or_default();
@@ -471,7 +508,7 @@ fn html_escape(input: &str) -> String {
     out
 }
 
-fn render_wifi_slot(index: usize, ssid: &str, password: &str, visible: bool) -> String {
+fn render_wifi_slot(index: usize, ssid: &str, password: &str, location: &str, visible: bool) -> String {
     let suffix = if index == 1 {
         String::new()
     } else {
@@ -488,7 +525,7 @@ fn render_wifi_slot(index: usize, ssid: &str, password: &str, visible: bool) -> 
     let classes = if visible { "card wifi-card" } else { "card wifi-card hidden" };
 
     format!(
-        "<section class='{}' data-slot='{}'><div class='card-head'><h3>WiFi slot {}</h3><button class='danger remove-wifi-btn' type='button'>Remove</button></div><label>SSID<input list='wifi-options' name='wifi_ssid{}' value='{}' autocomplete='off'></label><label>Password<input type='password' name='wifi_password{}' value='' placeholder='{}' autocomplete='off'></label><label class='check'><input type='checkbox' name='wifi_no_password_{}' {}> No password</label></section>",
+        "<section class='{}' data-slot='{}'><div class='card-head'><h3>WiFi slot {}</h3><button class='danger remove-wifi-btn' type='button'>Remove</button></div><label>SSID<input list='wifi-options' name='wifi_ssid{}' value='{}' autocomplete='off'></label><label>Password<input type='password' name='wifi_password{}' value='' placeholder='{}' autocomplete='off'></label><label>Location<input name='wifi_location{}' value='{}' placeholder='e.g. Kodu 3'></label><label class='check'><input type='checkbox' name='wifi_no_password_{}' {}> No password</label></section>",
         classes,
         index,
         index,
@@ -496,6 +533,8 @@ fn render_wifi_slot(index: usize, ssid: &str, password: &str, visible: bool) -> 
         html_escape(ssid),
         suffix,
         placeholder,
+        suffix,
+        html_escape(location),
         index,
         checked,
     )
@@ -531,16 +570,16 @@ where
     conn.write_all(b"<div class='actions toolbar'><button class='secondary' type='button' id='scan-btn'>Scan WiFi</button><button class='secondary' type='button' id='add-wifi-btn'>Add new config</button><small id='scan-status'>Starting WiFi scan automatically...</small></div><form method='GET' action='/save'><div class='grid' id='wifi-grid'>").await?;
 
     let slots = [
-        (1usize, cfg.wifi_ssid.as_str(), cfg.wifi_password.as_str()),
-        (2usize, cfg.wifi_ssid_2.as_str(), cfg.wifi_password_2.as_str()),
-        (3usize, cfg.wifi_ssid_3.as_str(), cfg.wifi_password_3.as_str()),
-        (4usize, cfg.wifi_ssid_4.as_str(), cfg.wifi_password_4.as_str()),
-        (5usize, cfg.wifi_ssid_5.as_str(), cfg.wifi_password_5.as_str()),
+        (1usize, cfg.wifi_ssid.as_str(), cfg.wifi_password.as_str(), cfg.wifi_location.as_str()),
+        (2usize, cfg.wifi_ssid_2.as_str(), cfg.wifi_password_2.as_str(), cfg.wifi_location_2.as_str()),
+        (3usize, cfg.wifi_ssid_3.as_str(), cfg.wifi_password_3.as_str(), cfg.wifi_location_3.as_str()),
+        (4usize, cfg.wifi_ssid_4.as_str(), cfg.wifi_password_4.as_str(), cfg.wifi_location_4.as_str()),
+        (5usize, cfg.wifi_ssid_5.as_str(), cfg.wifi_password_5.as_str(), cfg.wifi_location_5.as_str()),
     ];
-    let non_empty = slots.iter().filter(|(_, ssid, _)| !ssid.is_empty()).count();
-    for (index, ssid, pass) in slots {
+    let non_empty = slots.iter().filter(|(_, ssid, _, _)| !ssid.is_empty()).count();
+    for (index, ssid, pass, location) in slots {
         let visible = !ssid.is_empty() || (non_empty == 0 && index == 1);
-        conn.write_all(render_wifi_slot(index, ssid, pass, visible).as_bytes())
+        conn.write_all(render_wifi_slot(index, ssid, pass, location, visible).as_bytes())
             .await?;
     }
 

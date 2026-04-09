@@ -33,16 +33,21 @@ const MAGIC_KEY: u64 = fnv1a_hash(b"__magic__");
 const FORMAT_VERSION_KEY: u64 = fnv1a_hash(b"__format_version__");
 const WIFI_SSID_KEY: u64 = fnv1a_hash(b"wifi_ssid");
 const WIFI_PASSWORD_KEY: u64 = fnv1a_hash(b"wifi_password");
+const WIFI_LOCATION_KEY: u64 = fnv1a_hash(b"wifi_location");
 const API_URL_KEY: u64 = fnv1a_hash(b"api_url");
 const API_KEY_KEY: u64 = fnv1a_hash(b"api_key");
 const WIFI_SSID_2_KEY: u64 = fnv1a_hash(b"wifi_ssid_2");
 const WIFI_PASSWORD_2_KEY: u64 = fnv1a_hash(b"wifi_password_2");
+const WIFI_LOCATION_2_KEY: u64 = fnv1a_hash(b"wifi_location_2");
 const WIFI_SSID_3_KEY: u64 = fnv1a_hash(b"wifi_ssid_3");
 const WIFI_PASSWORD_3_KEY: u64 = fnv1a_hash(b"wifi_password_3");
+const WIFI_LOCATION_3_KEY: u64 = fnv1a_hash(b"wifi_location_3");
 const WIFI_SSID_4_KEY: u64 = fnv1a_hash(b"wifi_ssid_4");
 const WIFI_PASSWORD_4_KEY: u64 = fnv1a_hash(b"wifi_password_4");
+const WIFI_LOCATION_4_KEY: u64 = fnv1a_hash(b"wifi_location_4");
 const WIFI_SSID_5_KEY: u64 = fnv1a_hash(b"wifi_ssid_5");
 const WIFI_PASSWORD_5_KEY: u64 = fnv1a_hash(b"wifi_password_5");
+const WIFI_LOCATION_5_KEY: u64 = fnv1a_hash(b"wifi_location_5");
 const TEMP_OFFSET_KEY: u64 = fnv1a_hash(b"temp_offset");
 const HUM_OFFSET_KEY: u64 = fnv1a_hash(b"hum_offset");
 
@@ -50,16 +55,21 @@ const HUM_OFFSET_KEY: u64 = fnv1a_hash(b"hum_offset");
 pub struct AppConfig {
     pub wifi_ssid: String,
     pub wifi_password: String,
+    pub wifi_location: String,
     pub api_url: String,
     pub api_key: String,
     pub wifi_ssid_2: String,
     pub wifi_password_2: String,
+    pub wifi_location_2: String,
     pub wifi_ssid_3: String,
     pub wifi_password_3: String,
+    pub wifi_location_3: String,
     pub wifi_ssid_4: String,
     pub wifi_password_4: String,
+    pub wifi_location_4: String,
     pub wifi_ssid_5: String,
     pub wifi_password_5: String,
+    pub wifi_location_5: String,
     pub temp_offset: String,
     pub hum_offset: String,
 }
@@ -69,16 +79,21 @@ impl Default for AppConfig {
         Self {
             wifi_ssid: option_env!("WIFI_SSID").unwrap_or("").into(),
             wifi_password: option_env!("WIFI_PASSWORD").unwrap_or("").into(),
+            wifi_location: option_env!("WIFI_LOCATION").unwrap_or("").into(),
             api_url: option_env!("API_URL").unwrap_or("").into(),
             api_key: option_env!("API_KEY").unwrap_or("").into(),
             wifi_ssid_2: option_env!("WIFI_SSID_2").unwrap_or("").into(),
             wifi_password_2: option_env!("WIFI_PASSWORD_2").unwrap_or("").into(),
+            wifi_location_2: option_env!("WIFI_LOCATION_2").unwrap_or("").into(),
             wifi_ssid_3: option_env!("WIFI_SSID_3").unwrap_or("").into(),
             wifi_password_3: option_env!("WIFI_PASSWORD_3").unwrap_or("").into(),
+            wifi_location_3: option_env!("WIFI_LOCATION_3").unwrap_or("").into(),
             wifi_ssid_4: option_env!("WIFI_SSID_4").unwrap_or("").into(),
             wifi_password_4: option_env!("WIFI_PASSWORD_4").unwrap_or("").into(),
+            wifi_location_4: option_env!("WIFI_LOCATION_4").unwrap_or("").into(),
             wifi_ssid_5: option_env!("WIFI_SSID_5").unwrap_or("").into(),
             wifi_password_5: option_env!("WIFI_PASSWORD_5").unwrap_or("").into(),
+            wifi_location_5: option_env!("WIFI_LOCATION_5").unwrap_or("").into(),
             temp_offset: option_env!("TEMP_OFFSET").unwrap_or("-1.7").into(),
             hum_offset: option_env!("HUM_OFFSET").unwrap_or("-7.0").into(),
         }
@@ -152,6 +167,9 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(WIFI_PASSWORD_KEY).await? {
             cfg.wifi_password = value;
         }
+        if let Some(value) = self.get_string(WIFI_LOCATION_KEY).await? {
+            cfg.wifi_location = value;
+        }
         if let Some(value) = self.get_string(API_URL_KEY).await? {
             cfg.api_url = value;
         }
@@ -164,11 +182,17 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(WIFI_PASSWORD_2_KEY).await? {
             cfg.wifi_password_2 = value;
         }
+        if let Some(value) = self.get_string(WIFI_LOCATION_2_KEY).await? {
+            cfg.wifi_location_2 = value;
+        }
         if let Some(value) = self.get_string(WIFI_SSID_3_KEY).await? {
             cfg.wifi_ssid_3 = value;
         }
         if let Some(value) = self.get_string(WIFI_PASSWORD_3_KEY).await? {
             cfg.wifi_password_3 = value;
+        }
+        if let Some(value) = self.get_string(WIFI_LOCATION_3_KEY).await? {
+            cfg.wifi_location_3 = value;
         }
         if let Some(value) = self.get_string(WIFI_SSID_4_KEY).await? {
             cfg.wifi_ssid_4 = value;
@@ -176,11 +200,17 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(WIFI_PASSWORD_4_KEY).await? {
             cfg.wifi_password_4 = value;
         }
+        if let Some(value) = self.get_string(WIFI_LOCATION_4_KEY).await? {
+            cfg.wifi_location_4 = value;
+        }
         if let Some(value) = self.get_string(WIFI_SSID_5_KEY).await? {
             cfg.wifi_ssid_5 = value;
         }
         if let Some(value) = self.get_string(WIFI_PASSWORD_5_KEY).await? {
             cfg.wifi_password_5 = value;
+        }
+        if let Some(value) = self.get_string(WIFI_LOCATION_5_KEY).await? {
+            cfg.wifi_location_5 = value;
         }
         if let Some(value) = self.get_string(TEMP_OFFSET_KEY).await? {
             cfg.temp_offset = value;
@@ -196,16 +226,21 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_u32(FORMAT_VERSION_KEY, STORAGE_VERSION).await?;
         self.set_string(WIFI_SSID_KEY, &cfg.wifi_ssid).await?;
         self.set_string(WIFI_PASSWORD_KEY, &cfg.wifi_password).await?;
+        self.set_string(WIFI_LOCATION_KEY, &cfg.wifi_location).await?;
         self.set_string(API_URL_KEY, &cfg.api_url).await?;
         self.set_string(API_KEY_KEY, &cfg.api_key).await?;
         self.set_string(WIFI_SSID_2_KEY, &cfg.wifi_ssid_2).await?;
         self.set_string(WIFI_PASSWORD_2_KEY, &cfg.wifi_password_2).await?;
+        self.set_string(WIFI_LOCATION_2_KEY, &cfg.wifi_location_2).await?;
         self.set_string(WIFI_SSID_3_KEY, &cfg.wifi_ssid_3).await?;
         self.set_string(WIFI_PASSWORD_3_KEY, &cfg.wifi_password_3).await?;
+        self.set_string(WIFI_LOCATION_3_KEY, &cfg.wifi_location_3).await?;
         self.set_string(WIFI_SSID_4_KEY, &cfg.wifi_ssid_4).await?;
         self.set_string(WIFI_PASSWORD_4_KEY, &cfg.wifi_password_4).await?;
+        self.set_string(WIFI_LOCATION_4_KEY, &cfg.wifi_location_4).await?;
         self.set_string(WIFI_SSID_5_KEY, &cfg.wifi_ssid_5).await?;
         self.set_string(WIFI_PASSWORD_5_KEY, &cfg.wifi_password_5).await?;
+        self.set_string(WIFI_LOCATION_5_KEY, &cfg.wifi_location_5).await?;
         self.set_string(TEMP_OFFSET_KEY, &cfg.temp_offset).await?;
         self.set_string(HUM_OFFSET_KEY, &cfg.hum_offset).await?;
         Ok(())

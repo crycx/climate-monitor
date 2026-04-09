@@ -213,8 +213,8 @@ async fn connect_best_configured_wifi(
     wifi_sender: &wifi_runtime::WifiCommandSender,
     cfg: &AppConfig,
     context: &str,
-) -> bool {
-    if let Some((ssid, pass)) = find_best_ssid(cfg) {
+) -> Option<String> {
+    if let Some((ssid, pass, location)) = find_best_ssid(cfg) {
         if wifi_runtime::scan_ssid_visible(&ssid) {
             log_runtime_line(format!("WiFi pre-scan: visible configured SSID found: {}", ssid).as_str());
         } else if wifi_runtime::has_scan_results() {
@@ -233,9 +233,9 @@ async fn connect_best_configured_wifi(
         }
         log_runtime_line(format!("{}{}", context, ssid).as_str());
         wifi_sender.send(WifiCommand::StaUp(ssid, pass)).await;
-        true
+        Some(location)
     } else {
-        false
+        None
     }
 }
 
@@ -269,7 +269,7 @@ async fn scan_and_connect_best_configured_wifi(
     cfg: &AppConfig,
     scan_reason: &str,
     connect_context: &str,
-) -> bool {
+) -> Option<String> {
     refresh_visible_networks(wifi_sender, scan_reason).await;
     connect_best_configured_wifi(wifi_sender, cfg, connect_context).await
 }
@@ -385,25 +385,35 @@ async fn button_task() {
 /// currently visible over-the-air.
 /// Falls back to the first non-empty slot when no scan data is present.
 #[cfg(feature = "wifi")]
-fn find_best_ssid(cfg: &AppConfig) -> Option<(String, String)> {
+fn find_best_ssid(cfg: &AppConfig) -> Option<(String, String, String)> {
     let slots = [
-        (cfg.wifi_ssid.as_str(), cfg.wifi_password.as_str()),
-        (cfg.wifi_ssid_2.as_str(), cfg.wifi_password_2.as_str()),
-        (cfg.wifi_ssid_3.as_str(), cfg.wifi_password_3.as_str()),
-        (cfg.wifi_ssid_4.as_str(), cfg.wifi_password_4.as_str()),
-        (cfg.wifi_ssid_5.as_str(), cfg.wifi_password_5.as_str()),
+        (cfg.wifi_ssid.as_str(), cfg.wifi_password.as_str(), cfg.wifi_location.as_str()),
+        (cfg.wifi_ssid_2.as_str(), cfg.wifi_password_2.as_str(), cfg.wifi_location_2.as_str()),
+        (cfg.wifi_ssid_3.as_str(), cfg.wifi_password_3.as_str(), cfg.wifi_location_3.as_str()),
+        (cfg.wifi_ssid_4.as_str(), cfg.wifi_password_4.as_str(), cfg.wifi_location_4.as_str()),
+        (cfg.wifi_ssid_5.as_str(), cfg.wifi_password_5.as_str(), cfg.wifi_location_5.as_str()),
     ];
     // Prefer a network that is visible in the latest scan results.
-    for (ssid, pass) in slots {
+    for (ssid, pass, location) in slots {
         if !ssid.is_empty() && wifi_runtime::scan_ssid_visible(ssid) {
-            return Some((String::from(ssid), String::from(pass)));
+            return Some((
+                String::from(ssid),
+                String::from(pass),
+                String::from(location.trim()),
+            ));
         }
     }
     // Fall back to the first configured slot.
     slots
         .into_iter()
-        .find(|(ssid, _)| !ssid.is_empty())
-        .map(|(ssid, pass)| (String::from(ssid), String::from(pass)))
+        .find(|(ssid, _, _)| !ssid.is_empty())
+        .map(|(ssid, pass, location)| {
+            (
+                String::from(ssid),
+                String::from(pass),
+                String::from(location.trim()),
+            )
+        })
 }
 
 #[cfg(feature = "wifi")]
@@ -448,6 +458,7 @@ async fn main(spawner: Spawner) {
     let stack: &'static Stack<'static> = NET_STACK.init(wifi_stacks.sta);
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
     let mut portal_mode = PortalMode::Off;
+    let mut active_wifi_location = String::new();
 
     if boot_button_held {
         wifi_sender.send(WifiCommand::StaDown).await;
@@ -467,13 +478,15 @@ async fn main(spawner: Spawner) {
     {
         let cfg = config_handle.lock().await;
         if has_wifi_config(&cfg) {
-            scan_and_connect_best_configured_wifi(
+            if let Some(location) = scan_and_connect_best_configured_wifi(
                 &wifi_sender,
                 &cfg,
                 "Boot: scanning visible WiFi networks before connect...",
                 "Boot: connecting to ",
             )
-            .await;
+            .await {
+                active_wifi_location = location;
+            }
         } else {
             wifi_sender.send(WifiCommand::StaDown).await;
             set_portal_mode(
@@ -562,13 +575,15 @@ async fn main(spawner: Spawner) {
                         } else {
                             let cfg = config_handle.lock().await;
                             if has_wifi_config(&cfg) {
-                                scan_and_connect_best_configured_wifi(
+                                if let Some(location) = scan_and_connect_best_configured_wifi(
                                     &wifi_sender,
                                     &cfg,
                                     "Button: scanning visible WiFi networks before reconnect...",
                                     "Button: reconnecting to ",
                                 )
-                                .await;
+                                .await {
+                                    active_wifi_location = location;
+                                }
                             }
                         }
                     } else {
@@ -601,13 +616,15 @@ async fn main(spawner: Spawner) {
                 if has_wifi_config(&cfg) {
                     let should_reconnect = changed || !stack.is_config_up();
                     if should_reconnect {
-                        scan_and_connect_best_configured_wifi(
+                        if let Some(location) = scan_and_connect_best_configured_wifi(
                             &wifi_sender,
                             &cfg,
                             "Config saved: scanning visible WiFi networks before connect...",
                             "Config saved: connecting to ",
                         )
-                        .await;
+                        .await {
+                            active_wifi_location = location;
+                        }
                     } else {
                         log_runtime_line("Config saved: WiFi already connected, skipping reconnect.");
                     }
@@ -682,6 +699,7 @@ async fn main(spawner: Spawner) {
                         tcp_state,
                         api_url.as_str(),
                         api_key.as_str(),
+                        active_wifi_location.as_str(),
                         temp,
                         hum,
                     )
@@ -702,6 +720,7 @@ async fn main(spawner: Spawner) {
                             tcp_state,
                             api_url.as_str(),
                             api_key.as_str(),
+                            active_wifi_location.as_str(),
                             temp,
                             hum,
                         )
@@ -732,6 +751,7 @@ async fn post_readings_with_retry(
     tcp_state: &'static TcpClientState<2, 4096, 4096>,
     api_url: &str,
     api_key: &str,
+    location: &str,
     temp: f32,
     hum: f32,
 ) {
@@ -741,7 +761,7 @@ async fn post_readings_with_retry(
             log_runtime_line(format!("Retry {}/3 in 10 s...", attempt).as_str());
             Timer::after(Duration::from_secs(10)).await;
         }
-        if post_readings(stack, tcp_state, api_url, api_key, temp, hum).await {
+        if post_readings(stack, tcp_state, api_url, api_key, location, temp, hum).await {
             SENDING.store(false, Ordering::Relaxed);
             return;
         }
@@ -758,6 +778,7 @@ async fn post_readings(
     tcp_state: &'static TcpClientState<2, 4096, 4096>,
     api_url: &str,
     api_key: &str,
+    location: &str,
     temp: f32,
     hum: f32,
 ) -> bool {
@@ -783,10 +804,22 @@ async fn post_readings(
     #[cfg(feature = "no-tls")]
     let mut http = HttpClient::new(&tcp_client, &dns);
 
-    let body = format!(
-        r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%"}}]"#,
-        temp, hum
-    );
+    let payload_location = location.trim();
+    let body = if payload_location.is_empty() {
+        format!(
+            r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%"}}]"#,
+            temp, hum
+        )
+    } else {
+        let escaped_location = payload_location.replace('"', "\\\"");
+        format!(
+            r#"[{{"sensor_type":"temperature","value":{:.2},"unit":"C","location":"{}"}},{{"sensor_type":"humidity","value":{:.2},"unit":"%","location":"{}"}}]"#,
+            temp,
+            escaped_location,
+            hum,
+            escaped_location,
+        )
+    };
     let readings_url = format!("{}readings", api_url);
 
     let mut rx_buf = [0u8; 512];
