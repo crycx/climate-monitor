@@ -1,11 +1,37 @@
 import { AfterViewInit, Component, ElementRef, OnDestroy, QueryList, ViewChildren, computed, effect, signal, untracked } from '@angular/core';
 import { finalize, Subscription, timeout } from 'rxjs';
-import { Chart, type ChartConfiguration, registerables } from 'chart.js';
+import { Chart, type ChartConfiguration, type Plugin, registerables } from 'chart.js';
 import { MatSnackBar, MatSnackBarRef } from '@angular/material/snack-bar';
 import { ApiDevice, ApiLocation, ApiReading, ApiService } from '../services/api';
+import { CondensationRisk, ComfortStatus, EnvironmentMetricsResult, calculateEnvironmentMetrics } from '../services/environment-metrics.util';
 import { Snackbar } from '../custom-components/snackbar/snackbar';
 
 Chart.register(...registerables);
+
+const crosshairPlugin: Plugin<'line'> = {
+  id: 'crosshair',
+  afterDatasetsDraw(chart) {
+    const tooltip = chart.tooltip;
+    if (!tooltip || !tooltip.getActiveElements().length) {
+      return;
+    }
+
+    const { ctx, chartArea } = chart;
+    const x = tooltip.caretX;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x, chartArea.top);
+    ctx.lineTo(x, chartArea.bottom);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.65)';
+    ctx.setLineDash([4, 4]);
+    ctx.stroke();
+    ctx.restore();
+  },
+};
+
+Chart.register(crosshairPlugin);
 
 type ReadingPoint = {
   ts: string;
@@ -15,6 +41,37 @@ type ReadingPoint = {
 type TimePoint = {
   x: number;
   y: number;
+};
+
+type PeriodTrend = 'Warming' | 'Cooling' | 'Stable' | 'Unknown';
+
+type VariabilityLevel = 'Stable' | 'Moderate' | 'Volatile' | 'Unknown';
+
+type PeriodAnalysis = {
+  sampleCount: number;
+  trend: PeriodTrend;
+  variability: VariabilityLevel;
+  tempSwing: number | null;
+  humiditySwing: number | null;
+  comfortShare: number | null;
+  dryShare: number | null;
+  humidShare: number | null;
+};
+
+type DeviceStats = {
+  lastSeenTs: string | null;
+  tempLatest: number | null;
+  tempMin: number | null;
+  tempMax: number | null;
+  tempAvg: number | null;
+  tempDelta: number | null;
+  humLatest: number | null;
+  humMin: number | null;
+  humMax: number | null;
+  humAvg: number | null;
+  humDelta: number | null;
+  environment: EnvironmentMetricsResult;
+  periodAnalysis: PeriodAnalysis;
 };
 
 type LocationOption = {
@@ -40,10 +97,11 @@ export class Home implements AfterViewInit, OnDestroy {
   loading = signal(true);
   error = signal('');
   lastUpdated = signal('');
+  filtersOpen = signal(false);
   locations = signal<ApiLocation[]>([]);
   devices = signal<ApiDevice[]>([]);
   selectedDeviceIds = signal<number[]>([]);
-  gridCols = signal<1 | 2>(2);
+  viewMode = signal<1 | 2 | 3>(2);
   locationOptions = computed<LocationOption[]>(() => [
     { id: null, label: 'All locations' },
     ...this.locations().map((location) => ({ id: location.id, label: location.name })),
@@ -56,6 +114,121 @@ export class Home implements AfterViewInit, OnDestroy {
     if (selected.length === 0) return withReadings;
     return withReadings.filter((d) => selected.includes(d.id));
   });
+  deviceStats = computed(() => {
+    const readings = this.readings();
+    const devices = this.visibleDevices();
+    const map = new Map<number, DeviceStats>();
+
+    const seriesValues = (deviceId: number, sensorType: string): number[] =>
+      readings
+        .filter((r) => r.device_id === deviceId && r.sensor_type === sensorType && r.timestamp !== null)
+        .sort((a, b) => new Date(a.timestamp as string).getTime() - new Date(b.timestamp as string).getTime())
+        .map((r) => r.value);
+
+    const stat = (vals: number[]) => {
+      if (!vals.length) return { latest: null, min: null, max: null, avg: null, delta: null };
+      const latest = vals[vals.length - 1];
+      return {
+        latest,
+        min: Math.min(...vals),
+        max: Math.max(...vals),
+        avg: vals.reduce((s, v) => s + v, 0) / vals.length,
+        delta: vals.length >= 2 ? latest - vals[0] : null,
+      };
+    };
+
+    const analyzePeriod = (tempVals: number[], humVals: number[]): PeriodAnalysis => {
+      const tempStats = stat(tempVals);
+      const humStats = stat(humVals);
+      const sampleCount = Math.max(tempVals.length, humVals.length);
+
+      const tempSwing =
+        tempStats.min === null || tempStats.max === null ? null : tempStats.max - tempStats.min;
+      const humiditySwing =
+        humStats.min === null || humStats.max === null ? null : humStats.max - humStats.min;
+
+      let trend: PeriodTrend = 'Unknown';
+      if (tempStats.delta !== null) {
+        if (tempStats.delta > 0.4) {
+          trend = 'Warming';
+        } else if (tempStats.delta < -0.4) {
+          trend = 'Cooling';
+        } else {
+          trend = 'Stable';
+        }
+      }
+
+      let variability: VariabilityLevel = 'Unknown';
+      if (tempSwing !== null) {
+        if (tempSwing <= 1.0) {
+          variability = 'Stable';
+        } else if (tempSwing <= 3.0) {
+          variability = 'Moderate';
+        } else {
+          variability = 'Volatile';
+        }
+      }
+
+      if (!humVals.length) {
+        return {
+          sampleCount,
+          trend,
+          variability,
+          tempSwing,
+          humiditySwing,
+          comfortShare: null,
+          dryShare: null,
+          humidShare: null,
+        };
+      }
+
+      const comfortCount = humVals.filter((value) => value >= 30 && value <= 60).length;
+      const dryCount = humVals.filter((value) => value < 30).length;
+      const humidCount = humVals.filter((value) => value > 60).length;
+      const total = humVals.length;
+
+      return {
+        sampleCount,
+        trend,
+        variability,
+        tempSwing,
+        humiditySwing,
+        comfortShare: (comfortCount / total) * 100,
+        dryShare: (dryCount / total) * 100,
+        humidShare: (humidCount / total) * 100,
+      };
+    };
+
+    for (const device of devices) {
+      const tempSeries = seriesValues(device.id, 'temperature');
+      const humSeries = seriesValues(device.id, 'humidity');
+      const t = stat(tempSeries);
+      const h = stat(humSeries);
+      const lastReading = readings
+        .filter((r) => r.device_id === device.id && r.timestamp !== null)
+        .reduce<string | null>((best, r) => {
+          if (!best) return r.timestamp as string;
+          return (r.timestamp as string) > best ? (r.timestamp as string) : best;
+        }, null);
+      map.set(device.id, {
+        lastSeenTs: lastReading,
+        tempLatest: t.latest,
+        tempMin: t.min,
+        tempMax: t.max,
+        tempAvg: t.avg,
+        tempDelta: t.delta,
+        humLatest: h.latest,
+        humMin: h.min,
+        humMax: h.max,
+        humAvg: h.avg,
+        humDelta: h.delta,
+        environment: calculateEnvironmentMetrics(t.latest, h.latest),
+        periodAnalysis: analyzePeriod(tempSeries, humSeries),
+      });
+    }
+
+    return map;
+  });
   rangeOptions: RangeOption[] = [
     { hours: 1, label: 'Last 1 h' },
     { hours: 3, label: 'Last 3 h' },
@@ -65,6 +238,9 @@ export class Home implements AfterViewInit, OnDestroy {
     { hours: 48, label: 'Last 48 h' },
     { hours: null, label: 'All' },
   ];
+  rangeLabel = computed(() =>
+    this.rangeOptions.find((o) => o.hours === this.selectedRangeHours())?.label ?? 'All',
+  );
   selectedLocationId = signal<number | null>(null);
   selectedRangeHours = signal<number | null>(6);
   refreshRequest = signal<{ nonce: number; incremental: boolean }>({ nonce: 0, incremental: false });
@@ -72,6 +248,8 @@ export class Home implements AfterViewInit, OnDestroy {
   readings = signal<ApiReading[]>([]);
   isDarkMode = signal(false);
   autoRefreshEnabled = signal(true);
+  showDerivedMetrics = signal(true);
+  showPeriodInsights = signal(true);
 
   private locationsSub?: Subscription;
   private devicesSub?: Subscription;
@@ -81,6 +259,9 @@ export class Home implements AfterViewInit, OnDestroy {
   private readonly autoRefreshMs = 30000;
   private readonly renderDebounceMs = 120;
   private readonly rangeStorageKey = 'home.selectedRangeHours';
+  private readonly viewModeStorageKey = 'home.viewMode';
+  private readonly derivedMetricsVisibilityStorageKey = 'home.showDerivedMetrics';
+  private readonly periodInsightsVisibilityStorageKey = 'home.showPeriodInsights';
   private readonly appLocale = 'et-EE';
   private lastSelectedLocationId: number | null | undefined;
   private loadingSnackRef?: MatSnackBarRef<Snackbar>;
@@ -131,6 +312,13 @@ export class Home implements AfterViewInit, OnDestroy {
               ? this.mergeReadings(this.readings(), readings)
               : (readings ?? []);
             this.readings.set(merged);
+            const locationSync = this.syncDeviceLocationsFromReadings(merged);
+            if (locationSync.shouldReloadLocations) {
+              this.loadLocations();
+            }
+            if (locationSync.devicesChanged) {
+              this.loadDevices();
+            }
             this.lastUpdated.set(this.formatDateTimeEt(new Date()));
 
             const loadedCount = readings?.length ?? 0;
@@ -169,7 +357,7 @@ export class Home implements AfterViewInit, OnDestroy {
       const readings = this.readings();
       const visibleDevices = this.visibleDevices();
       this.isDarkMode();
-      this.gridCols();
+      this.viewMode();
 
       const debounceId = window.setTimeout(() => {
         this.renderCharts(readings, visibleDevices);
@@ -204,6 +392,21 @@ export class Home implements AfterViewInit, OnDestroy {
     const storedRange = this.readStoredRangeHours();
     if (storedRange !== undefined) {
       this.selectedRangeHours.set(storedRange);
+    }
+
+    const storedViewMode = this.readStoredViewMode();
+    if (storedViewMode !== undefined) {
+      this.viewMode.set(storedViewMode);
+    }
+
+    const storedDerivedMetricsVisibility = this.readStoredDerivedMetricsVisibility();
+    if (storedDerivedMetricsVisibility !== undefined) {
+      this.showDerivedMetrics.set(storedDerivedMetricsVisibility);
+    }
+
+    const storedPeriodInsightsVisibility = this.readStoredPeriodInsightsVisibility();
+    if (storedPeriodInsightsVisibility !== undefined) {
+      this.showPeriodInsights.set(storedPeriodInsightsVisibility);
     }
   }
 
@@ -241,6 +444,10 @@ export class Home implements AfterViewInit, OnDestroy {
     }));
   }
 
+  toggleFilters(): void {
+    this.filtersOpen.update((v) => !v);
+  }
+
   onLocationChange(value: number | null): void {
     this.selectedLocationId.set(value);
     this.refresh();
@@ -256,21 +463,172 @@ export class Home implements AfterViewInit, OnDestroy {
     this.autoRefreshEnabled.set(checked);
   }
 
+  onDerivedMetricsVisibilityChange(checked: boolean): void {
+    this.showDerivedMetrics.set(checked);
+    this.persistDerivedMetricsVisibility(checked);
+  }
+
+  onPeriodInsightsVisibilityChange(checked: boolean): void {
+    this.showPeriodInsights.set(checked);
+    this.persistPeriodInsightsVisibility(checked);
+  }
+
   onDeviceSelectionChange(ids: number[]): void {
     this.selectedDeviceIds.set(ids);
   }
 
-  onGridColsChange(cols: 1 | 2): void {
+  onViewModeChange(mode: 1 | 2 | 3): void {
     for (const chart of this.deviceCharts.values()) {
       chart.destroy();
     }
     this.deviceCharts.clear();
-    this.gridCols.set(cols);
+    this.viewMode.set(mode);
+    this.persistViewMode(mode);
+  }
+
+  deltaDirection(value: number | null): 'positive' | 'negative' | 'unchanged' | 'none' {
+    if (value === null) return 'none';
+    if (value > 0.05) return 'positive';
+    if (value < -0.05) return 'negative';
+    return 'unchanged';
+  }
+
+  deltaIcon(value: number | null): string {
+    const dir = this.deltaDirection(value);
+    if (dir === 'positive') return 'trending_up';
+    if (dir === 'negative') return 'trending_down';
+    return 'trending_flat';
+  }
+
+  formatDelta(value: number | null, unit: string): string {
+    if (value === null) return '';
+    const sign = value > 0.05 ? '+' : '';
+    return `${sign}${value.toFixed(1)} ${unit}`;
+  }
+
+  formatPercent(value: number | null): string {
+    if (value === null) {
+      return '—';
+    }
+    return `${value.toFixed(1)}%`;
+  }
+
+  periodTrendIcon(trend: PeriodTrend): string {
+    if (trend === 'Warming') return 'trending_up';
+    if (trend === 'Cooling') return 'trending_down';
+    if (trend === 'Stable') return 'trending_flat';
+    return 'help_outline';
+  }
+
+  shortTrendLabel(trend: PeriodTrend): string {
+    if (trend === 'Warming') return 'Warm';
+    if (trend === 'Cooling') return 'Cool';
+    if (trend === 'Stable') return 'Flat';
+    return 'Unknown';
+  }
+
+  periodTrendStatusClass(trend: PeriodTrend): 'is-low' | 'is-medium' | 'is-high' | 'is-unknown' {
+    if (trend === 'Warming') return 'is-medium';
+    if (trend === 'Cooling') return 'is-low';
+    if (trend === 'Stable') return 'is-low';
+    return 'is-unknown';
+  }
+
+  variabilityStatusClass(level: VariabilityLevel): 'is-low' | 'is-medium' | 'is-high' | 'is-unknown' {
+    if (level === 'Stable') return 'is-low';
+    if (level === 'Moderate') return 'is-medium';
+    if (level === 'Volatile') return 'is-high';
+    return 'is-unknown';
+  }
+
+  shortVariabilityLabel(level: VariabilityLevel): string {
+    if (level === 'Stable') return 'Low';
+    if (level === 'Moderate') return 'Mid';
+    if (level === 'Volatile') return 'High';
+    return 'Unknown';
+  }
+
+  periodSummaryEt(analysis: PeriodAnalysis): string {
+    const trendText =
+      analysis.trend === 'Warming'
+        ? 'Warming'
+        : analysis.trend === 'Cooling'
+          ? 'Cooling'
+          : analysis.trend === 'Stable'
+            ? 'Stable'
+            : 'Mixed';
+
+    const comfortText =
+      analysis.comfortShare === null
+        ? 'comfort unknown'
+        : analysis.comfortShare >= 70
+          ? 'comfortable period'
+          : analysis.comfortShare >= 40
+            ? 'partly comfortable'
+            : 'uncomfortable period';
+
+    return `${trendText}, ${comfortText}`;
+  }
+
+  comfortShareClass(value: number | null): 'is-low' | 'is-medium' | 'is-high' | 'is-unknown' {
+    if (value === null) {
+      return 'is-unknown';
+    }
+    if (value >= 70) {
+      return 'is-low';
+    }
+    if (value >= 40) {
+      return 'is-medium';
+    }
+    return 'is-high';
+  }
+
+  variabilityClass(level: VariabilityLevel): 'is-stable' | 'is-moderate' | 'is-volatile' | 'is-unknown' {
+    if (level === 'Stable') return 'is-stable';
+    if (level === 'Moderate') return 'is-moderate';
+    if (level === 'Volatile') return 'is-volatile';
+    return 'is-unknown';
+  }
+
+  comfortStatusClass(status: ComfortStatus): 'is-dry' | 'is-comfortable' | 'is-humid' | 'is-unknown' {
+    if (status === 'Too dry') return 'is-dry';
+    if (status === 'Comfortable') return 'is-comfortable';
+    if (status === 'Too humid') return 'is-humid';
+    return 'is-unknown';
+  }
+
+  comfortStatusIcon(status: ComfortStatus): string {
+    if (status === 'Too dry') return 'air';
+    if (status === 'Comfortable') return 'sentiment_satisfied';
+    if (status === 'Too humid') return 'water_drop';
+    return 'help_outline';
+  }
+
+  condensationRiskClass(risk: CondensationRisk): 'is-low' | 'is-medium' | 'is-high' | 'is-unknown' {
+    if (risk === 'Low') return 'is-low';
+    if (risk === 'Medium') return 'is-medium';
+    if (risk === 'High') return 'is-high';
+    return 'is-unknown';
+  }
+
+  condensationRiskIcon(risk: CondensationRisk): string {
+    if (risk === 'Low') return 'check_circle';
+    if (risk === 'Medium') return 'warning';
+    if (risk === 'High') return 'error';
+    return 'help_outline';
   }
 
   getLocationName(locationId: number | null): string | null {
     if (!locationId) return null;
     return this.locations().find((l) => l.id === locationId)?.name ?? null;
+  }
+
+  getLatestValue(deviceId: number, sensorType: 'temperature' | 'humidity'): number | null {
+    const latest = this.readings()
+      .filter((reading) => reading.device_id === deviceId && reading.sensor_type === sensorType && reading.timestamp)
+      .sort((a, b) => new Date(b.timestamp as string).getTime() - new Date(a.timestamp as string).getTime())[0];
+
+    return latest ? latest.value : null;
   }
 
   private renderCharts(readings: ApiReading[], visibleDevices: ApiDevice[]): void {
@@ -320,6 +678,22 @@ export class Home implements AfterViewInit, OnDestroy {
     const dark = this.isDarkMode();
     const axisColor = dark ? '#d0d5dd' : '#344054';
     const gridColor = dark ? 'rgba(208, 213, 221, 0.18)' : 'rgba(52, 64, 84, 0.14)';
+
+    const nearestValue = (points: TimePoint[], x: number): number | null => {
+      if (!points.length) {
+        return null;
+      }
+      let best = points[0];
+      let bestDistance = Math.abs(points[0].x - x);
+      for (let i = 1; i < points.length; i += 1) {
+        const distance = Math.abs(points[i].x - x);
+        if (distance < bestDistance) {
+          best = points[i];
+          bestDistance = distance;
+        }
+      }
+      return best.y;
+    };
 
     if (existing) {
       const tempDataset = existing.data.datasets[0];
@@ -385,7 +759,7 @@ export class Home implements AfterViewInit, OnDestroy {
             backgroundColor: '#e2552333',
             fill: false,
             showLine: true,
-            spanGaps: true,
+            spanGaps: 10 * 60 * 1000,
             tension: 0.25,
             borderWidth: 2,
             pointRadius: 2,
@@ -398,7 +772,7 @@ export class Home implements AfterViewInit, OnDestroy {
             backgroundColor: '#1f8fdd33',
             fill: false,
             showLine: true,
-            spanGaps: true,
+            spanGaps: 10 * 60 * 1000,
             tension: 0.25,
             borderWidth: 2,
             pointRadius: 2,
@@ -409,6 +783,11 @@ export class Home implements AfterViewInit, OnDestroy {
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
+        interaction: {
+          mode: 'nearest',
+          axis: 'x',
+          intersect: false,
+        },
         plugins: {
           legend: {
             labels: {
@@ -416,6 +795,7 @@ export class Home implements AfterViewInit, OnDestroy {
             },
           },
           tooltip: {
+            intersect: false,
             callbacks: {
               title: (items) => {
                 const item = items[0];
@@ -425,6 +805,19 @@ export class Home implements AfterViewInit, OnDestroy {
                 }
                 return new Date(raw.x).toLocaleString(this.appLocale);
               },
+              // footer: (items) => {
+              //   const item = items[0];
+              //   const raw = item?.raw as TimePoint | undefined;
+              //   if (!raw) {
+              //     return '';
+              //   }
+
+              //   const temp = nearestValue(temperatureData, raw.x);
+              //   const hum = nearestValue(humidityData, raw.x);
+              //   const tempText = temp === null ? '-' : temp.toFixed(1);
+              //   const humText = hum === null ? '-' : hum.toFixed(1);
+              //   return `T: ${tempText} °C   H: ${humText} %`;
+              // },
             },
           },
         },
@@ -529,6 +922,52 @@ export class Home implements AfterViewInit, OnDestroy {
     return merged.slice(-1000);
   }
 
+  private syncDeviceLocationsFromReadings(readings: ApiReading[]): { devicesChanged: boolean; shouldReloadLocations: boolean } {
+    const latestByDevice = new Map<number, ApiReading>();
+    for (const reading of readings) {
+      const existing = latestByDevice.get(reading.device_id);
+      if (!existing) {
+        latestByDevice.set(reading.device_id, reading);
+        continue;
+      }
+
+      const existingTs = existing.timestamp ? new Date(existing.timestamp).getTime() : 0;
+      const currentTs = reading.timestamp ? new Date(reading.timestamp).getTime() : 0;
+      if (currentTs > existingTs || (currentTs === existingTs && reading.id > existing.id)) {
+        latestByDevice.set(reading.device_id, reading);
+      }
+    }
+
+    const currentDevices = this.devices();
+    if (!currentDevices.length) {
+      return { devicesChanged: false, shouldReloadLocations: false };
+    }
+
+    let devicesChanged = false;
+    const nextDevices = currentDevices.map((device) => {
+      const latest = latestByDevice.get(device.id);
+      if (!latest || latest.location_id === device.location_id) {
+        return device;
+      }
+      devicesChanged = true;
+      return { ...device, location_id: latest.location_id };
+    });
+
+    if (devicesChanged) {
+      this.devices.set(nextDevices);
+    }
+
+    const locationIds = new Set(this.locations().map((location) => location.id));
+    const hasUnknownLocation = nextDevices.some(
+      (device) => device.location_id !== null && !locationIds.has(device.location_id),
+    );
+
+    return {
+      devicesChanged,
+      shouldReloadLocations: hasUnknownLocation,
+    };
+  }
+
   private limitForRange(hours: number | null): number {
     if (hours === null) return 10000;     // All
     if (hours <= 1)     return 500;
@@ -569,6 +1008,32 @@ export class Home implements AfterViewInit, OnDestroy {
     }
   }
 
+  private persistViewMode(mode: 1 | 2 | 3): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(this.viewModeStorageKey, String(mode));
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }
+
+  private readStoredViewMode(): 1 | 2 | 3 | undefined {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    try {
+      const raw = window.localStorage.getItem(this.viewModeStorageKey);
+      if (raw === '1' || raw === '2' || raw === '3') {
+        return Number(raw) as 1 | 2 | 3;
+      }
+    } catch {
+      // ignore
+    }
+    return undefined;
+  }
+
   private readStoredRangeHours(): number | null | undefined {
     if (typeof window === 'undefined') {
       return undefined;
@@ -586,6 +1051,64 @@ export class Home implements AfterViewInit, OnDestroy {
     } catch {
       return undefined;
     }
+  }
+
+  private persistDerivedMetricsVisibility(visible: boolean): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(this.derivedMetricsVisibilityStorageKey, visible ? '1' : '0');
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }
+
+  private readStoredDerivedMetricsVisibility(): boolean | undefined {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    try {
+      const raw = window.localStorage.getItem(this.derivedMetricsVisibilityStorageKey);
+      if (raw === '1') {
+        return true;
+      }
+      if (raw === '0') {
+        return false;
+      }
+    } catch {
+      // ignore
+    }
+    return undefined;
+  }
+
+  private persistPeriodInsightsVisibility(visible: boolean): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(this.periodInsightsVisibilityStorageKey, visible ? '1' : '0');
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }
+
+  private readStoredPeriodInsightsVisibility(): boolean | undefined {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    try {
+      const raw = window.localStorage.getItem(this.periodInsightsVisibilityStorageKey);
+      if (raw === '1') {
+        return true;
+      }
+      if (raw === '0') {
+        return false;
+      }
+    } catch {
+      // ignore
+    }
+    return undefined;
   }
 
   private openLoadingSnack(): void {

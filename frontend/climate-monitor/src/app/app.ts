@@ -29,9 +29,11 @@ export class App implements OnInit {
     // Oota kuni Angular on "stable", siis alusta checke
     this.appRef.isStable.pipe(first(stable => stable)).subscribe(() => {
 
-      // Tee esimene check kohe ja siis intervalliga
-      this.safeCheck();
-      setInterval(() => this.safeCheck(), 60_000);
+      // SW registreerimine võib võtta hetke — anna 2s enne esimest checke
+      setTimeout(() => {
+        this.safeCheck();
+        setInterval(() => this.safeCheck(), 60_000);
+      }, 2000);
     });
 
   }
@@ -44,11 +46,9 @@ export class App implements OnInit {
   }
 
   private safeCheck(): void {
-    // runOutsideAngular, et zone ei tekitaks veidraid hangumisi
     this.zone.runOutsideAngular(async () => {
-
       try {
-        const res = await this.withTimeout(this.sw.checkForUpdate(), 8000);
+        await this.withTimeout(this.sw.checkForUpdate(), 8000);
       } catch (e) {
         console.error('[SW] check error/timeout:', e);
       }

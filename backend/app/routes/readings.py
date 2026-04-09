@@ -3,6 +3,7 @@ import secrets
 
 from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 
 from ..decorators.api_key import api_key_required
 from ..decorators.auth import login_required
@@ -128,30 +129,89 @@ def _parse_readings_payload(payload, *, expect_array: bool):
         sensor_type = item.get("sensor_type")
         value = item.get("value")
         unit = item.get("unit")
+        location_name_raw = item.get("location")
 
         if not sensor_type or value is None or not unit:
             return None, (jsonify({"error": "Each reading must have sensor_type, value and unit"}), 400)
+
+        if location_name_raw is not None and not isinstance(location_name_raw, str):
+            return None, (jsonify({"error": "location must be a string"}), 400)
+
+        location_name = None
+        location_name_normalized = None
+        if isinstance(location_name_raw, str):
+            location_name = location_name_raw.strip()
+            if location_name:
+                location_name_normalized = location_name.lower()
+            else:
+                location_name = None
 
         normalized_items.append({
             "sensor_type": sensor_type,
             "value": value,
             "unit": unit,
+            "location_name": location_name,
+            "location_name_normalized": location_name_normalized,
         })
 
     return normalized_items, None
 
 
+def _resolve_location_for_device(
+    device: Device,
+    location_name: str | None,
+    location_name_normalized: str | None,
+):
+    if not location_name or not location_name_normalized:
+        return None
+
+    location = (
+        Location.query
+        .filter(Location.user_id == device.user_id)
+        .filter(func.lower(Location.name) == location_name_normalized)
+        .first()
+    )
+    if location:
+        return location
+
+    now = datetime.now(timezone.utc)
+    location = Location(
+        user_id=device.user_id,
+        name=location_name,
+        created_at=now,
+        updated_at=now,
+    )
+    db.session.add(location)
+    db.session.flush()
+    return location
+
+
 def _save_readings(device: Device, readings_payload: list[dict]) -> int:
     readings = []
+    latest_location_id = device.location_id
     for item in readings_payload:
+        location = _resolve_location_for_device(
+            device,
+            item["location_name"],
+            item["location_name_normalized"],
+        )
+        location_id = location.id if location else device.location_id
+
+        if location_id is not None:
+            latest_location_id = location_id
+
         readings.append(Reading(
             device_id=device.id,
-            location_id=device.location_id,
+            location_id=location_id,
             sensor_type=item["sensor_type"],
             value=item["value"],
             unit=item["unit"],
             timestamp=datetime.now(timezone.utc),
         ))
+
+    if latest_location_id != device.location_id:
+        device.location_id = latest_location_id
+        device.updated_at = datetime.now(timezone.utc)
 
     db.session.add_all(readings)
     db.session.commit()
@@ -199,7 +259,7 @@ def create_device_reading(device: Device, device_id: int):
     """
     Legacy compatibility endpoint for payloads that post to /api/devices/<id>/readings.
     Header: X-API-Key: <device api key>
-    Body: {"sensor_type": "temperature", "value": 23.5, "unit": "C"}
+    Body: {"sensor_type": "temperature", "value": 23.5, "unit": "C", "location": "greenhouse"}
     """
     if device.id != device_id:
         return jsonify({"error": "Device ID does not match API key"}), 403

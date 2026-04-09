@@ -1,10 +1,20 @@
 <div class="home-page">
   <div class="home-header">
-    <div>
+    <div class="home-title">
       <h1>Climate Overview</h1>
       <p>Temperature and humidity per device.</p>
     </div>
-    <div class="header-actions">
+    <button
+      class="filter-toggle-btn"
+      mat-icon-button
+      type="button"
+      (click)="toggleFilters()"
+      [class.filter-toggle-active]="filtersOpen()"
+      [matTooltip]="filtersOpen() ? 'Hide controls' : 'Show controls'"
+    >
+      <mat-icon>tune</mat-icon>
+    </button>
+    <div class="header-actions" [class.is-open]="filtersOpen()">
       <mat-form-field class="location-filter" appearance="outline" subscriptSizing="dynamic">
         <mat-label>Location</mat-label>
         <mat-select
@@ -47,14 +57,17 @@
 
       <mat-button-toggle-group
         class="layout-toggle"
-        [value]="gridCols()"
-        (change)="onGridColsChange($event.value)"
+        [value]="viewMode()"
+        (change)="onViewModeChange($event.value)"
       >
         <mat-button-toggle [value]="1" matTooltip="Full width">
           <mat-icon>view_agenda</mat-icon>
         </mat-button-toggle>
         <mat-button-toggle [value]="2" matTooltip="Two columns">
           <mat-icon>grid_view</mat-icon>
+        </mat-button-toggle>
+        <mat-button-toggle [value]="3" matTooltip="Dashboard">
+          <mat-icon>dashboard</mat-icon>
         </mat-button-toggle>
       </mat-button-toggle-group>
 
@@ -81,17 +94,244 @@
 
   <p class="status status-error" *ngIf="!loading() && error()">{{ error() }}</p>
 
-  <div class="chart-grid" [class.two-col]="gridCols() === 2" *ngIf="!error()">
+  <div class="chart-grid" [class.two-col]="viewMode() === 2" *ngIf="!error() && viewMode() !== 3">
     <section class="chart-card" *ngFor="let device of visibleDevices()">
       <div class="chart-card-header">
         <h2>{{ device.name }}</h2>
         <span class="chart-location" *ngIf="getLocationName(device.location_id) as locName">{{ locName }}</span>
+      </div>
+      <div class="reading-badges">
+        <span class="reading-badge temp" *ngIf="getLatestValue(device.id, 'temperature') as t">{{ t | number:'1.1-1' }} °C</span>
+        <span class="reading-badge hum" *ngIf="getLatestValue(device.id, 'humidity') as h">{{ h | number:'1.1-1' }} %</span>
       </div>
       <div class="chart-shell">
         <canvas #deviceCanvas></canvas>
       </div>
     </section>
 
+    <p class="no-devices" *ngIf="!loading() && visibleDevices().length === 0 && readings().length > 0">
+      No devices match the current filter.
+    </p>
+  </div>
+
+  <div class="dashboard-grid" *ngIf="!error() && viewMode() === 3">
+    <div class="dash-card" *ngFor="let device of visibleDevices()">
+      <div class="dash-card-header">
+        <span class="dash-device-name">{{ device.name }}</span>
+        <span class="dash-location" *ngIf="getLocationName(device.location_id) as loc">{{ loc }}</span>
+        <div class="dash-period-badge" *ngIf="deviceStats().get(device.id) as stats">
+          <mat-icon class="period-icon">schedule</mat-icon>
+          {{ rangeLabel() }}
+          <span class="dash-last-seen" *ngIf="stats.lastSeenTs">
+            &middot; {{ stats.lastSeenTs | timeAgo }}
+          </span>
+        </div>
+        <button
+          class="dash-insight-toggle-btn"
+          mat-icon-button
+          type="button"
+          (click)="onPeriodInsightsVisibilityChange(!showPeriodInsights())"
+          [matTooltip]="showPeriodInsights() ? 'Hide period analysis' : 'Show period analysis'"
+          [attr.aria-label]="showPeriodInsights() ? 'Hide period analysis' : 'Show period analysis'"
+        >
+          <mat-icon>{{ showPeriodInsights() ? 'timeline' : 'insights' }}</mat-icon>
+        </button>
+        <button
+          class="dash-derived-toggle-btn"
+          mat-icon-button
+          type="button"
+          (click)="onDerivedMetricsVisibilityChange(!showDerivedMetrics())"
+          [matTooltip]="showDerivedMetrics() ? 'Hide derived metrics' : 'Show derived metrics'"
+          [attr.aria-label]="showDerivedMetrics() ? 'Hide derived metrics' : 'Show derived metrics'"
+        >
+          <mat-icon>{{ !showDerivedMetrics() ? 'visibility' : 'visibility_off' }}</mat-icon>
+        </button>
+      </div>
+      <div class="dash-summary" *ngIf="showPeriodInsights() && deviceStats().get(device.id) as stats">
+        {{ periodSummaryEt(stats.periodAnalysis) }}
+      </div>
+      <ng-container *ngIf="deviceStats().get(device.id) as stats">
+        <div class="dash-readings">
+          <div class="dash-reading-block temp">
+            <div class="dash-block-header">
+              <div class="dash-reading-label">Temperature</div>
+              <mat-icon class="dash-sensor-icon">thermostat</mat-icon>
+            </div>
+            <div class="dash-value">
+              {{ stats.tempLatest !== null ? (stats.tempLatest | number:'1.1-1') : '\u2014' }}<span class="dash-unit"> &deg;C</span>
+            </div>
+            <div class="dash-stats-row" *ngIf="stats.tempMin !== null">
+              <div class="dash-stat-chip">
+                <span class="dash-stat-label">min</span>
+                <span class="dash-stat-value">{{ stats.tempMin | number:'1.1-1' }}</span>
+              </div>
+              <div class="dash-stat-chip">
+                <span class="dash-stat-label">max</span>
+                <span class="dash-stat-value">{{ stats.tempMax! | number:'1.1-1' }}</span>
+              </div>
+              <div class="dash-stat-chip">
+                <span class="dash-stat-label">avg</span>
+                <span class="dash-stat-value">{{ stats.tempAvg! | number:'1.1-1' }}</span>
+              </div>
+            </div>
+            <div
+              class="dash-delta"
+              *ngIf="stats.tempDelta !== null"
+              [class.positive]="deltaDirection(stats.tempDelta) === 'positive'"
+              [class.negative]="deltaDirection(stats.tempDelta) === 'negative'"
+              [class.unchanged]="deltaDirection(stats.tempDelta) === 'unchanged'"
+            >
+              <mat-icon class="delta-icon">{{ deltaIcon(stats.tempDelta) }}</mat-icon>
+              {{ formatDelta(stats.tempDelta, '\u00b0C') }}
+            </div>
+          </div>
+          <div class="dash-reading-block hum">
+            <div class="dash-block-header">
+              <div class="dash-reading-label">Humidity</div>
+              <mat-icon class="dash-sensor-icon">water_drop</mat-icon>
+            </div>
+            <div class="dash-value">
+              {{ stats.humLatest !== null ? (stats.humLatest | number:'1.1-1') : '\u2014' }}<span class="dash-unit"> %</span>
+            </div>
+            <div class="dash-stats-row" *ngIf="stats.humMin !== null">
+              <div class="dash-stat-chip">
+                <span class="dash-stat-label">min</span>
+                <span class="dash-stat-value">{{ stats.humMin | number:'1.1-1' }}</span>
+              </div>
+              <div class="dash-stat-chip">
+                <span class="dash-stat-label">max</span>
+                <span class="dash-stat-value">{{ stats.humMax! | number:'1.1-1' }}</span>
+              </div>
+              <div class="dash-stat-chip">
+                <span class="dash-stat-label">avg</span>
+                <span class="dash-stat-value">{{ stats.humAvg! | number:'1.1-1' }}</span>
+              </div>
+            </div>
+            <div
+              class="dash-delta"
+              *ngIf="stats.humDelta !== null"
+              [class.positive]="deltaDirection(stats.humDelta) === 'positive'"
+              [class.negative]="deltaDirection(stats.humDelta) === 'negative'"
+              [class.unchanged]="deltaDirection(stats.humDelta) === 'unchanged'"
+            >
+              <mat-icon class="delta-icon">{{ deltaIcon(stats.humDelta) }}</mat-icon>
+              {{ formatDelta(stats.humDelta, '%') }}
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-reading-label" *ngIf="showPeriodInsights()">
+          Period insights
+        </div>
+        <div class="dash-derived-grid" *ngIf="showPeriodInsights() && stats.periodAnalysis as analysis">
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">insights</mat-icon>
+              Trend
+            </div>
+            <div class="dash-derived-status" [class]="'dash-derived-status ' + periodTrendStatusClass(analysis.trend)">
+              <mat-icon class="dash-status-icon">{{ periodTrendIcon(analysis.trend) }}</mat-icon>
+              {{ shortTrendLabel(analysis.trend) }}
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">analytics</mat-icon>
+              Var.
+            </div>
+            <div class="dash-status-with-info">
+              <div class="dash-derived-status" [class]="'dash-derived-status ' + variabilityStatusClass(analysis.variability)">
+                {{ shortVariabilityLabel(analysis.variability) }}
+              </div>
+              <mat-icon
+                class="dash-info-icon"
+                *ngIf="analysis.tempSwing !== null"
+                [matTooltip]="'Swing ' + (analysis.tempSwing | number:'1.1-1') + ' °C'"
+              >
+                info
+              </mat-icon>
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">air</mat-icon>
+              Comfort
+            </div>
+            <div class="dash-status-with-info">
+              <div class="dash-derived-status" [class]="'dash-derived-status ' + comfortShareClass(analysis.comfortShare)">
+                {{ formatPercent(analysis.comfortShare) }}
+              </div>
+              <mat-icon
+                class="dash-info-icon"
+                *ngIf="analysis.dryShare !== null && analysis.humidShare !== null"
+                [matTooltip]="'Dry ' + (analysis.dryShare | number:'1.1-1') + '% · Humid ' + (analysis.humidShare | number:'1.1-1') + '%'"
+              >
+                info
+              </mat-icon>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-reading-label" *ngIf="showDerivedMetrics()">
+          Derived metrics
+        </div>
+        <div class="dash-derived-grid" *ngIf="showDerivedMetrics()">
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">ac_unit</mat-icon>
+              Dew point
+            </div>
+            <div class="dash-derived-value">
+              {{ stats.environment.dewPoint !== null ? (stats.environment.dewPoint | number:'1.1-1') : '\u2014' }}<span class="dash-derived-unit"> &deg;C</span>
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">thermostat</mat-icon>
+              Feels like
+            </div>
+            <div class="dash-derived-value">
+              {{ stats.environment.feelsLike !== null ? (stats.environment.feelsLike | number:'1.1-1') : '\u2014' }}<span class="dash-derived-unit"> &deg;C</span>
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">water_drop</mat-icon>
+              Absolute humidity
+            </div>
+            <div class="dash-derived-value">
+              {{ stats.environment.absoluteHumidity !== null ? (stats.environment.absoluteHumidity | number:'1.1-1') : '\u2014' }}<span class="dash-derived-unit"> g/m<sup>3</sup></span>
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">air</mat-icon>
+              Comfort
+            </div>
+            <div class="dash-derived-status" [class]="'dash-derived-status ' + comfortStatusClass(stats.environment.comfortStatus)">
+              <mat-icon class="dash-status-icon">{{ comfortStatusIcon(stats.environment.comfortStatus) }}</mat-icon>
+              {{ stats.environment.comfortStatus }}
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">dew_point</mat-icon>
+              Condensation risk
+            </div>
+            <div class="dash-derived-status" [class]="'dash-derived-status ' + condensationRiskClass(stats.environment.condensationRisk)">
+              <mat-icon class="dash-status-icon">{{ condensationRiskIcon(stats.environment.condensationRisk) }}</mat-icon>
+              {{ stats.environment.condensationRisk }}
+            </div>
+          </div>
+        </div>
+      </ng-container>
+    </div>
     <p class="no-devices" *ngIf="!loading() && visibleDevices().length === 0 && readings().length > 0">
       No devices match the current filter.
     </p>

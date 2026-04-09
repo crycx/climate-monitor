@@ -1,0 +1,19 @@
+[package]
+name = "wifi-caddy-proc"
+version = "0.1.0"
+edition = "2021"
+authors = ["liebman <liebman@zod.com>"]
+license = "MIT OR Apache-2.0"
+rust-version = "1.87"
+description = "Proc macro for WiFi caddy config structs (derive WifiCaddyConfig)"
+repository = "https://github.com/liebman/wifi-caddy"
+keywords = ["wifi", "embassy", "proc-macro", "config", "embedded"]
+categories = ["embedded", "no-std"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0"
