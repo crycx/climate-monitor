@@ -126,6 +126,29 @@
             &middot; {{ stats.lastSeenTs | timeAgo }}
           </span>
         </div>
+        <button
+          class="dash-insight-toggle-btn"
+          mat-icon-button
+          type="button"
+          (click)="onPeriodInsightsVisibilityChange(!showPeriodInsights())"
+          [matTooltip]="showPeriodInsights() ? 'Hide period analysis' : 'Show period analysis'"
+          [attr.aria-label]="showPeriodInsights() ? 'Hide period analysis' : 'Show period analysis'"
+        >
+          <mat-icon>{{ showPeriodInsights() ? 'timeline' : 'insights' }}</mat-icon>
+        </button>
+        <button
+          class="dash-derived-toggle-btn"
+          mat-icon-button
+          type="button"
+          (click)="onDerivedMetricsVisibilityChange(!showDerivedMetrics())"
+          [matTooltip]="showDerivedMetrics() ? 'Hide derived metrics' : 'Show derived metrics'"
+          [attr.aria-label]="showDerivedMetrics() ? 'Hide derived metrics' : 'Show derived metrics'"
+        >
+          <mat-icon>{{ !showDerivedMetrics() ? 'visibility' : 'visibility_off' }}</mat-icon>
+        </button>
+      </div>
+      <div class="dash-summary" *ngIf="showPeriodInsights() && deviceStats().get(device.id) as stats">
+        {{ periodSummaryEt(stats.periodAnalysis) }}
       </div>
       <ng-container *ngIf="deviceStats().get(device.id) as stats">
         <div class="dash-readings">
@@ -193,6 +216,117 @@
             >
               <mat-icon class="delta-icon">{{ deltaIcon(stats.humDelta) }}</mat-icon>
               {{ formatDelta(stats.humDelta, '%') }}
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-reading-label" *ngIf="showPeriodInsights()">
+          Period insights
+        </div>
+        <div class="dash-derived-grid" *ngIf="showPeriodInsights() && stats.periodAnalysis as analysis">
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">insights</mat-icon>
+              Trend
+            </div>
+            <div class="dash-derived-status" [class]="'dash-derived-status ' + periodTrendStatusClass(analysis.trend)">
+              <mat-icon class="dash-status-icon">{{ periodTrendIcon(analysis.trend) }}</mat-icon>
+              {{ shortTrendLabel(analysis.trend) }}
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">analytics</mat-icon>
+              Var.
+            </div>
+            <div class="dash-status-with-info">
+              <div class="dash-derived-status" [class]="'dash-derived-status ' + variabilityStatusClass(analysis.variability)">
+                {{ shortVariabilityLabel(analysis.variability) }}
+              </div>
+              <mat-icon
+                class="dash-info-icon"
+                *ngIf="analysis.tempSwing !== null"
+                [matTooltip]="'Swing ' + (analysis.tempSwing | number:'1.1-1') + ' °C'"
+              >
+                info
+              </mat-icon>
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">air</mat-icon>
+              Comfort
+            </div>
+            <div class="dash-status-with-info">
+              <div class="dash-derived-status" [class]="'dash-derived-status ' + comfortShareClass(analysis.comfortShare)">
+                {{ formatPercent(analysis.comfortShare) }}
+              </div>
+              <mat-icon
+                class="dash-info-icon"
+                *ngIf="analysis.dryShare !== null && analysis.humidShare !== null"
+                [matTooltip]="'Dry ' + (analysis.dryShare | number:'1.1-1') + '% · Humid ' + (analysis.humidShare | number:'1.1-1') + '%'"
+              >
+                info
+              </mat-icon>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-reading-label" *ngIf="showDerivedMetrics()">
+          Derived metrics
+        </div>
+        <div class="dash-derived-grid" *ngIf="showDerivedMetrics()">
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">ac_unit</mat-icon>
+              Dew point
+            </div>
+            <div class="dash-derived-value">
+              {{ stats.environment.dewPoint !== null ? (stats.environment.dewPoint | number:'1.1-1') : '\u2014' }}<span class="dash-derived-unit"> &deg;C</span>
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">thermostat</mat-icon>
+              Feels like
+            </div>
+            <div class="dash-derived-value">
+              {{ stats.environment.feelsLike !== null ? (stats.environment.feelsLike | number:'1.1-1') : '\u2014' }}<span class="dash-derived-unit"> &deg;C</span>
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">water_drop</mat-icon>
+              Absolute humidity
+            </div>
+            <div class="dash-derived-value">
+              {{ stats.environment.absoluteHumidity !== null ? (stats.environment.absoluteHumidity | number:'1.1-1') : '\u2014' }}<span class="dash-derived-unit"> g/m<sup>3</sup></span>
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">air</mat-icon>
+              Comfort
+            </div>
+            <div class="dash-derived-status" [class]="'dash-derived-status ' + comfortStatusClass(stats.environment.comfortStatus)">
+              <mat-icon class="dash-status-icon">{{ comfortStatusIcon(stats.environment.comfortStatus) }}</mat-icon>
+              {{ stats.environment.comfortStatus }}
+            </div>
+          </div>
+
+          <div class="dash-derived-item">
+            <div class="dash-derived-label">
+              <mat-icon class="dash-derived-icon">dew_point</mat-icon>
+              Condensation risk
+            </div>
+            <div class="dash-derived-status" [class]="'dash-derived-status ' + condensationRiskClass(stats.environment.condensationRisk)">
+              <mat-icon class="dash-status-icon">{{ condensationRiskIcon(stats.environment.condensationRisk) }}</mat-icon>
+              {{ stats.environment.condensationRisk }}
             </div>
           </div>
         </div>

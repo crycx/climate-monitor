@@ -3,6 +3,7 @@ import { finalize, Subscription, timeout } from 'rxjs';
 import { Chart, type ChartConfiguration, type Plugin, registerables } from 'chart.js';
 import { MatSnackBar, MatSnackBarRef } from '@angular/material/snack-bar';
 import { ApiDevice, ApiLocation, ApiReading, ApiService } from '../services/api';
+import { CondensationRisk, ComfortStatus, EnvironmentMetricsResult, calculateEnvironmentMetrics } from '../services/environment-metrics.util';
 import { Snackbar } from '../custom-components/snackbar/snackbar';
 
 Chart.register(...registerables);
@@ -42,6 +43,21 @@ type TimePoint = {
   y: number;
 };
 
+type PeriodTrend = 'Warming' | 'Cooling' | 'Stable' | 'Unknown';
+
+type VariabilityLevel = 'Stable' | 'Moderate' | 'Volatile' | 'Unknown';
+
+type PeriodAnalysis = {
+  sampleCount: number;
+  trend: PeriodTrend;
+  variability: VariabilityLevel;
+  tempSwing: number | null;
+  humiditySwing: number | null;
+  comfortShare: number | null;
+  dryShare: number | null;
+  humidShare: number | null;
+};
+
 type DeviceStats = {
   lastSeenTs: string | null;
   tempLatest: number | null;
@@ -54,6 +70,8 @@ type DeviceStats = {
   humMax: number | null;
   humAvg: number | null;
   humDelta: number | null;
+  environment: EnvironmentMetricsResult;
+  periodAnalysis: PeriodAnalysis;
 };
 
 type LocationOption = {
@@ -119,9 +137,73 @@ export class Home implements AfterViewInit, OnDestroy {
       };
     };
 
+    const analyzePeriod = (tempVals: number[], humVals: number[]): PeriodAnalysis => {
+      const tempStats = stat(tempVals);
+      const humStats = stat(humVals);
+      const sampleCount = Math.max(tempVals.length, humVals.length);
+
+      const tempSwing =
+        tempStats.min === null || tempStats.max === null ? null : tempStats.max - tempStats.min;
+      const humiditySwing =
+        humStats.min === null || humStats.max === null ? null : humStats.max - humStats.min;
+
+      let trend: PeriodTrend = 'Unknown';
+      if (tempStats.delta !== null) {
+        if (tempStats.delta > 0.4) {
+          trend = 'Warming';
+        } else if (tempStats.delta < -0.4) {
+          trend = 'Cooling';
+        } else {
+          trend = 'Stable';
+        }
+      }
+
+      let variability: VariabilityLevel = 'Unknown';
+      if (tempSwing !== null) {
+        if (tempSwing <= 1.0) {
+          variability = 'Stable';
+        } else if (tempSwing <= 3.0) {
+          variability = 'Moderate';
+        } else {
+          variability = 'Volatile';
+        }
+      }
+
+      if (!humVals.length) {
+        return {
+          sampleCount,
+          trend,
+          variability,
+          tempSwing,
+          humiditySwing,
+          comfortShare: null,
+          dryShare: null,
+          humidShare: null,
+        };
+      }
+
+      const comfortCount = humVals.filter((value) => value >= 30 && value <= 60).length;
+      const dryCount = humVals.filter((value) => value < 30).length;
+      const humidCount = humVals.filter((value) => value > 60).length;
+      const total = humVals.length;
+
+      return {
+        sampleCount,
+        trend,
+        variability,
+        tempSwing,
+        humiditySwing,
+        comfortShare: (comfortCount / total) * 100,
+        dryShare: (dryCount / total) * 100,
+        humidShare: (humidCount / total) * 100,
+      };
+    };
+
     for (const device of devices) {
-      const t = stat(seriesValues(device.id, 'temperature'));
-      const h = stat(seriesValues(device.id, 'humidity'));
+      const tempSeries = seriesValues(device.id, 'temperature');
+      const humSeries = seriesValues(device.id, 'humidity');
+      const t = stat(tempSeries);
+      const h = stat(humSeries);
       const lastReading = readings
         .filter((r) => r.device_id === device.id && r.timestamp !== null)
         .reduce<string | null>((best, r) => {
@@ -140,6 +222,8 @@ export class Home implements AfterViewInit, OnDestroy {
         humMax: h.max,
         humAvg: h.avg,
         humDelta: h.delta,
+        environment: calculateEnvironmentMetrics(t.latest, h.latest),
+        periodAnalysis: analyzePeriod(tempSeries, humSeries),
       });
     }
 
@@ -164,6 +248,8 @@ export class Home implements AfterViewInit, OnDestroy {
   readings = signal<ApiReading[]>([]);
   isDarkMode = signal(false);
   autoRefreshEnabled = signal(true);
+  showDerivedMetrics = signal(true);
+  showPeriodInsights = signal(true);
 
   private locationsSub?: Subscription;
   private devicesSub?: Subscription;
@@ -174,6 +260,8 @@ export class Home implements AfterViewInit, OnDestroy {
   private readonly renderDebounceMs = 120;
   private readonly rangeStorageKey = 'home.selectedRangeHours';
   private readonly viewModeStorageKey = 'home.viewMode';
+  private readonly derivedMetricsVisibilityStorageKey = 'home.showDerivedMetrics';
+  private readonly periodInsightsVisibilityStorageKey = 'home.showPeriodInsights';
   private readonly appLocale = 'et-EE';
   private lastSelectedLocationId: number | null | undefined;
   private loadingSnackRef?: MatSnackBarRef<Snackbar>;
@@ -303,6 +391,16 @@ export class Home implements AfterViewInit, OnDestroy {
     if (storedViewMode !== undefined) {
       this.viewMode.set(storedViewMode);
     }
+
+    const storedDerivedMetricsVisibility = this.readStoredDerivedMetricsVisibility();
+    if (storedDerivedMetricsVisibility !== undefined) {
+      this.showDerivedMetrics.set(storedDerivedMetricsVisibility);
+    }
+
+    const storedPeriodInsightsVisibility = this.readStoredPeriodInsightsVisibility();
+    if (storedPeriodInsightsVisibility !== undefined) {
+      this.showPeriodInsights.set(storedPeriodInsightsVisibility);
+    }
   }
 
   ngAfterViewInit(): void {
@@ -358,6 +456,16 @@ export class Home implements AfterViewInit, OnDestroy {
     this.autoRefreshEnabled.set(checked);
   }
 
+  onDerivedMetricsVisibilityChange(checked: boolean): void {
+    this.showDerivedMetrics.set(checked);
+    this.persistDerivedMetricsVisibility(checked);
+  }
+
+  onPeriodInsightsVisibilityChange(checked: boolean): void {
+    this.showPeriodInsights.set(checked);
+    this.persistPeriodInsightsVisibility(checked);
+  }
+
   onDeviceSelectionChange(ids: number[]): void {
     this.selectedDeviceIds.set(ids);
   }
@@ -389,6 +497,118 @@ export class Home implements AfterViewInit, OnDestroy {
     if (value === null) return '';
     const sign = value > 0.05 ? '+' : '';
     return `${sign}${value.toFixed(1)} ${unit}`;
+  }
+
+  formatPercent(value: number | null): string {
+    if (value === null) {
+      return '—';
+    }
+    return `${value.toFixed(1)}%`;
+  }
+
+  periodTrendIcon(trend: PeriodTrend): string {
+    if (trend === 'Warming') return 'trending_up';
+    if (trend === 'Cooling') return 'trending_down';
+    if (trend === 'Stable') return 'trending_flat';
+    return 'help_outline';
+  }
+
+  shortTrendLabel(trend: PeriodTrend): string {
+    if (trend === 'Warming') return 'Warm';
+    if (trend === 'Cooling') return 'Cool';
+    if (trend === 'Stable') return 'Flat';
+    return 'Unknown';
+  }
+
+  periodTrendStatusClass(trend: PeriodTrend): 'is-low' | 'is-medium' | 'is-high' | 'is-unknown' {
+    if (trend === 'Warming') return 'is-medium';
+    if (trend === 'Cooling') return 'is-low';
+    if (trend === 'Stable') return 'is-low';
+    return 'is-unknown';
+  }
+
+  variabilityStatusClass(level: VariabilityLevel): 'is-low' | 'is-medium' | 'is-high' | 'is-unknown' {
+    if (level === 'Stable') return 'is-low';
+    if (level === 'Moderate') return 'is-medium';
+    if (level === 'Volatile') return 'is-high';
+    return 'is-unknown';
+  }
+
+  shortVariabilityLabel(level: VariabilityLevel): string {
+    if (level === 'Stable') return 'Low';
+    if (level === 'Moderate') return 'Mid';
+    if (level === 'Volatile') return 'High';
+    return 'Unknown';
+  }
+
+  periodSummaryEt(analysis: PeriodAnalysis): string {
+    const trendText =
+      analysis.trend === 'Warming'
+        ? 'Warming'
+        : analysis.trend === 'Cooling'
+          ? 'Cooling'
+          : analysis.trend === 'Stable'
+            ? 'Stable'
+            : 'Mixed';
+
+    const comfortText =
+      analysis.comfortShare === null
+        ? 'comfort unknown'
+        : analysis.comfortShare >= 70
+          ? 'comfortable period'
+          : analysis.comfortShare >= 40
+            ? 'partly comfortable'
+            : 'uncomfortable period';
+
+    return `${trendText}, ${comfortText}`;
+  }
+
+  comfortShareClass(value: number | null): 'is-low' | 'is-medium' | 'is-high' | 'is-unknown' {
+    if (value === null) {
+      return 'is-unknown';
+    }
+    if (value >= 70) {
+      return 'is-low';
+    }
+    if (value >= 40) {
+      return 'is-medium';
+    }
+    return 'is-high';
+  }
+
+  variabilityClass(level: VariabilityLevel): 'is-stable' | 'is-moderate' | 'is-volatile' | 'is-unknown' {
+    if (level === 'Stable') return 'is-stable';
+    if (level === 'Moderate') return 'is-moderate';
+    if (level === 'Volatile') return 'is-volatile';
+    return 'is-unknown';
+  }
+
+  comfortStatusClass(status: ComfortStatus): 'is-dry' | 'is-comfortable' | 'is-humid' | 'is-unknown' {
+    if (status === 'Too dry') return 'is-dry';
+    if (status === 'Comfortable') return 'is-comfortable';
+    if (status === 'Too humid') return 'is-humid';
+    return 'is-unknown';
+  }
+
+  comfortStatusIcon(status: ComfortStatus): string {
+    if (status === 'Too dry') return 'air';
+    if (status === 'Comfortable') return 'sentiment_satisfied';
+    if (status === 'Too humid') return 'water_drop';
+    return 'help_outline';
+  }
+
+  condensationRiskClass(risk: CondensationRisk): 'is-low' | 'is-medium' | 'is-high' | 'is-unknown' {
+    if (risk === 'Low') return 'is-low';
+    if (risk === 'Medium') return 'is-medium';
+    if (risk === 'High') return 'is-high';
+    return 'is-unknown';
+  }
+
+  condensationRiskIcon(risk: CondensationRisk): string {
+    if (risk === 'Low') return 'check_circle';
+    if (risk === 'Medium') return 'warning';
+    if (risk === 'High') return 'error';
+    return 'help_outline';
   }
 
   getLocationName(locationId: number | null): string | null {
@@ -778,6 +998,64 @@ export class Home implements AfterViewInit, OnDestroy {
     } catch {
       return undefined;
     }
+  }
+
+  private persistDerivedMetricsVisibility(visible: boolean): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(this.derivedMetricsVisibilityStorageKey, visible ? '1' : '0');
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }
+
+  private readStoredDerivedMetricsVisibility(): boolean | undefined {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    try {
+      const raw = window.localStorage.getItem(this.derivedMetricsVisibilityStorageKey);
+      if (raw === '1') {
+        return true;
+      }
+      if (raw === '0') {
+        return false;
+      }
+    } catch {
+      // ignore
+    }
+    return undefined;
+  }
+
+  private persistPeriodInsightsVisibility(visible: boolean): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(this.periodInsightsVisibilityStorageKey, visible ? '1' : '0');
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }
+
+  private readStoredPeriodInsightsVisibility(): boolean | undefined {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    try {
+      const raw = window.localStorage.getItem(this.periodInsightsVisibilityStorageKey);
+      if (raw === '1') {
+        return true;
+      }
+      if (raw === '0') {
+        return false;
+      }
+    } catch {
+      // ignore
+    }
+    return undefined;
   }
 
   private openLoadingSnack(): void {
