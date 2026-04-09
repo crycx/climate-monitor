@@ -283,7 +283,7 @@ def test_create_reading_with_location_updates_device_location_and_reuses_existin
     assert device.location_id == new_location_id
 
 
-def test_create_reading_with_new_location_creates_lowercase_location():
+def test_create_reading_with_new_location_preserves_input_casing():
     with app.app_context():
         user = User(username="new-location-user", email="new-location@example.com", password_hash="hash")
         db.session.add(user)
@@ -313,7 +313,7 @@ def test_create_reading_with_new_location_creates_lowercase_location():
 
     with app.app_context():
         device = db.session.get(Device, device_id)
-        created_location = Location.query.filter_by(user_id=device.user_id, name="living_room").first()
+        created_location = Location.query.filter_by(user_id=device.user_id, name="LIVING_ROOM").first()
 
     assert created_location is not None
     assert device is not None

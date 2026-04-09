@@ -138,29 +138,37 @@ def _parse_readings_payload(payload, *, expect_array: bool):
             return None, (jsonify({"error": "location must be a string"}), 400)
 
         location_name = None
+        location_name_normalized = None
         if isinstance(location_name_raw, str):
-            normalized_location = location_name_raw.strip().lower()
-            if normalized_location:
-                location_name = normalized_location
+            location_name = location_name_raw.strip()
+            if location_name:
+                location_name_normalized = location_name.lower()
+            else:
+                location_name = None
 
         normalized_items.append({
             "sensor_type": sensor_type,
             "value": value,
             "unit": unit,
             "location_name": location_name,
+            "location_name_normalized": location_name_normalized,
         })
 
     return normalized_items, None
 
 
-def _resolve_location_for_device(device: Device, location_name: str | None):
-    if not location_name:
+def _resolve_location_for_device(
+    device: Device,
+    location_name: str | None,
+    location_name_normalized: str | None,
+):
+    if not location_name or not location_name_normalized:
         return None
 
     location = (
         Location.query
         .filter(Location.user_id == device.user_id)
-        .filter(func.lower(Location.name) == location_name)
+        .filter(func.lower(Location.name) == location_name_normalized)
         .first()
     )
     if location:
@@ -182,7 +190,11 @@ def _save_readings(device: Device, readings_payload: list[dict]) -> int:
     readings = []
     latest_location_id = device.location_id
     for item in readings_payload:
-        location = _resolve_location_for_device(device, item["location_name"])
+        location = _resolve_location_for_device(
+            device,
+            item["location_name"],
+            item["location_name_normalized"],
+        )
         location_id = location.id if location else device.location_id
 
         if location_id is not None:

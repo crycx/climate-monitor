@@ -312,6 +312,13 @@ export class Home implements AfterViewInit, OnDestroy {
               ? this.mergeReadings(this.readings(), readings)
               : (readings ?? []);
             this.readings.set(merged);
+            const locationSync = this.syncDeviceLocationsFromReadings(merged);
+            if (locationSync.shouldReloadLocations) {
+              this.loadLocations();
+            }
+            if (locationSync.devicesChanged) {
+              this.loadDevices();
+            }
             this.lastUpdated.set(this.formatDateTimeEt(new Date()));
 
             const loadedCount = readings?.length ?? 0;
@@ -913,6 +920,52 @@ export class Home implements AfterViewInit, OnDestroy {
     });
 
     return merged.slice(-1000);
+  }
+
+  private syncDeviceLocationsFromReadings(readings: ApiReading[]): { devicesChanged: boolean; shouldReloadLocations: boolean } {
+    const latestByDevice = new Map<number, ApiReading>();
+    for (const reading of readings) {
+      const existing = latestByDevice.get(reading.device_id);
+      if (!existing) {
+        latestByDevice.set(reading.device_id, reading);
+        continue;
+      }
+
+      const existingTs = existing.timestamp ? new Date(existing.timestamp).getTime() : 0;
+      const currentTs = reading.timestamp ? new Date(reading.timestamp).getTime() : 0;
+      if (currentTs > existingTs || (currentTs === existingTs && reading.id > existing.id)) {
+        latestByDevice.set(reading.device_id, reading);
+      }
+    }
+
+    const currentDevices = this.devices();
+    if (!currentDevices.length) {
+      return { devicesChanged: false, shouldReloadLocations: false };
+    }
+
+    let devicesChanged = false;
+    const nextDevices = currentDevices.map((device) => {
+      const latest = latestByDevice.get(device.id);
+      if (!latest || latest.location_id === device.location_id) {
+        return device;
+      }
+      devicesChanged = true;
+      return { ...device, location_id: latest.location_id };
+    });
+
+    if (devicesChanged) {
+      this.devices.set(nextDevices);
+    }
+
+    const locationIds = new Set(this.locations().map((location) => location.id));
+    const hasUnknownLocation = nextDevices.some(
+      (device) => device.location_id !== null && !locationIds.has(device.location_id),
+    );
+
+    return {
+      devicesChanged,
+      shouldReloadLocations: hasUnknownLocation,
+    };
   }
 
   private limitForRange(hours: number | null): number {
