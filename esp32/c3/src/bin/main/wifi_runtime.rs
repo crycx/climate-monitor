@@ -15,7 +15,7 @@ use esp_hal::peripherals::WIFI;
 use esp_hal::rng::Rng;
 use esp_radio::Controller;
 use esp_radio::wifi::{
-    AccessPointConfig, AccessPointInfo, ClientConfig, ModeConfig, ScanConfig, WifiController,
+    AccessPointConfig, AccessPointInfo, AuthMethod, ClientConfig, ModeConfig, ScanConfig, WifiController,
     WifiDevice, WifiEvent, WifiStaState,
 };
 use log::{debug, error, info, warn};
@@ -65,6 +65,13 @@ pub struct WifiStacks {
 const STA_RECONNECT_DELAY_MS: u64 = 5000;
 const AP_SCAN_REFRESH_MS: u64 = 5000;
 const PORTAL_LOG_MAX_CHARS: usize = 3000;
+const AP_DEFAULT_CHANNEL: u8 = 11;
+const AP_MAX_CONNECTIONS: u16 = 1;
+
+fn portal_serial_log(line: &str) {
+    esp_println::println!("{}", line);
+    portal_log(line);
+}
 
 pub async fn init(spawner: &Spawner, wifi: WIFI<'static>) -> (WifiStacks, WifiCommandSender) {
     portal_log_clear();
@@ -268,13 +275,14 @@ fn mode_variant(config: &ModeConfig) -> u8 {
     match config {
         ModeConfig::None => 0,
         ModeConfig::Client(_) => 1,
-        ModeConfig::ApSta(_, _) => 2,
-        _ => 3,
+        ModeConfig::AccessPoint(_) => 2,
+        ModeConfig::ApSta(_, _) => 3,
+        _ => 4,
     }
 }
 
 fn is_sta_apsta_transition(from: u8, to: u8) -> bool {
-    (from == 1 && to == 2) || (from == 2 && to == 1)
+    (from == 1 && to == 3) || (from == 3 && to == 1)
 }
 
 impl WifiRunner {
@@ -298,9 +306,15 @@ impl WifiRunner {
     }
 
     fn ap_ssid(&self) -> String {
+        let secure_tag = if Self::ap_password().is_some() {
+            "sec-"
+        } else {
+            ""
+        };
         alloc::fmt::format(format_args!(
-            "{}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            "{}{}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
             self.ap_ssid_prefix,
+            secure_tag,
             self.ap_mac[0],
             self.ap_mac[1],
             self.ap_mac[2],
@@ -308,6 +322,39 @@ impl WifiRunner {
             self.ap_mac[4],
             self.ap_mac[5]
         ))
+    }
+
+    fn ap_channel() -> u8 {
+        option_env!("AP_CHANNEL")
+            .and_then(|raw| raw.parse::<u8>().ok())
+            .filter(|ch| (1..=11).contains(ch))
+            .unwrap_or(AP_DEFAULT_CHANNEL)
+    }
+
+    fn ap_password() -> Option<String> {
+        option_env!("AP_PORTAL_PASSWORD")
+            .filter(|raw| raw.len() >= 8)
+            .map(String::from)
+    }
+
+    fn build_ap_config(&self, ap_only: bool) -> AccessPointConfig {
+        let mut cfg = AccessPointConfig::default()
+            .with_ssid(self.ap_ssid())
+            .with_password("".into())
+            .with_max_connections(AP_MAX_CONNECTIONS);
+
+        if let Some(password) = Self::ap_password() {
+            cfg = cfg
+                .with_auth_method(AuthMethod::Wpa2Personal)
+                .with_password(password);
+        }
+
+        if ap_only {
+            cfg.with_channel(Self::ap_channel())
+        } else {
+            // In AP+STA mode, let the radio pick the compatible channel with STA.
+            cfg
+        }
     }
 
     fn current_config(&self) -> ModeConfig {
@@ -320,20 +367,13 @@ impl WifiRunner {
                     .with_password(self.pass.clone()),
             )
         } else if self.ap_up && self.ssid.is_empty() {
-            ModeConfig::ApSta(
-                ClientConfig::default(),
-                AccessPointConfig::default()
-                    .with_ssid(self.ap_ssid())
-                    .with_password("".into()),
-            )
+            ModeConfig::AccessPoint(self.build_ap_config(true))
         } else {
             ModeConfig::ApSta(
                 ClientConfig::default()
                     .with_ssid(self.ssid.clone())
                     .with_password(self.pass.clone()),
-                AccessPointConfig::default()
-                    .with_ssid(self.ap_ssid())
-                    .with_password("".into()),
+                self.build_ap_config(false),
             )
         }
     }
@@ -401,6 +441,10 @@ impl WifiRunner {
         if esp_radio::wifi::sta_state() == WifiStaState::Connected {
             return;
         }
+        if self.ap_up {
+            debug!("wifi: AP active, skipping STA reconnect attempt");
+            return;
+        }
 
         debug!("wifi: connecting to STA");
         match self.controller.connect_async().await {
@@ -449,6 +493,11 @@ impl WifiRunner {
     }
 
     async fn do_scan_once(&mut self) {
+        if self.ap_up && self.ssid.is_empty() {
+            portal_serial_log("scan: skipped in AP-only mode (using cached results)");
+            return;
+        }
+
         let was_started = matches!(self.controller.is_started(), Ok(true));
         let restore_to_none = matches!(self.current_config(), ModeConfig::None);
 
@@ -500,24 +549,58 @@ impl WifiRunner {
                 self.ap_ssid_prefix = prefix;
                 self.ap_up = true;
                 let ap_ssid = self.ap_ssid();
+                let ap_mode = if self.ssid.is_empty() { "AP" } else { "AP+STA" };
+                let ap_channel = if self.ssid.is_empty() {
+                    Self::ap_channel()
+                } else {
+                    0
+                };
                 info!("wifi: AP SSID {}", ap_ssid.as_str());
-                portal_log(alloc::format!("ap: on, ssid '{}', ip 192.168.4.1", ap_ssid).as_str());
+                let ap_security = if Self::ap_password().is_some() {
+                    "WPA2"
+                } else {
+                    "OPEN"
+                };
+                if ap_channel == 0 {
+                    portal_serial_log(
+                        alloc::format!(
+                            "ap: on, mode {}, security {}, ssid '{}', channel auto-with-sta, max_conn {}, ip 192.168.4.1",
+                            ap_mode,
+                            ap_security,
+                            ap_ssid,
+                            AP_MAX_CONNECTIONS
+                        )
+                        .as_str(),
+                    );
+                } else {
+                    portal_serial_log(
+                        alloc::format!(
+                            "ap: on, mode {}, security {}, ssid '{}', channel {}, max_conn {}, ip 192.168.4.1",
+                            ap_mode,
+                            ap_security,
+                            ap_ssid,
+                            ap_channel,
+                            AP_MAX_CONNECTIONS
+                        )
+                        .as_str(),
+                    );
+                }
             }
             WifiCommand::APDown => {
                 info!("wifi: APDown command");
                 self.ap_up = false;
                 clear_scan_results();
-                portal_log("ap: off");
+                portal_serial_log("ap: off");
             }
             WifiCommand::StaUp(new_ssid, new_pass) => {
                 info!("wifi: StaUp command");
-                portal_log(alloc::format!("sta: set ssid '{}'", new_ssid).as_str());
+                portal_serial_log(alloc::format!("sta: set ssid '{}'", new_ssid).as_str());
                 self.ssid = new_ssid;
                 self.pass = new_pass;
             }
             WifiCommand::StaDown => {
                 info!("wifi: StaDown command");
-                portal_log("sta: off");
+                portal_serial_log("sta: off");
                 self.ssid.clear();
                 self.pass.clear();
             }
@@ -536,19 +619,19 @@ impl WifiRunner {
             match event {
                 WifiEvent::ApStart => {
                     info!("wifi: ApStart");
-                    portal_log("ap event: started (beaconing)");
+                    portal_serial_log("ap event: started (beaconing)");
                 }
                 WifiEvent::ApStop => {
                     info!("wifi: ApStop");
-                    portal_log("ap event: stopped");
+                    portal_serial_log("ap event: stopped");
                 }
                 WifiEvent::ApStaConnected => {
                     info!("wifi: ApStaConnected");
-                    portal_log("ap event: client connected to AP");
+                    portal_serial_log("ap event: client connected to AP");
                 }
                 WifiEvent::ApStaDisconnected => {
                     warn!("wifi: ApStaDisconnected");
-                    portal_log("ap event: client disconnected from AP");
+                    portal_serial_log("ap event: client disconnected from AP");
                 }
                 WifiEvent::StaConnected => {
                     info!("wifi: StaConnected");
@@ -560,6 +643,10 @@ impl WifiRunner {
                         STA_RECONNECT_DELAY_MS / 1000
                     );
                     portal_log("wifi disconnected (sta)");
+                    if self.ap_up {
+                        portal_log("wifi reconnect paused while AP portal is active");
+                        continue;
+                    }
                     Timer::after(Duration::from_millis(STA_RECONNECT_DELAY_MS)).await;
                     self.try_connect_sta().await;
                 }
@@ -587,8 +674,11 @@ impl WifiRunner {
             .await
             {
                 Either3::First(cmd) => {
+                    let should_sync = !matches!(cmd, WifiCommand::ScanOnce);
                     self.handle_command(cmd).await;
-                    self.sync_state().await;
+                    if should_sync {
+                        self.sync_state().await;
+                    }
                     self.refresh_scan_results().await;
                 }
                 Either3::Second(events) => {
@@ -623,4 +713,25 @@ async fn sta_task(mut runner: Runner<'static, WifiDevice<'static>>) {
 async fn ap_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     info!("start AP task");
     runner.run().await;
+}
+
+pub fn set_scan_results_from_flat(flat: &str) {
+    let mut body = String::from("{\"networks\":[");
+    let mut first = true;
+    for ssid in flat.lines().filter(|line| !line.is_empty()).take(24) {
+        if !first {
+            body.push(',');
+        }
+        first = false;
+        body.push_str("{\"ssid\":\"");
+        body.push_str(&json_escape(ssid));
+        body.push_str("\",\"rssi\":0}");
+    }
+    body.push_str("]}");
+
+    let flat_owned = String::from(flat);
+    critical_section::with(|cs| {
+        *SCAN_RESULTS_JSON.borrow_ref_mut(cs) = Some(body);
+        *SCAN_SSIDS_FLAT.borrow_ref_mut(cs) = Some(flat_owned);
+    });
 }

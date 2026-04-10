@@ -28,7 +28,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 extern crate alloc;
 
 #[cfg(feature = "wifi")]
-use alloc::{format, string::String};
+use alloc::{format, string::String, vec::Vec};
 #[cfg(feature = "wifi")]
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -100,6 +100,8 @@ static AP_ACTIVE: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "wifi")]
 static SENDING: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "wifi")]
+static BOOTING: AtomicBool = AtomicBool::new(true);
+#[cfg(feature = "wifi")]
 static BUTTON_EVENT: AtomicU8 = AtomicU8::new(BUTTON_EVENT_NONE);
 
 #[cfg(feature = "wifi")]
@@ -110,6 +112,7 @@ const SENSOR_INTERVAL_SECS: u64 = 30;
 const MAIN_LOOP_TICK_MS: u64 = 250;
 #[cfg(feature = "wifi")]
 const PRECONNECT_SCAN_WAIT_MS: u64 = 2500;
+const BOOT_PRESCAN_ATTEMPTS: u8 = 4;
 #[cfg(feature = "wifi")]
 const SAVE_AP_CLOSE_DELAY_SECS: u64 = 2;
 #[cfg(feature = "wifi")]
@@ -245,22 +248,41 @@ async fn refresh_visible_networks(
     reason: &str,
 ) {
     log_runtime_line(reason);
-    wifi_sender.send(WifiCommand::ScanOnce).await;
-    Timer::after(Duration::from_millis(PRECONNECT_SCAN_WAIT_MS)).await;
+    let mut merged_ssids: Vec<String> = Vec::new();
 
-    if let Some(flat) = wifi_runtime::scan_results_flat() {
-        let count = flat.lines().filter(|ssid| !ssid.is_empty()).count();
-        if count == 0 {
-            log_runtime_line("WiFi pre-scan complete: no visible networks found.");
-        } else {
-            log_runtime_line(
-                format!("WiFi pre-scan complete: {} visible network(s).", count).as_str(),
-            );
-            log_runtime_line(format!("Visible SSIDs:\n{}", flat).as_str());
+    for attempt in 1..=BOOT_PRESCAN_ATTEMPTS {
+        log_runtime_line(format!("WiFi pre-scan attempt {}/{}...", attempt, BOOT_PRESCAN_ATTEMPTS).as_str());
+        wifi_sender.send(WifiCommand::ScanOnce).await;
+        Timer::after(Duration::from_millis(PRECONNECT_SCAN_WAIT_MS)).await;
+
+        if let Some(flat) = wifi_runtime::scan_results_flat() {
+            for ssid in flat.lines().filter(|ssid| !ssid.is_empty()) {
+                if !merged_ssids.iter().any(|existing| existing.as_str() == ssid) {
+                    merged_ssids.push(String::from(ssid));
+                }
+            }
         }
-    } else {
-        log_runtime_line("WiFi pre-scan complete: no cached scan results.");
     }
+
+    if merged_ssids.is_empty() {
+        log_runtime_line("WiFi pre-scan complete: no visible networks found.");
+        return;
+    }
+
+    let mut merged_flat = String::new();
+    for ssid in merged_ssids.iter() {
+        if !merged_flat.is_empty() {
+            merged_flat.push('\n');
+        }
+        merged_flat.push_str(ssid.as_str());
+    }
+
+    wifi_runtime::set_scan_results_from_flat(merged_flat.as_str());
+    let count = merged_ssids.len();
+    log_runtime_line(
+        format!("WiFi pre-scan complete: {} visible network(s) across {} attempts.", count, BOOT_PRESCAN_ATTEMPTS).as_str(),
+    );
+    log_runtime_line(format!("Visible SSIDs:\n{}", merged_flat).as_str());
 }
 
 #[cfg(feature = "wifi")]
@@ -326,7 +348,11 @@ fn main() -> ! {
 #[embassy_executor::task]
 async fn led_task(mut led: Output<'static>) {
     loop {
-        if AP_ACTIVE.load(Ordering::Relaxed) {
+        if BOOTING.load(Ordering::Relaxed) {
+            // Boot in progress: keep LED ON until WiFi is connected or AP mode is entered.
+            led.set_low();
+            Timer::after(Duration::from_millis(100)).await;
+        } else if AP_ACTIVE.load(Ordering::Relaxed) {
             // AP portal aktiivne: vilgub aeglaselt 500 ms (aktiiv-LOW: low=sees)
             led.set_low();
             Timer::after(Duration::from_millis(500)).await;
@@ -526,6 +552,8 @@ async fn main(spawner: Spawner) {
         }
     }
 
+    BOOTING.store(false, Ordering::Relaxed);
+
     // DHT22 on GPIO5 (open-drain, pull-up).
     let mut dht22_pin = Flex::new(peripherals.GPIO5);
     dht22_pin.apply_output_config(
@@ -556,7 +584,7 @@ async fn main(spawner: Spawner) {
                         &wifi_sender,
                         &mut portal_mode,
                         PortalMode::Manual,
-                        "Button: long press -> AP portal opening: http://192.168.4.1/",
+                        "Button: long press -> AP portal opening (STA kept active): http://192.168.4.1/",
                     )
                     .await;
                 }
@@ -591,7 +619,7 @@ async fn main(spawner: Spawner) {
                             &wifi_sender,
                             &mut portal_mode,
                             PortalMode::Manual,
-                            "Button: short press -> AP portal opening: http://192.168.4.1/",
+                            "Button: short press -> AP portal opening (STA kept active): http://192.168.4.1/",
                         )
                         .await;
                     }
@@ -614,7 +642,7 @@ async fn main(spawner: Spawner) {
             let has_config = {
                 let cfg = config_handle.lock().await;
                 if has_wifi_config(&cfg) {
-                    let should_reconnect = changed || !stack.is_config_up();
+                    let should_reconnect = !stack.is_config_up();
                     if should_reconnect {
                         if let Some(location) = scan_and_connect_best_configured_wifi(
                             &wifi_sender,
@@ -626,7 +654,11 @@ async fn main(spawner: Spawner) {
                             active_wifi_location = location;
                         }
                     } else {
-                        log_runtime_line("Config saved: WiFi already connected, skipping reconnect.");
+                        if changed {
+                            log_runtime_line("Config saved: WiFi already connected, skipping scan/reconnect.");
+                        } else {
+                            log_runtime_line("Config saved: WiFi already connected, no changes.");
+                        }
                     }
                     true
                 } else {

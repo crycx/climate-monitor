@@ -2439,9 +2439,14 @@ macro_rules! esp_wifi_result {
         let result = $value;
         if result != esp_wifi_sys::include::ESP_OK as i32 {
             warn!("{} returned an error: {}", stringify!($value), result);
-            Err(WifiError::InternalError(unwrap!(FromPrimitive::from_i32(
-                result
-            ))))
+            let err = match FromPrimitive::from_i32(result) {
+                Some(err) => err,
+                None => {
+                    warn!("unknown esp-wifi internal error code: {}", result);
+                    InternalWifiError::State
+                }
+            };
+            Err(WifiError::InternalError(err))
         } else {
             Ok::<(), WifiError>(())
         }

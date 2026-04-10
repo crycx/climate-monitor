@@ -675,7 +675,13 @@ pub unsafe extern "C" fn event_post(
     );
     use num_traits::FromPrimitive;
 
-    let event = unwrap!(WifiEvent::from_i32(event_id));
+    let event = match WifiEvent::from_i32(event_id) {
+        Some(event) => event,
+        None => {
+            warn!("unknown wifi event id: {}", event_id);
+            return 0;
+        }
+    };
     trace!("EVENT: {:?}", event);
 
     WIFI_EVENTS.with(|events| events.insert(event));

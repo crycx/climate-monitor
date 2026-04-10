@@ -45,8 +45,8 @@ pub fn start(
     storage: &'static Mutex<CriticalSectionRawMutex, FlashConfigStorage<'static>>,
 ) {
     spawner.spawn(dhcp_task(ap_stack)).unwrap();
-    // DNS captive task is temporarily disabled; HTTP redirect endpoints remain enabled.
-    // Re-enable after AP stability is fully verified on target devices.
+    // DNS captive task is disabled for stability on this target.
+    // Clients should open the portal directly at http://192.168.4.1/.
     // spawner.spawn(dns_task(ap_stack)).unwrap();
     spawner
         .spawn(http_task(ap_stack, config, storage))
@@ -567,7 +567,7 @@ where
             .await?;
     }
 
-    conn.write_all(b"<div class='actions toolbar'><button class='secondary' type='button' id='scan-btn'>Scan WiFi</button><button class='secondary' type='button' id='add-wifi-btn'>Add new config</button><small id='scan-status'>Starting WiFi scan automatically...</small></div><form method='GET' action='/save'><div class='grid' id='wifi-grid'>").await?;
+    conn.write_all(b"<div class='actions toolbar'><button class='secondary' type='button' id='scan-btn'>Scan WiFi</button><button class='secondary' type='button' id='add-wifi-btn'>Add new config</button><small id='scan-status'>Press Scan WiFi to search networks.</small></div><form method='GET' action='/save'><div class='grid' id='wifi-grid'>").await?;
 
     let slots = [
         (1usize, cfg.wifi_ssid.as_str(), cfg.wifi_password.as_str(), cfg.wifi_location.as_str()),
@@ -591,7 +591,12 @@ where
     conn.write_all(html_escape(&cfg.temp_offset).as_bytes()).await?;
     conn.write_all(b"'></label><label>Humidity offset (%)<input name='hum_offset' value='").await?;
     conn.write_all(html_escape(&cfg.hum_offset).as_bytes()).await?;
-    conn.write_all(b"'></label></section><div class='actions panel'><button class='primary' type='submit'>Save settings</button></div></form><section class='card panel'><div class='actions'><h3 style='margin:0'>Runtime log</h3><button class='secondary' type='button' id='log-btn'>Refresh log</button></div><pre id='runtime-log'>Loading...</pre></section><datalist id='wifi-options'></datalist><script>const scanBtn=document.getElementById('scan-btn'),addWifiBtn=document.getElementById('add-wifi-btn'),scanStatus=document.getElementById('scan-status'),wifiOptions=document.getElementById('wifi-options'),wifiCards=[...document.querySelectorAll('.wifi-card')],logBtn=document.getElementById('log-btn'),runtimeLog=document.getElementById('runtime-log');function upd(){addWifiBtn.disabled=!wifiCards.find(c=>c.classList.contains('hidden'));}function one(){if(wifiCards.some(c=>!c.classList.contains('hidden')))return;const x=wifiCards.find(c=>c.classList.contains('hidden'));if(x)x.classList.remove('hidden');}wifiCards.forEach(card=>{const rm=card.querySelector('.remove-wifi-btn'),ssid=card.querySelector('input[name^=\"wifi_ssid\"]'),pass=card.querySelector('input[name^=\"wifi_password\"]'),np=card.querySelector('input[name^=\"wifi_no_password_\"]');rm.addEventListener('click',()=>{ssid.value='';pass.value='';np.checked=false;card.classList.add('hidden');one();upd();});});addWifiBtn.addEventListener('click',()=>{const n=wifiCards.find(c=>c.classList.contains('hidden'));if(!n)return;n.classList.remove('hidden');const i=n.querySelector('input[name^=\"wifi_ssid\"]');if(i)i.focus();upd();});upd();let retry=false;async function scan(a){scanBtn.disabled=true;scanStatus.textContent=a?'Retrying WiFi scan...':'Scanning...';try{const d=await fetch('/wifi-scan').then(r=>r.json());wifiOptions.innerHTML='';(d.networks||[]).forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.label=n.ssid+' ('+n.rssi+' dBm)';wifiOptions.appendChild(o);});if((d.networks||[]).length){scanStatus.textContent='Found '+d.networks.length+' networks.';}else if(!retry){retry=true;scanStatus.textContent='No networks yet, retrying in 3 s...';setTimeout(()=>scan(true),3000);}else{scanStatus.textContent='No networks found.';}}catch(_e){scanStatus.textContent='Scan failed.';}finally{scanBtn.disabled=false;}}async function refreshLog(){try{const t=await fetch('/wifi-log').then(r=>r.text());runtimeLog.textContent=t||'No log yet.';runtimeLog.scrollTop=runtimeLog.scrollHeight;}catch(_e){runtimeLog.textContent='Failed to load runtime log.';}}logBtn.addEventListener('click',refreshLog);scanBtn.addEventListener('click',()=>scan(false));scan(false);refreshLog();").await?;
+    conn.write_all(b"'></label></section><div class='actions panel'><button class='primary' type='submit'>Save settings</button></div></form><section class='card panel'><div class='actions'><h3 style='margin:0'>Runtime log</h3><button class='secondary' type='button' id='log-btn'>Refresh log</button></div><pre id='runtime-log'>Loading...</pre></section><datalist id='wifi-options'>").await?;
+    let cached_options = render_cached_wifi_options();
+    if !cached_options.is_empty() {
+        conn.write_all(cached_options.as_bytes()).await?;
+    }
+    conn.write_all(b"</datalist><script>const scanBtn=document.getElementById('scan-btn'),addWifiBtn=document.getElementById('add-wifi-btn'),scanStatus=document.getElementById('scan-status'),wifiOptions=document.getElementById('wifi-options'),wifiCards=[...document.querySelectorAll('.wifi-card')],logBtn=document.getElementById('log-btn'),runtimeLog=document.getElementById('runtime-log');function upd(){addWifiBtn.disabled=!wifiCards.find(c=>c.classList.contains('hidden'));}function one(){if(wifiCards.some(c=>!c.classList.contains('hidden')))return;const x=wifiCards.find(c=>c.classList.contains('hidden'));if(x)x.classList.remove('hidden');}wifiCards.forEach(card=>{const rm=card.querySelector('.remove-wifi-btn'),ssid=card.querySelector('input[name^=\"wifi_ssid\"]'),pass=card.querySelector('input[name^=\"wifi_password\"]'),np=card.querySelector('input[name^=\"wifi_no_password_\"]');rm.addEventListener('click',()=>{ssid.value='';pass.value='';np.checked=false;card.classList.add('hidden');one();upd();});});addWifiBtn.addEventListener('click',()=>{const n=wifiCards.find(c=>c.classList.contains('hidden'));if(!n)return;n.classList.remove('hidden');const i=n.querySelector('input[name^=\"wifi_ssid\"]');if(i)i.focus();upd();});upd();if(wifiOptions.options.length){scanStatus.textContent='Loaded '+wifiOptions.options.length+' cached network(s).';}let retry=false;async function scan(a){scanBtn.disabled=true;scanStatus.textContent=a?'Retrying WiFi scan...':'Scanning...';try{const d=await fetch('/wifi-scan').then(r=>r.json());wifiOptions.innerHTML='';(d.networks||[]).forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.label=n.ssid+' ('+n.rssi+' dBm)';wifiOptions.appendChild(o);});if((d.networks||[]).length){scanStatus.textContent='Found '+d.networks.length+' networks.';}else if(!retry){retry=true;scanStatus.textContent='No networks yet, retrying in 3 s...';setTimeout(()=>scan(true),3000);}else{scanStatus.textContent='No networks found.';}}catch(_e){scanStatus.textContent='Scan failed.';}finally{scanBtn.disabled=false;}}async function refreshLog(){try{const t=await fetch('/wifi-log').then(r=>r.text());runtimeLog.textContent=t||'No log yet.';runtimeLog.scrollTop=runtimeLog.scrollHeight;}catch(_e){runtimeLog.textContent='Failed to load runtime log.';}}logBtn.addEventListener('click',refreshLog);scanBtn.addEventListener('click',()=>scan(false));refreshLog();").await?;
 
     if close_after_save {
         conn.write_all(b"setTimeout(()=>{try{window.open('','_self');window.close();}catch(_e){}location.href='about:blank';},2000);")
@@ -653,4 +658,16 @@ where
     T: Read + Write,
 {
     send_text(conn, status, content_type, &body).await
+}
+
+fn render_cached_wifi_options() -> String {
+    let mut out = String::new();
+    if let Some(flat) = wifi_runtime::scan_results_flat() {
+        for ssid in flat.lines().filter(|line| !line.is_empty()) {
+            out.push_str("<option value='");
+            out.push_str(html_escape(ssid).as_str());
+            out.push_str("'></option>");
+        }
+    }
+    out
 }
