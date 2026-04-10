@@ -24,6 +24,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
   deleting = signal(false);
   error = signal<string | null>(null);
   success = signal<string | null>(null);
+  showGuide = signal(false);
 
   isCreateMode = false;
   deviceId: number | null = null;

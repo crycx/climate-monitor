@@ -71,5 +71,49 @@
         </button>
       </mat-card-actions>
     </mat-card>
+
+    <mat-card appearance="outlined" class="config-guide">
+      <mat-card-header>
+        <mat-card-title>Configuration Guide</mat-card-title>
+        <button mat-icon-button class="guide-toggle" (click)="showGuide.set(!showGuide())" [attr.aria-expanded]="showGuide()" aria-label="Toggle configuration guide">
+          <mat-icon>{{ showGuide() ? 'expand_less' : 'expand_more' }}</mat-icon>
+        </button>
+      </mat-card-header>
+
+      <mat-card-content *ngIf="showGuide()">
+        <ol class="config-steps">
+          <li>
+            Enter the device name and type, generate or paste the API key, then click
+            <strong>{{ isCreateMode ? 'Create' : 'Save' }}</strong>.
+          </li>
+          <li>
+            Power on the device and wait for first boot.
+            If it connects to Wi-Fi automatically, continue using normal operation.
+          </li>
+          <li>
+            If AP Wi-Fi (ClimateMonitor-xxxxxxxxxxxx) does not come up, press the AP button on the device (short press).
+            If needed, hold it for about 3 seconds to force AP mode.
+            Connect your phone or laptop to the AP network named
+            <strong>ClimateMonitor-xxxxxxxxxxxx</strong>
+            (the suffix is the device MAC in hex).
+          </li>
+          <li>
+            Open <strong><a href="http://192.168.4.1/">http://192.168.4.1/</a></strong> in a browser.
+            Fill in Wi-Fi SSID and password.
+          </li>
+          <li>
+            Add or update <strong>API Key</strong>.
+            Set or correct the <strong>Endpoint URL</strong> only if needed<br> default: https://climate.sinpal.ee/api/.
+          </li>
+          <li>
+            Save the configuration and wait for reconnect.
+            LED behavior:
+            slow blinking means AP portal is active,
+            solid ON means data is being sent,
+            OFF means idle.
+          </li>
+        </ol>
+      </mat-card-content>
+    </mat-card>
   </div>
 </div>
