@@ -77,7 +77,7 @@ The `API_KEY` must match the `api_key` column of the corresponding row in the
 ### WiFi mode (sends data to server via HTTPS)
 
 ```bash
-cargo run --release --features wifi
+cargo run --release
 ```
 
 This compiles, flashes, and opens a serial monitor in one step.
@@ -89,7 +89,7 @@ Use this when the backend runs on your local network over HTTP.
 Set `API_URL = "http://<your-server-ip>:<port>/api/"` in `.cargo/config.toml`, then:
 
 ```bash
-cargo run --release --features wifi,no-tls
+cargo run --release --features no-tls
 ```
 
 ### Console-only mode (no WiFi, useful for sensor testing)
@@ -158,7 +158,7 @@ esp32/c3/
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | `espflash: port not found` | Wrong port in `config.toml` | Update `--port` to match your COMx / ttyUSB |
-| `cargo: feature wifi not found` | Typo | Use `--features wifi` (exact) |
+| `cargo: feature no-tls not found` | Typo | Use `--features no-tls` (exact) |
 | Flashes but no serial output | Monitor not opening | Run `espflash monitor --port COM3` separately |
 | `WiFi: connect error` | Wrong SSID/password | Check `.cargo/config.toml` credentials |
 | `POST → HTTP 401` | Missing/wrong API key | Insert device row in DB or fix `API_KEY` |

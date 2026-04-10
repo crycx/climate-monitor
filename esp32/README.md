@@ -1,0 +1,122 @@
+# ESP32 Firmware Overview
+
+This folder contains two firmware targets and one shared code area:
+
+- `c3/` for ESP32-C3 (RISC-V)
+- `wroom/` for ESP32-WROOM (Xtensa ESP32)
+- `shared/` for extracted reusable runtime and WiFi/AP config modules
+
+Both board builds currently run as independent Cargo projects. Shared code is extracted, but full one-build-for-all integration is intentionally deferred.
+
+## Directory Layout
+
+```
+esp32/
+├── c3/
+│   ├── .cargo/config.toml
+│   ├── Cargo.toml
+│   └── src/bin/main.rs
+├── wroom/
+│   ├── .cargo/config.toml
+│   ├── Cargo.toml
+│   └── src/bin/main.rs
+├── shared/
+│   ├── runtime_shared.rs
+│   ├── app_config.rs
+│   ├── config_portal.rs
+│   └── wifi_runtime.rs
+└── README.md
+```
+
+## Shared Components
+
+Files in `shared/` represent common logic and data flow used by both platforms:
+
+- `shared/runtime_shared.rs`
+   - Main runtime flow (WiFi boot flow, AP/portal flow, periodic sensor/post loop).
+- `shared/app_config.rs`
+   - Persistent config storage in flash partition (SSID, password, API endpoint, API key).
+- `shared/config_portal.rs`
+   - Access Point HTTP portal for onboarding/config updates.
+- `shared/wifi_runtime.rs`
+   - WiFi state machine and reconnect behavior.
+
+## Board-Specific Components
+
+Each board keeps hardware-specific setup and toolchain config in its own project.
+
+### ESP32-C3 (`c3/`)
+
+- Toolchain: nightly + `riscv32imc-unknown-none-elf`
+- Typical pins:
+   - DHT22: GPIO5
+   - Button: GPIO9
+   - LED: GPIO8
+- Flasher runner and WiFi/API env are in `c3/.cargo/config.toml`.
+
+### ESP32-WROOM (`wroom/`)
+
+- Toolchain: espup Xtensa environment
+- Typical pins:
+   - DHT22: GPIO4
+   - Button: GPIO0
+   - LED: GPIO2
+- Flasher runner and WiFi/API env are in `wroom/.cargo/config.toml`.
+
+## Run Commands
+
+Default features for both targets already include WiFi (`default = ["wifi"]`), so `--features wifi` is not required.
+
+### C3 (WiFi, HTTPS)
+
+```bash
+cd esp32/c3
+cargo run --release
+```
+
+### C3 (WiFi, HTTP no TLS)
+
+```bash
+cd esp32/c3
+cargo run --release --features no-tls
+```
+
+### WROOM (WiFi, HTTPS)
+
+```powershell
+. "$env:USERPROFILE\export-esp.ps1"
+cd esp32/wroom
+cargo run --release
+```
+
+## PowerShell Auto-Load for ESP Toolchain (Windows)
+
+To auto-load Xtensa environment for WROOM builds:
+
+```powershell
+if (!(Test-Path $PROFILE)) {
+      New-Item -ItemType File -Path $PROFILE -Force | Out-Null
+}
+Add-Content $PROFILE '. "$env:USERPROFILE\export-esp.ps1"'
+```
+
+Restart PowerShell (or run `. $PROFILE`).
+
+## Why Boards Still Build Separately
+
+A single-root workspace build with shared `include!()` was tested, but reverted for stability due to:
+
+- dependency resolution mismatches between board targets
+- architecture-specific crate behavior (RISC-V vs Xtensa)
+- maintenance overhead vs current practical value
+
+The current approach keeps deployment reliable while preserving reusable code in `shared/`.
+
+## Troubleshooting
+
+- `error: package ... does not contain this feature: wifi`
+   - WiFi is already default. Use `cargo run --release`.
+- `espflash: port not found`
+   - Update board port in board-specific `.cargo/config.toml`.
+- WROOM build fails with Xtensa errors
+   - Load espup env first: `. "$env:USERPROFILE\export-esp.ps1"`.

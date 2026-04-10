@@ -1,6 +1,10 @@
 # Climate Monitor
 Smart home system for monitoring temperature and humidity using ESP32 + DHT22 sensors.
 
+## ESP32 firmware docs
+
+- See `esp32/README.md` for detailed firmware documentation, including shared components and board-specific setup for ESP32-C3 and ESP32-WROOM.
+
 ## Local development
 1. Create `.env` from template:
     - PowerShell: `Copy-Item .env.example .env`
