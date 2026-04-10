@@ -52,11 +52,14 @@ Edit `.cargo/config.toml` before building:
 [target.riscv32imc-unknown-none-elf]
 # Change COM3 to the port your board is connected to.
 # On Linux/macOS use e.g. /dev/ttyUSB0 or /dev/cu.usbserial-0001
-runner = "espflash flash --monitor --chip esp32c3 --port COM3"
+runner = "espflash flash --monitor --chip esp32c3 --port COM3 --partition-table partitions.csv --target-app-partition factory"
 
 [env]
 WIFI_SSID     = "YourNetworkName"
 WIFI_PASSWORD = "YourWifiPassword"
+# Optional AP portal tuning
+# AP_CHANNEL = "6"               # 1..11 (often 6 or 11 are best)
+# AP_PORTAL_PASSWORD = "12345678" # WPA2 password, min 8 chars
 # Choose one API URL (trailing slash required):
 # API_URL     = "https://climate.sinpal.ee/api/"     # production (HTTPS)
 API_URL       = "http://192.168.50.25:8000/api/"     # local network (HTTP)
