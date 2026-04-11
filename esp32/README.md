@@ -89,6 +89,50 @@ cd esp32/wroom
 cargo run --release
 ```
 
+## Build Commands with Just
+
+We are using [`just`](https://github.com/casey/just) as a command runner for consistent builds across machines.
+
+### Install Just
+
+```bash
+# macOS
+brew install just
+
+# Windows
+winget install just
+
+# Linux
+cargo install just
+```
+
+### Available Recipes
+
+```bash
+# Build
+just build-wroom   # Build ESP32-WROOM (Xtensa)
+just build-c3      # Build ESP32-C3 (RISC-V)
+just build-all     # Build both targets
+
+# Check (fast iteration, no full compilation)
+just check-wroom   # Type-check ESP32-WROOM
+just check-c3      # Type-check ESP32-C3
+just check-all     # Type-check both targets
+
+# Run/Flash
+just run-wroom     # Build and flash ESP32-WROOM
+just run-c3        # Build and flash ESP32-C3
+
+# Clean
+just clean-wroom   # Clean ESP32-WROOM build
+just clean-c3      # Clean ESP32-C3 build
+```
+
+### Why Just?
+
+- Same commands on any machine (macOS, Windows, Linux)
+- No need to remember target flags or paths
+
 ## PowerShell Auto-Load for ESP Toolchain (Windows)
 
 To auto-load Xtensa environment for WROOM builds:

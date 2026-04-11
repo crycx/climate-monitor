@@ -1,12 +1,12 @@
 [package]
 edition      = "2024"
-name         = "wroom"
-default-run  = "wroom"
+name         = "c3"
+default-run  = "c3"
 rust-version = "1.88"
 version      = "0.1.0"
 
 [[bin]]
-name = "wroom"
+name = "c3"
 path = "./src/bin/main.rs"
 
 [features]
