@@ -294,10 +294,8 @@ export class Home implements AfterViewInit, OnDestroy {
       }
       this.error.set('');
 
-      const fetchLimit = this.limitForRange(selectedRangeHours);
-
       const sub = this.api
-        .getLatestReadings(fetchLimit, 'asc', selectedLocationId ?? undefined, afterId, fromTs)
+        .getLatestReadings('asc', selectedLocationId ?? undefined, afterId, fromTs)
         .pipe(timeout(15000), finalize(() => {
           if (showLoading) {
             this.loading.set(false);
@@ -309,7 +307,7 @@ export class Home implements AfterViewInit, OnDestroy {
             this.closeLoadingSnack();
 
             const merged = incremental
-              ? this.mergeReadings(this.readings(), readings)
+              ? this.mergeReadings(this.readings(), readings, fromTs)
               : (readings ?? []);
             this.readings.set(merged);
             const locationSync = this.syncDeviceLocationsFromReadings(merged);
@@ -896,7 +894,7 @@ export class Home implements AfterViewInit, OnDestroy {
     return max;
   }
 
-  private mergeReadings(current: ApiReading[], incoming: ApiReading[]): ApiReading[] {
+  private mergeReadings(current: ApiReading[], incoming: ApiReading[], fromTs?: string): ApiReading[] {
     if (!incoming.length) {
       return current;
     }
@@ -909,7 +907,7 @@ export class Home implements AfterViewInit, OnDestroy {
       byId.set(reading.id, reading);
     }
 
-    const merged = Array.from(byId.values());
+    let merged = Array.from(byId.values());
     merged.sort((a, b) => {
       const aTs = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const bTs = b.timestamp ? new Date(b.timestamp).getTime() : 0;
@@ -919,7 +917,12 @@ export class Home implements AfterViewInit, OnDestroy {
       return a.id - b.id;
     });
 
-    return merged.slice(-1000);
+    if (fromTs) {
+      const fromMs = new Date(fromTs).getTime();
+      merged = merged.filter((r) => !r.timestamp || new Date(r.timestamp).getTime() >= fromMs);
+    }
+
+    return merged.slice(-10000);
   }
 
   private syncDeviceLocationsFromReadings(readings: ApiReading[]): { devicesChanged: boolean; shouldReloadLocations: boolean } {
@@ -966,16 +969,6 @@ export class Home implements AfterViewInit, OnDestroy {
       devicesChanged,
       shouldReloadLocations: hasUnknownLocation,
     };
-  }
-
-  private limitForRange(hours: number | null): number {
-    if (hours === null) return 10000;     // All
-    if (hours <= 1)     return 500;
-    if (hours <= 3)     return 1000;
-    if (hours <= 6)     return 2000;
-    if (hours <= 12)    return 4000;
-    if (hours <= 24)    return 7000;
-    return 10000;                         // 48h
   }
 
   private buildFromTs(hours: number | null): string | undefined {

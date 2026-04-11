@@ -54,10 +54,10 @@ def _period_window(period: str):
 
 
 def _apply_readings_filters(query):
-    limit = request.args.get("limit", 100, type=int)
+    limit = request.args.get("limit", 50000, type=int)
     if limit is None or limit < 1:
         return None, None, (jsonify({"error": "limit must be a positive integer"}), 400)
-    clamped_limit = min(limit, 10000)
+    clamped_limit = min(limit, 50000)
 
     order = (request.args.get("order") or "desc").strip().lower()
     if order not in {"asc", "desc"}:

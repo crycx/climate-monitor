@@ -185,14 +185,12 @@ export class ApiService {
   }
 
   getLatestReadings(
-    limit = 200,
     order: 'asc' | 'desc' = 'asc',
     locationId?: number,
     afterId?: number,
     fromTs?: string,
   ): Observable<ApiReading[]> {
     const params: Record<string, string | number> = {
-      limit,
       order,
     };
     if (locationId !== undefined) {
