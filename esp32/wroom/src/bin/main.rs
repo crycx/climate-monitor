@@ -19,11 +19,18 @@ use embassy_net::{
 };
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
-use esp_hal::{clock::CpuClock, delay::Delay, timer::timg::TimerGroup};
+use esp_hal::{
+    clock::CpuClock,
+    delay::Delay,
+    i2c::master::{Config as I2cConfig, I2c},
+    time::Rate,
+    timer::timg::TimerGroup,
+};
 use esp_rtos as _;
 use log_utils::set_time_sync_from_unix;
 use network::{net_task, verify_dns};
 use post_readings::post_readings;
+use ssd1306::{I2CDisplayInterface, Ssd1306, prelude::*};
 use wifi::connect_to_wifi;
 
 use static_cell::StaticCell;
@@ -36,6 +43,9 @@ mod post_readings;
 mod server_time_response;
 mod time_utils;
 mod wifi;
+
+#[path = "../oled_display.rs"]
+mod oled_display;
 
 // This creates a default app-descriptor required by the ESP-IDF bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -55,6 +65,41 @@ const HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
 const HTTP_SEND_TIMEOUT_SECS: u64 = 10;
 const POST_TOTAL_TIMEOUT_SECS: u64 = 25;
 
+fn oled_is_portrait() -> bool {
+    matches!(option_env!("OLED_ORIENTATION"), Some("portrait") | Some("PORTRAIT"))
+}
+
+fn draw_status_for_mode<DI>(
+    display: &mut oled_display::OledDisplay<DI>,
+    status: &str,
+    oled_portrait_mode: bool,
+) where
+    DI: display_interface::WriteOnlyDataCommand,
+{
+    if oled_portrait_mode {
+        if let Err(e) = display.set_rotation(DisplayRotation::Rotate0) {
+            logln!("OLED: set landscape rotation failed: {:?}", e);
+        }
+
+        if let Err(e) = oled_display::draw_status(display, status) {
+            logln!("OLED: draw_status failed: {:?}", e);
+        }
+
+        if let Err(e) = display.set_rotation(DisplayRotation::Rotate90) {
+            logln!("OLED: restore portrait rotation failed: {:?}", e);
+        }
+    } else if let Err(e) = oled_display::draw_status(display, status) {
+        logln!("OLED: draw_status failed: {:?}", e);
+    }
+}
+
+fn oled_i2c_address() -> u8 {
+    match option_env!("OLED_I2C_ADDR") {
+        Some("0x3D") | Some("0X3D") | Some("61") => 0x3D,
+        _ => 0x3C,
+    }
+}
+
 static ESP_CTRL: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
 static NET_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 static NET_STACK: StaticCell<Stack<'static>> = StaticCell::new();
@@ -66,6 +111,7 @@ static TCP_STATE: StaticCell<TcpClientState<1, 4096, 4096>> = StaticCell::new();
 #[allow(clippy::large_stack_frames, reason = "it's not unusual to allocate larger buffers etc. in main")]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
+    let oled_portrait_mode = oled_is_portrait();
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
@@ -76,6 +122,62 @@ async fn main(spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
     logln!("this is URL: {}", READINGS_URL);
+
+    let oled_addr = oled_i2c_address();
+    let mut oled = match I2c::new(
+        peripherals.I2C0,
+        I2cConfig::default().with_frequency(Rate::from_khz(100)),
+    ) {
+        Ok(i2c) => {
+            let mut i2c = i2c.with_sda(peripherals.GPIO21).with_scl(peripherals.GPIO22);
+            let mut found_any = false;
+            logln!("I2C scan start (GPIO21 SDA, GPIO22 SCL)...");
+            for addr in 0x08u8..=0x77u8 {
+                if i2c.write(addr, &[]).is_ok() {
+                    found_any = true;
+                    logln!("I2C: found device at 0x{:02X}", addr);
+                }
+            }
+            if !found_any {
+                logln!("I2C scan: no device ACK on 0x08..0x77");
+            }
+            Some(
+                Ssd1306::new(
+                    I2CDisplayInterface::new_custom_address(i2c, oled_addr),
+                    DisplaySize128x32,
+                    DisplayRotation::Rotate0,
+                )
+                .into_buffered_graphics_mode(),
+            )
+        }
+        Err(e) => {
+            logln!("OLED: I2C bus init failed: {:?}", e);
+            None
+        }
+    };
+
+    if let Some(display) = oled.as_mut() {
+        if oled_portrait_mode {
+            if let Err(e) = display.set_rotation(DisplayRotation::Rotate90) {
+                logln!("OLED: initial portrait rotation failed: {:?}", e);
+            }
+        }
+
+        match oled_display::init_screen(display, "Booting WiFi...") {
+            Ok(()) => {
+                if oled_portrait_mode {
+                    draw_status_for_mode(display, "Booting WiFi...", oled_portrait_mode);
+                }
+                logln!("OLED: init OK at I2C address 0x{:02X}", oled_addr);
+            }
+            Err(e) => {
+                logln!("OLED: init failed at I2C address 0x{:02X}: {:?}", oled_addr, e);
+                oled = None;
+            }
+        }
+    } else {
+        logln!("OLED: disabled (bus init failed)");
+    }
 
     let esp_radio_ctrl: &'static esp_radio::Controller<'static> =
         ESP_CTRL.init(esp_radio::init().unwrap());
@@ -121,6 +223,7 @@ async fn main(spawner: Spawner) {
     let mut dht22 = Dht22::new(dht22_pin, Delay::new());
     let mut consecutive_post_errors: u8 = 0;
     let mut last_post_error: Option<alloc::string::String> = None;
+    let mut last_sent_secs: usize = 0;
     let mut loop_counter: u32 = 0;
 
     loop {
@@ -142,6 +245,20 @@ async fn main(spawner: Spawner) {
                     sensor_reading.temperature,
                     sensor_reading.humidity
                 );
+                if let Some(display) = oled.as_mut() {
+                    let total_secs = (embassy_time::Instant::now().as_millis() / 1000) as usize;
+                    let hours = ((total_secs / 3600) % 24) as u8;
+                    let minutes = ((total_secs % 3600) / 60) as u8;
+                    let data_sent = total_secs.saturating_sub(last_sent_secs) < 5;
+                    let _ = oled_display::show_reading(
+                        display,
+                        sensor_reading.temperature,
+                        sensor_reading.humidity,
+                        hours,
+                        minutes,
+                        data_sent,
+                    );
+                }
                 let post_error_str: Option<alloc::string::String> = None;
                 let values = [
                     body::SensorValue {
@@ -174,6 +291,8 @@ async fn main(spawner: Spawner) {
                 if post_ok {
                     consecutive_post_errors = 0;
                     last_post_error = None;
+                    let secs = (embassy_time::Instant::now().as_millis() / 1000) as usize;
+                    last_sent_secs = secs;
                     if let Some(unix_sec) = server_unix_sec {
                         set_time_sync_from_unix(unix_sec);
                     }

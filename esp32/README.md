@@ -19,12 +19,14 @@ esp32/
 ├── wroom/
 │   ├── .cargo/config.toml
 │   ├── Cargo.toml
-│   └── src/bin/main.rs
+│   ├── src/bin/main.rs
+│   └── README.md
 ├── shared/
 │   ├── runtime_shared.rs
 │   ├── app_config.rs
 │   ├── config_portal.rs
-│   └── wifi_runtime.rs
+│   ├── wifi_runtime.rs
+│   └── oled_display.rs
 └── README.md
 ```
 
@@ -40,6 +42,8 @@ Files in `shared/` represent common logic and data flow used by both platforms:
    - Access Point HTTP portal for onboarding/config updates.
 - `shared/wifi_runtime.rs`
    - WiFi state machine and reconnect behavior.
+- `shared/oled_display.rs`
+   - Shared SSD1306 OLED rendering helpers used by both boards.
 
 ## Board-Specific Components
 
@@ -50,6 +54,7 @@ Each board keeps hardware-specific setup and toolchain config in its own project
 - Toolchain: nightly + `riscv32imc-unknown-none-elf`
 - Typical pins:
    - DHT22: GPIO5
+   - OLED I2C: SDA GPIO6, SCL GPIO7
    - Button: GPIO9
    - LED: GPIO8
 - Flasher runner and WiFi/API env are in `c3/.cargo/config.toml`.
@@ -59,6 +64,7 @@ Each board keeps hardware-specific setup and toolchain config in its own project
 - Toolchain: espup Xtensa environment
 - Typical pins:
    - DHT22: GPIO4
+   - OLED I2C: SDA GPIO21, SCL GPIO22
    - Button: GPIO0
    - LED: GPIO2
 - Flasher runner and WiFi/API env are in `wroom/.cargo/config.toml`.

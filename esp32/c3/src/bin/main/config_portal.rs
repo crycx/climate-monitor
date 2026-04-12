@@ -490,7 +490,20 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next.api_key = query_param(full_path, "api_key").unwrap_or_default();
     next.temp_offset = query_param(full_path, "temp_offset").unwrap_or_else(|| current.temp_offset.clone());
     next.hum_offset = query_param(full_path, "hum_offset").unwrap_or_else(|| current.hum_offset.clone());
+    next.oled_orientation = normalize_oled_orientation(
+        query_param(full_path, "oled_orientation")
+            .unwrap_or_else(|| current.oled_orientation.clone())
+            .as_str(),
+    )
+    .into();
     next
+}
+
+fn normalize_oled_orientation(value: &str) -> &str {
+    match value {
+        "portrait" => "portrait",
+        _ => "landscape",
+    }
 }
 
 fn html_escape(input: &str) -> String {
@@ -591,7 +604,15 @@ where
     conn.write_all(html_escape(&cfg.temp_offset).as_bytes()).await?;
     conn.write_all(b"'></label><label>Humidity offset (%)<input name='hum_offset' value='").await?;
     conn.write_all(html_escape(&cfg.hum_offset).as_bytes()).await?;
-    conn.write_all(b"'></label></section><div class='actions panel'><button class='primary' type='submit'>Save settings</button></div></form><section class='card panel'><div class='actions'><h3 style='margin:0'>Runtime log</h3><button class='secondary' type='button' id='log-btn'>Refresh log</button></div><pre id='runtime-log'>Loading...</pre></section><datalist id='wifi-options'>").await?;
+    conn.write_all(b"'></label></section><section class='card panel'><h3>Display</h3><label>OLED orientation<select name='oled_orientation'><option value='landscape'").await?;
+    if cfg.oled_orientation.as_str() != "portrait" {
+        conn.write_all(b" selected").await?;
+    }
+    conn.write_all(b">Landscape</option><option value='portrait'").await?;
+    if cfg.oled_orientation.as_str() == "portrait" {
+        conn.write_all(b" selected").await?;
+    }
+    conn.write_all(b">Portrait</option></select></label></section><div class='actions panel'><button class='primary' type='submit'>Save settings</button></div></form><section class='card panel'><div class='actions'><h3 style='margin:0'>Runtime log</h3><button class='secondary' type='button' id='log-btn'>Refresh log</button></div><pre id='runtime-log'>Loading...</pre></section><datalist id='wifi-options'>").await?;
     let cached_options = render_cached_wifi_options();
     if !cached_options.is_empty() {
         conn.write_all(cached_options.as_bytes()).await?;

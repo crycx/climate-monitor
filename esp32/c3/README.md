@@ -8,7 +8,29 @@ HTTPS to the Climate Monitor backend API.
 | Component | Detail |
 |-----------|--------|
 | Board | ESP32-C3 (RISC-V, e.g. ESP32-C3-DevKitM-1) |
-| Sensor | DHT22 connected to **GPIO10** (open-drain, pull-up) |
+| Sensor | DHT22 data connected to **GPIO5** (open-drain, pull-up) |
+| Display | 0.91" OLED SSD1306 (I2C): **SDA GPIO6**, **SCL/SCK GPIO7** |
+
+### Wiring
+
+#### DHT22
+
+- VCC -> 3V3 (recommended)
+- GND -> GND
+- DATA -> GPIO5
+- 10k pull-up resistor between DATA and 3V3 (if your DHT board does not include one)
+
+#### OLED 0.91" (SSD1306, I2C)
+
+- GND -> GND
+- VCC -> 3V3
+- SDA -> GPIO6
+- SCK (same as SCL on I2C modules) -> GPIO7
+
+### Electrical safety note
+
+If DHT22 is powered from 5V, do not connect DATA directly to ESP32-C3 GPIO.
+ESP32-C3 pins are not 5V tolerant. Either power DHT22 from 3V3, or use a level shifter on DATA.
 
 ## Prerequisites
 
@@ -166,4 +188,5 @@ esp32/c3/
 | `WiFi: connect error` | Wrong SSID/password | Check `.cargo/config.toml` credentials |
 | `POST → HTTP 401` | Missing/wrong API key | Insert device row in DB or fix `API_KEY` |
 | `POST → HTTP 500` | Server error | Check server logs: `sudo docker compose logs api --tail 30` |
-| DHT22 always errors | Wiring | Check GPIO10 connection and pull-up resistor |
+| DHT22 always errors | Wiring | Check GPIO5 connection and pull-up resistor |
+| OLED blank screen | Wiring/address mismatch | Check GPIO6/GPIO7, then test OLED I2C address `0x3C` vs `0x3D` |

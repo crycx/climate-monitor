@@ -38,6 +38,11 @@ no-tls = []
 
 [dependencies]
 embedded-dht-rs = { version = "0.5.0", features = ["dht22"] }
+embedded-graphics = "0.8.1"
+ssd1306 = "0.10.0"
+display-interface = "0.5.0"
+display-interface-i2c = "0.5.0"
+heapless = "0.8.0"
 
 # Keep esp-backtrace/esp-println aligned with esp-hal 1.x.
 esp-backtrace = { version = "0.18.1", features = [
