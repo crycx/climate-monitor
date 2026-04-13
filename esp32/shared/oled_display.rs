@@ -18,6 +18,15 @@ use ssd1306::{
 
 pub type OledDisplay<DI> = Ssd1306<DI, DisplaySize128x32, BufferedGraphicsMode<DisplaySize128x32>>;
 
+const DISPLAY_WIDTH_PX: i32 = 128;
+const FONT_4X6_CHAR_WIDTH_PX: i32 = 4;
+const BRAND_TEXT: &str = "ClimateMonitor";
+
+fn brand_right_x() -> i32 {
+    let text_width = BRAND_TEXT.len() as i32 * FONT_4X6_CHAR_WIDTH_PX;
+    (DISPLAY_WIDTH_PX - text_width).max(0)
+}
+
 fn flush_resilient<DI>(display: &mut OledDisplay<DI>) -> Result<(), DisplayError>
 where
     DI: WriteOnlyDataCommand,
@@ -65,11 +74,14 @@ where
     DI: WriteOnlyDataCommand,
 {
     let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+    let small_style = MonoTextStyle::new(&FONT_4X6, BinaryColor::On);
 
     let _ = display.clear(BinaryColor::Off);
     let _ = Text::with_baseline("Climate monitor", Point::new(0, 0), text_style, Baseline::Top)
         .draw(display);
-    let _ = Text::with_baseline(status, Point::new(0, 16), text_style, Baseline::Top).draw(display);
+    let _ = Text::with_baseline(status, Point::new(0, 11), text_style, Baseline::Top).draw(display);
+    let _ = Text::with_baseline(BRAND_TEXT, Point::new(brand_right_x(), 26), small_style, Baseline::Top)
+        .draw(display);
     flush_resilient(display)
 }
 
@@ -86,6 +98,7 @@ where
     DI: WriteOnlyDataCommand,
 {
     let small_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+    let tiny_style = MonoTextStyle::new(&FONT_4X6, BinaryColor::On);
     let mut top_line: String<24> = String::new();
     let mut bottom_line: String<24> = String::new();
 
@@ -98,7 +111,11 @@ where
 
     let _ = Text::with_baseline(top_line.as_str(), Point::new(0, 0), small_style, Baseline::Top)
         .draw(display);
-    let _ = Text::with_baseline(bottom_line.as_str(), Point::new(0, 16), small_style, Baseline::Top)
+    let _ = Text::with_baseline(bottom_line.as_str(), Point::new(0, 11), small_style, Baseline::Top)
+        .draw(display);
+
+    // Bottom right: "ClimateMonitor"
+    let _ = Text::with_baseline(BRAND_TEXT, Point::new(brand_right_x(), 26), tiny_style, Baseline::Top)
         .draw(display);
 
     flush_resilient(display)
@@ -147,18 +164,19 @@ where
         }
 
         let _ = display.clear(BinaryColor::Off);
+        // Portrait: T at y=0, H at y=11, SENT at y=22 (10px spacing for FONT_6X10)
         let _ = Text::with_baseline("T:", Point::new(0, 0), compact_style, Baseline::Top)
             .draw(display);
-        let _ = Text::with_baseline(temp_value.as_str(), Point::new(0, 8), portrait_value_style, Baseline::Top)
+        let _ = Text::with_baseline(temp_value.as_str(), Point::new(10, 0), portrait_value_style, Baseline::Top)
             .draw(display);
 
-        let _ = Text::with_baseline("H:", Point::new(0, 26), compact_style, Baseline::Top)
+        let _ = Text::with_baseline("H:", Point::new(0, 11), compact_style, Baseline::Top)
             .draw(display);
-        let _ = Text::with_baseline(hum_value.as_str(), Point::new(0, 34), portrait_value_style, Baseline::Top)
+        let _ = Text::with_baseline(hum_value.as_str(), Point::new(10, 11), portrait_value_style, Baseline::Top)
             .draw(display);
 
         if data_sent {
-            let _ = Text::with_baseline("SENT", Point::new(0, 48), compact_style, Baseline::Top)
+            let _ = Text::with_baseline("SENT", Point::new(0, 22), compact_style, Baseline::Top)
                 .draw(display);
         }
 
@@ -201,7 +219,9 @@ where
 
     let _ = Text::with_baseline(top_line.as_str(), Point::new(0, 0), small_style, Baseline::Top)
         .draw(display);
-    let _ = Text::with_baseline(bottom_line.as_str(), Point::new(0, 16), small_style, Baseline::Top)
+    let _ = Text::with_baseline(bottom_line.as_str(), Point::new(0, 11), small_style, Baseline::Top)
+        .draw(display);
+    let _ = Text::with_baseline(BRAND_TEXT, Point::new(brand_right_x(), 26), compact_style, Baseline::Top)
         .draw(display);
 
     flush_resilient(display)

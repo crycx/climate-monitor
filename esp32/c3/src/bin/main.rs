@@ -123,6 +123,8 @@ const OLED_REFRESH_MS: u64 = 1000;
 #[cfg(feature = "wifi")]
 const PRECONNECT_SCAN_WAIT_MS: u64 = 2500;
 const BOOT_PRESCAN_ATTEMPTS: u8 = 4;
+const OLED_BOOT_INIT_RETRIES: u8 = 5;
+const OLED_BOOT_INIT_RETRY_DELAY_MS: u32 = 150;
 #[cfg(feature = "wifi")]
 const SAVE_AP_CLOSE_DELAY_SECS: u64 = 2;
 #[cfg(feature = "wifi")]
@@ -369,9 +371,13 @@ async fn scan_and_connect_best_configured_wifi(
 fn main() -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
+    let delay = Delay::new();
 
     esp_alloc::heap_allocator!(size: 36 * 1024);
     esp_println::logger::init_logger_from_env();
+
+    // Give SSD1306 modules a short power-up settle window on cold boot.
+    delay.delay_millis(OLED_BOOT_INIT_RETRY_DELAY_MS);
 
     let oled_addr = oled_i2c_address();
     let mut oled = match I2c::new(
@@ -407,24 +413,42 @@ fn main() -> ! {
     };
 
     if let Some(display) = oled.as_mut() {
-        match oled_display::init_screen(display, "Booting...") {
-            Ok(()) => {
-                esp_println::println!("OLED: init OK at I2C address 0x{:02X}", oled_addr);
+        let mut initialized = false;
+        for attempt in 1..=OLED_BOOT_INIT_RETRIES {
+            match oled_display::init_screen(display, "Booting...") {
+                Ok(()) => {
+                    esp_println::println!(
+                        "OLED: init OK at I2C address 0x{:02X} (attempt {}/{})",
+                        oled_addr,
+                        attempt,
+                        OLED_BOOT_INIT_RETRIES
+                    );
+                    initialized = true;
+                    break;
+                }
+                Err(e) => {
+                    esp_println::println!(
+                        "OLED: init failed at I2C address 0x{:02X} (attempt {}/{}): {:?}",
+                        oled_addr,
+                        attempt,
+                        OLED_BOOT_INIT_RETRIES,
+                        e
+                    );
+
+                    if attempt < OLED_BOOT_INIT_RETRIES {
+                        delay.delay_millis(OLED_BOOT_INIT_RETRY_DELAY_MS);
+                    }
+                }
             }
-            Err(e) => {
-                esp_println::println!(
-                    "OLED: init failed at I2C address 0x{:02X}: {:?}",
-                    oled_addr,
-                    e
-                );
-                oled = None;
-            }
+        }
+
+        if !initialized {
+            esp_println::println!("OLED: disabling display after repeated init failures");
+            oled = None;
         }
     } else {
         esp_println::println!("OLED: disabled (bus init failed)");
     }
-
-    let delay = Delay::new();
 
     let mut dht22_pin = Flex::new(peripherals.GPIO5);
     dht22_pin.apply_output_config(
@@ -569,9 +593,13 @@ fn find_best_ssid(cfg: &AppConfig) -> Option<(String, String, String)> {
 async fn main(spawner: Spawner) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
+    let delay = Delay::new();
 
     esp_alloc::heap_allocator!(size: 72 * 1024);
     esp_println::logger::init_logger_from_env();
+
+    // Give SSD1306 modules a short power-up settle window on cold boot.
+    delay.delay_millis(OLED_BOOT_INIT_RETRY_DELAY_MS);
 
     // Start the RISC-V RTOS scheduler (required by esp_radio::init).
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -623,22 +651,39 @@ async fn main(spawner: Spawner) {
     };
 
     if let Some(display) = oled.as_mut() {
-        match oled_display::init_screen(display, "Booting WiFi...") {
-            Ok(()) => {
-                log_runtime_line(
-                    format!("OLED: init OK at I2C address 0x{:02X}", oled_addr).as_str(),
-                );
+        let mut initialized = false;
+        for attempt in 1..=OLED_BOOT_INIT_RETRIES {
+            match oled_display::init_screen(display, "Booting WiFi...") {
+                Ok(()) => {
+                    log_runtime_line(
+                        format!(
+                            "OLED: init OK at I2C address 0x{:02X} (attempt {}/{})",
+                            oled_addr, attempt, OLED_BOOT_INIT_RETRIES
+                        )
+                        .as_str(),
+                    );
+                    initialized = true;
+                    break;
+                }
+                Err(e) => {
+                    log_runtime_line(
+                        format!(
+                            "OLED: init failed at I2C address 0x{:02X} (attempt {}/{}): {:?}",
+                            oled_addr, attempt, OLED_BOOT_INIT_RETRIES, e
+                        )
+                        .as_str(),
+                    );
+
+                    if attempt < OLED_BOOT_INIT_RETRIES {
+                        delay.delay_millis(OLED_BOOT_INIT_RETRY_DELAY_MS);
+                    }
+                }
             }
-            Err(e) => {
-                log_runtime_line(
-                    format!(
-                        "OLED: init failed at I2C address 0x{:02X}: {:?}",
-                        oled_addr, e
-                    )
-                    .as_str(),
-                );
-                oled = None;
-            }
+        }
+
+        if !initialized {
+            log_runtime_line("OLED: disabling display after repeated init failures");
+            oled = None;
         }
     } else {
         log_runtime_line("OLED: disabled (bus init failed)");

@@ -2,8 +2,6 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_net::{dns::DnsQueryType, tcp::TcpSocket, IpEndpoint, Stack};
 use embassy_time::Duration;
 
-use crate::READINGS_URL;
-
 #[embassy_executor::task]
 pub async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::WifiDevice<'static>>) {
     runner.run().await;
@@ -12,12 +10,16 @@ pub async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::
 static DNS_ERROR_DETAIL_LOGGED: AtomicBool = AtomicBool::new(false);
 static DNS_FAILURE_STREAK: AtomicBool = AtomicBool::new(false);
 
-pub async fn verify_dns(stack: &'static Stack<'static>, wifi_connected: Option<bool>) -> bool {
+pub async fn verify_dns(
+    stack: &'static Stack<'static>,
+    api_url: &str,
+    wifi_connected: Option<bool>,
+) -> bool {
     let hostname = {
-        let after_scheme = READINGS_URL
+        let after_scheme = api_url
             .find("://")
-            .map(|i| &READINGS_URL[i + 3..])
-            .unwrap_or(READINGS_URL);
+            .map(|i| &api_url[i + 3..])
+            .unwrap_or(api_url);
         after_scheme
             .find('/')
             .map(|i| &after_scheme[..i])
