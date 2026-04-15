@@ -443,8 +443,9 @@ fn main() -> ! {
         }
 
         if !initialized {
-            esp_println::println!("OLED: disabling display after repeated init failures");
-            oled = None;
+            esp_println::println!(
+                "OLED: init did not succeed at boot; keeping OLED active for runtime recovery"
+            );
         }
     } else {
         esp_println::println!("OLED: disabled (bus init failed)");
@@ -682,8 +683,7 @@ async fn main(spawner: Spawner) {
         }
 
         if !initialized {
-            log_runtime_line("OLED: disabling display after repeated init failures");
-            oled = None;
+            log_runtime_line("OLED: init did not succeed at boot; runtime recovery remains enabled");
         }
     } else {
         log_runtime_line("OLED: disabled (bus init failed)");

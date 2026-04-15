@@ -1,4 +1,5 @@
 use core::fmt::Write;
+use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 use display_interface::{DisplayError, WriteOnlyDataCommand};
 use embedded_graphics::{
@@ -21,16 +22,46 @@ pub type OledDisplay<DI> = Ssd1306<DI, DisplaySize128x32, BufferedGraphicsMode<D
 const DISPLAY_WIDTH_PX: i32 = 128;
 const FONT_4X6_CHAR_WIDTH_PX: i32 = 4;
 const BRAND_TEXT: &str = "ClimateMonitor";
+const OLED_PERIODIC_INIT_DRAWS: u16 = 10;
+static DISPLAY_NEEDS_INIT: AtomicBool = AtomicBool::new(true);
+static DRAW_COUNTER: AtomicU16 = AtomicU16::new(0);
 
 fn brand_right_x() -> i32 {
     let text_width = BRAND_TEXT.len() as i32 * FONT_4X6_CHAR_WIDTH_PX;
     (DISPLAY_WIDTH_PX - text_width).max(0)
 }
 
+fn ensure_initialized<DI>(display: &mut OledDisplay<DI>) -> Result<(), DisplayError>
+where
+    DI: WriteOnlyDataCommand,
+{
+    if !DISPLAY_NEEDS_INIT.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+
+    display.init()?;
+    display.set_brightness(Brightness::BRIGHTEST)?;
+    DISPLAY_NEEDS_INIT.store(false, Ordering::Relaxed);
+    esp_println::println!("OLED: initialized successfully");
+    Ok(())
+}
+
 fn flush_resilient<DI>(display: &mut OledDisplay<DI>) -> Result<(), DisplayError>
 where
     DI: WriteOnlyDataCommand,
 {
+    let next_draw = DRAW_COUNTER.load(Ordering::Relaxed).wrapping_add(1);
+    DRAW_COUNTER.store(next_draw, Ordering::Relaxed);
+    if next_draw >= OLED_PERIODIC_INIT_DRAWS {
+        DRAW_COUNTER.store(0, Ordering::Relaxed);
+        DISPLAY_NEEDS_INIT.store(true, Ordering::Relaxed);
+        esp_println::println!("OLED: periodic init check (draw #{})",(next_draw));
+    }
+
+    // If init has failed previously (for example display unplugged at boot),
+    // keep attempting init on each draw until it succeeds.
+    ensure_initialized(display)?;
+
     // Retry up to 5 times before reinit. Transient I2C glitches caused by WiFi
     // Tx activity on ESP32-C3 typically resolve within 1-3 quick retries.
     // Reaching reinit too fast causes display.init() to send DISPLAYOFF, which
@@ -40,15 +71,12 @@ where
             return Ok(());
         }
     }
+    DISPLAY_NEEDS_INIT.store(true, Ordering::Relaxed);
     esp_println::println!("OLED: flush retry x5 failed, reinitializing display");
 
     // Last resort: reinitialize controller and resend current framebuffer.
-    if let Err(e) = display.init() {
+    if let Err(e) = ensure_initialized(display) {
         esp_println::println!("OLED: reinit failed: {:?}", e);
-        return Err(e);
-    }
-    if let Err(e) = display.set_brightness(Brightness::BRIGHTEST) {
-        esp_println::println!("OLED: brightness restore failed: {:?}", e);
         return Err(e);
     }
     let flush_result = display.flush();
@@ -64,8 +92,8 @@ pub fn init_screen<DI>(display: &mut OledDisplay<DI>, status: &str) -> Result<()
 where
     DI: WriteOnlyDataCommand,
 {
-    display.init()?;
-    display.set_brightness(Brightness::BRIGHTEST)?;
+    DISPLAY_NEEDS_INIT.store(true, Ordering::Relaxed);
+    ensure_initialized(display)?;
     draw_status(display, status)
 }
 
