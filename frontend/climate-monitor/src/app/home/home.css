@@ -221,11 +221,43 @@
 	box-shadow: 0 4px 14px rgba(16, 24, 40, 0.06);
 }
 
+.chart-card.cdk-drag-preview,
+.dash-card.cdk-drag-preview {
+	box-shadow: 0 10px 30px rgba(16, 24, 40, 0.2);
+	opacity: 0.95;
+}
+
+.chart-card.cdk-drag-placeholder,
+.dash-card.cdk-drag-placeholder {
+	opacity: 0.35;
+}
+
+.chart-grid.cdk-drop-list-dragging .chart-card:not(.cdk-drag-placeholder),
+.dashboard-grid.cdk-drop-list-dragging .dash-card:not(.cdk-drag-placeholder) {
+	transition: transform 180ms ease;
+}
+
 .chart-card-header {
 	display: flex;
 	align-items: baseline;
 	gap: 0.5rem;
 	margin-bottom: 0.5rem;
+}
+
+
+.chart-card-header .drag-handle {
+	margin-left: auto;
+	color: #667085;
+	cursor: grab;
+}
+
+.dash-card-header .drag-handle {
+	color: #667085;
+	cursor: grab;
+}
+
+.drag-handle:active {
+	cursor: grabbing;
 }
 
 .chart-card-header h2 {

@@ -24,6 +24,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatSelectModule } from '@angular/material/select';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
+import { DragDropModule } from '@angular/cdk/drag-drop';
 import { ServiceWorkerModule } from '@angular/service-worker';
 import { Snackbar } from './custom-components/snackbar/snackbar';
 import { CredentialsInterceptor } from './auth/credentials.interceptor';
@@ -94,6 +95,7 @@ registerLocaleData(localeEt);
     MatCheckboxModule,
     MatSelectModule,
     MatButtonToggleModule,
+    DragDropModule,
     ServiceWorkerModule.register('ngsw-worker.js', {
       enabled: environment.production,
       registrationStrategy: 'registerImmediately',

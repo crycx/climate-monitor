@@ -2,6 +2,7 @@ import { AfterViewInit, Component, ElementRef, OnDestroy, QueryList, ViewChildre
 import { finalize, Subscription, timeout } from 'rxjs';
 import { Chart, type ChartConfiguration, type Plugin, registerables } from 'chart.js';
 import { MatSnackBar, MatSnackBarRef } from '@angular/material/snack-bar';
+import { CdkDragDrop, moveItemInArray } from '@angular/cdk/drag-drop';
 import { ApiDevice, ApiLocation, ApiReading, ApiService } from '../services/api';
 import { CondensationRisk, ComfortStatus, EnvironmentMetricsResult, calculateEnvironmentMetrics } from '../services/environment-metrics.util';
 import { Snackbar } from '../custom-components/snackbar/snackbar';
@@ -116,6 +117,7 @@ export class Home implements AfterViewInit, OnDestroy {
   filtersOpen = signal(false);
   locations = signal<ApiLocation[]>([]);
   devices = signal<ApiDevice[]>([]);
+  deviceOrderIds = signal<number[]>([]);
   selectedDeviceIds = signal<number[]>([]);
   compareSelectedDeviceIds = signal<number[]>([]);
   compareSelectedLocationId = signal<number | null>(null);
@@ -134,12 +136,13 @@ export class Home implements AfterViewInit, OnDestroy {
     const selected = this.selectedDeviceIds();
     const locationDevices =
       locationId === null
-        ? this.devicesWithReadings()
-        : this.devicesWithReadings().filter((d) => d.location_id === locationId);
+        ? this.orderedDevicesWithReadings()
+        : this.orderedDevicesWithReadings().filter((d) => d.location_id === locationId);
 
     if (selected.length === 0) return locationDevices;
     return locationDevices.filter((d) => selected.includes(d.id));
   });
+  orderedDevicesWithReadings = computed(() => this.orderDevices(this.devicesWithReadings()));
   compareDeviceOptions = computed(() => {
     const locationId = this.compareSelectedLocationId();
     const devices =
@@ -328,6 +331,7 @@ export class Home implements AfterViewInit, OnDestroy {
   private readonly compareModeStorageKey = 'home.compareMode';
   private readonly derivedMetricsVisibilityStorageKey = 'home.showDerivedMetrics';
   private readonly periodInsightsVisibilityStorageKey = 'home.showPeriodInsights';
+  private readonly deviceOrderStorageKey = 'home.deviceOrderIds';
   private readonly appLocale = 'et-EE';
   private lastSelectedLocationId: number | null | undefined;
   private loadingSnackRef?: MatSnackBarRef<Snackbar>;
@@ -480,6 +484,21 @@ export class Home implements AfterViewInit, OnDestroy {
     if (storedPeriodInsightsVisibility !== undefined) {
       this.showPeriodInsights.set(storedPeriodInsightsVisibility);
     }
+
+    const storedDeviceOrder = this.readStoredDeviceOrderIds();
+    if (storedDeviceOrder) {
+      this.deviceOrderIds.set(storedDeviceOrder);
+    }
+
+    effect(() => {
+      const availableIds = this.devicesWithReadings().map((device) => device.id);
+      const normalized = this.normalizeDeviceOrder(availableIds, this.deviceOrderIds());
+      if (this.areNumberArraysEqual(normalized, this.deviceOrderIds())) {
+        return;
+      }
+      this.deviceOrderIds.set(normalized);
+      this.persistDeviceOrderIds(normalized);
+    });
   }
 
   ngAfterViewInit(): void {
@@ -571,6 +590,31 @@ export class Home implements AfterViewInit, OnDestroy {
     this.deviceCharts.clear();
     this.viewMode.set(mode);
     this.persistViewMode(mode);
+  }
+
+  onDeviceDrop(event: CdkDragDrop<ApiDevice[]>): void {
+    if (event.previousIndex === event.currentIndex) {
+      return;
+    }
+
+    const visibleDevices = [...event.container.data];
+    if (!visibleDevices.length) {
+      return;
+    }
+
+    moveItemInArray(visibleDevices, event.previousIndex, event.currentIndex);
+    const visibleReorderedIds = visibleDevices.map((device) => device.id);
+    const visibleSet = new Set(visibleReorderedIds);
+
+    const allOrderedIds = this.orderDevices(this.devicesWithReadings()).map((device) => device.id);
+    let pointer = 0;
+    const mergedOrder = allOrderedIds.map((id) =>
+      visibleSet.has(id) ? visibleReorderedIds[pointer++] : id,
+    );
+
+    const normalized = this.normalizeDeviceOrder(allOrderedIds, mergedOrder);
+    this.deviceOrderIds.set(normalized);
+    this.persistDeviceOrderIds(normalized);
   }
 
   deltaDirection(value: number | null): 'positive' | 'negative' | 'unchanged' | 'none' {
@@ -1376,6 +1420,17 @@ export class Home implements AfterViewInit, OnDestroy {
     }
   }
 
+  private persistDeviceOrderIds(ids: number[]): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(this.deviceOrderStorageKey, JSON.stringify(ids));
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }
+
   private readStoredPeriodInsightsVisibility(): boolean | undefined {
     if (typeof window === 'undefined') {
       return undefined;
@@ -1392,6 +1447,84 @@ export class Home implements AfterViewInit, OnDestroy {
       // ignore
     }
     return undefined;
+  }
+
+  private readStoredDeviceOrderIds(): number[] | undefined {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    try {
+      const raw = window.localStorage.getItem(this.deviceOrderStorageKey);
+      if (!raw) {
+        return undefined;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return undefined;
+      }
+      return parsed.filter((id): id is number => typeof id === 'number' && Number.isFinite(id));
+    } catch {
+      return undefined;
+    }
+  }
+
+  private orderDevices(devices: ApiDevice[]): ApiDevice[] {
+    if (devices.length <= 1) {
+      return devices;
+    }
+
+    const orderIndex = new Map<number, number>();
+    this.deviceOrderIds().forEach((id, index) => orderIndex.set(id, index));
+
+    return [...devices].sort((a, b) => {
+      const aOrder = orderIndex.get(a.id);
+      const bOrder = orderIndex.get(b.id);
+
+      if (aOrder !== undefined && bOrder !== undefined) {
+        return aOrder - bOrder;
+      }
+      if (aOrder !== undefined) {
+        return -1;
+      }
+      if (bOrder !== undefined) {
+        return 1;
+      }
+
+      return a.name.localeCompare(b.name, this.appLocale);
+    });
+  }
+
+  private normalizeDeviceOrder(availableIds: number[], preferredOrder: number[]): number[] {
+    const availableSet = new Set(availableIds);
+    const seen = new Set<number>();
+    const normalized: number[] = [];
+
+    for (const id of preferredOrder) {
+      if (availableSet.has(id) && !seen.has(id)) {
+        normalized.push(id);
+        seen.add(id);
+      }
+    }
+
+    for (const id of availableIds) {
+      if (!seen.has(id)) {
+        normalized.push(id);
+      }
+    }
+
+    return normalized;
+  }
+
+  private areNumberArraysEqual(a: number[], b: number[]): boolean {
+    if (a.length !== b.length) {
+      return false;
+    }
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i] !== b[i]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private openLoadingSnack(): void {

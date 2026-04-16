@@ -228,11 +228,28 @@
     </ng-template>
   </section>
 
-  <div class="chart-grid" [class.two-col]="viewMode() === 2" *ngIf="!error() && viewMode() !== 3">
-    <section class="chart-card" *ngFor="let device of visibleDevices()">
+  <div
+    class="chart-grid"
+    [class.two-col]="viewMode() === 2"
+    *ngIf="!error() && viewMode() !== 3"
+    cdkDropList
+    [cdkDropListData]="visibleDevices()"
+    (cdkDropListDropped)="onDeviceDrop($event)"
+  >
+    <section class="chart-card" *ngFor="let device of visibleDevices()" cdkDrag>
       <div class="chart-card-header">
         <h2>{{ device.name }}</h2>
         <span class="chart-location" *ngIf="getLocationName(device.location_id) as locName">{{ locName }}</span>
+        <button
+          class="drag-handle"
+          mat-icon-button
+          type="button"
+          cdkDragHandle
+          matTooltip="Drag to reorder"
+          aria-label="Drag to reorder"
+        >
+          <mat-icon>drag_indicator</mat-icon>
+        </button>
       </div>
       <div class="reading-badges">
         <span class="reading-badge temp" *ngIf="getLatestValue(device.id, 'temperature') as t">{{ t | number:'1.1-1' }} °C</span>
@@ -248,11 +265,27 @@
     </p>
   </div>
 
-  <div class="dashboard-grid" *ngIf="!error() && viewMode() === 3">
-    <div class="dash-card" *ngFor="let device of visibleDevices()">
+  <div
+    class="dashboard-grid"
+    *ngIf="!error() && viewMode() === 3"
+    cdkDropList
+    [cdkDropListData]="visibleDevices()"
+    (cdkDropListDropped)="onDeviceDrop($event)"
+  >
+    <div class="dash-card" *ngFor="let device of visibleDevices()" cdkDrag>
       <div class="dash-card-header">
         <span class="dash-device-name">{{ device.name }}</span>
         <span class="dash-location" *ngIf="getLocationName(device.location_id) as loc">{{ loc }}</span>
+        <button
+          class="drag-handle"
+          mat-icon-button
+          type="button"
+          cdkDragHandle
+          matTooltip="Drag to reorder"
+          aria-label="Drag to reorder"
+        >
+          <mat-icon>drag_indicator</mat-icon>
+        </button>
         <div class="dash-period-badge" *ngIf="deviceStats().get(device.id) as stats">
           <mat-icon class="period-icon">schedule</mat-icon>
           {{ rangeLabel() }}
