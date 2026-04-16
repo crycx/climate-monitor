@@ -16,7 +16,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
     // Steal peripherals — normaalne omandus puudub paanika ajal.
     let p = unsafe { esp_hal::peripherals::Peripherals::steal() };
-    let mut led = esp_hal::gpio::Output::new(p.GPIO8, esp_hal::gpio::Level::High, esp_hal::gpio::OutputConfig::default());
+    let mut led = esp_hal::gpio::Output::new(p.GPIO8, led_level(false), esp_hal::gpio::OutputConfig::default());
     let delay = esp_hal::delay::Delay::new();
     loop {
         led.toggle();
@@ -41,6 +41,8 @@ use esp_hal::{
     i2c::master::{Config as I2cConfig, I2c},
     time::Rate,
 };
+#[cfg(not(feature = "wifi"))]
+use esp_hal::time::Instant as HalInstant;
 use ssd1306::{I2CDisplayInterface, Ssd1306, prelude::*};
 #[cfg(feature = "wifi")]
 use esp_hal::gpio::{Input, InputConfig, Level, Output};
@@ -70,6 +72,8 @@ use reqwless::client::{TlsConfig, TlsVerify};
 use alloc::boxed::Box;
 #[cfg(feature = "wifi")]
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+#[cfg(feature = "wifi")]
+use esp_radio::wifi::WifiStaState;
 #[cfg(feature = "wifi")]
 use static_cell::StaticCell;
 
@@ -122,6 +126,7 @@ const MAIN_LOOP_TICK_MS: u64 = 250;
 const OLED_REFRESH_MS: u64 = 1000;
 #[cfg(feature = "wifi")]
 const PRECONNECT_SCAN_WAIT_MS: u64 = 2500;
+#[cfg(feature = "wifi")]
 const BOOT_PRESCAN_ATTEMPTS: u8 = 4;
 const OLED_BOOT_INIT_RETRIES: u8 = 5;
 const OLED_BOOT_INIT_RETRY_DELAY_MS: u32 = 150;
@@ -133,6 +138,23 @@ const BUTTON_EVENT_NONE: u8 = 0;
 const BUTTON_EVENT_SHORT: u8 = 1;
 #[cfg(feature = "wifi")]
 const BUTTON_EVENT_LONG: u8 = 2;
+
+fn led_active_high() -> bool {
+    cfg!(feature = "supermini")
+        || matches!(
+            option_env!("LED_ACTIVE_HIGH"),
+            Some("1" | "true" | "TRUE" | "yes" | "YES" | "high" | "HIGH")
+        )
+}
+
+fn led_level(is_on: bool) -> esp_hal::gpio::Level {
+    match (is_on, led_active_high()) {
+        (true, true) => esp_hal::gpio::Level::High,
+        (true, false) => esp_hal::gpio::Level::Low,
+        (false, true) => esp_hal::gpio::Level::Low,
+        (false, false) => esp_hal::gpio::Level::High,
+    }
+}
 
 fn oled_i2c_address() -> u8 {
     match option_env!("OLED_I2C_ADDR") {
@@ -218,6 +240,36 @@ fn oled_rotation_from_config(orientation: &str) -> DisplayRotation {
 #[cfg(feature = "wifi")]
 fn oled_is_portrait(orientation: &str) -> bool {
     orientation == "portrait"
+}
+
+#[cfg(feature = "wifi")]
+fn drive_led(led: &mut Output<'static>, is_on: bool) {
+    match led_level(is_on) {
+        Level::High => led.set_high(),
+        Level::Low => led.set_low(),
+    }
+}
+
+#[cfg(feature = "wifi")]
+fn stack_has_ipv4(stack: &Stack<'static>) -> bool {
+    stack.is_config_up() || stack.config_v4().is_some()
+}
+
+#[cfg(feature = "wifi")]
+fn wifi_sta_connected() -> bool {
+    esp_radio::wifi::sta_state() == WifiStaState::Connected
+}
+
+#[cfg(feature = "wifi")]
+async fn wait_for_sta_network(stack: &'static Stack<'static>, timeout: Duration) -> bool {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        if stack_has_ipv4(stack) {
+            return true;
+        }
+        Timer::after(Duration::from_millis(250)).await;
+    }
+    stack_has_ipv4(stack)
 }
 
 #[cfg(feature = "wifi")]
@@ -474,7 +526,7 @@ fn main() -> ! {
                     temp, hum
                 );
                 if let Some(display) = oled.as_mut() {
-                    let total_secs = Instant::now().as_millis() / 1000;
+                    let total_secs = HalInstant::now().duration_since_epoch().as_millis() / 1000;
                     let hours = ((total_secs / 3600) % 24) as u8;
                     let minutes = ((total_secs % 3600) / 60) as u8;
                     let _ = oled_display::show_reading(display, temp, hum, hours, minutes, false);
@@ -497,21 +549,21 @@ async fn led_task(mut led: Output<'static>) {
     loop {
         if BOOTING.load(Ordering::Relaxed) {
             // Boot in progress: keep LED ON until WiFi is connected or AP mode is entered.
-            led.set_low();
+            drive_led(&mut led, true);
             Timer::after(Duration::from_millis(100)).await;
         } else if AP_ACTIVE.load(Ordering::Relaxed) {
-            // AP portal aktiivne: vilgub aeglaselt 500 ms (aktiiv-LOW: low=sees)
-            led.set_low();
+            // AP portal aktiivne: vilgub aeglaselt; polarity is controlled by LED_ACTIVE_HIGH.
+            drive_led(&mut led, true);
             Timer::after(Duration::from_millis(500)).await;
-            led.set_high();
+            drive_led(&mut led, false);
             Timer::after(Duration::from_millis(500)).await;
         } else if SENDING.load(Ordering::Relaxed) {
             // Andmete saatmine: LED püsivalt sees
-            led.set_low();
+            drive_led(&mut led, true);
             Timer::after(Duration::from_millis(50)).await;
         } else {
             // Ooteseisund: LED väljas
-            led.set_high();
+            drive_led(&mut led, false);
             Timer::after(Duration::from_millis(100)).await;
         }
     }
@@ -612,8 +664,8 @@ async fn main(spawner: Spawner) {
     let boot_button_held = btn.level() == Level::Low;
     spawner.spawn(gpio_poll_task(btn)).unwrap();
 
-    // GPIO8 = built-in LED, vilgub kui AP portal on aktiivne.
-    let led = Output::new(peripherals.GPIO8, Level::High, OutputConfig::default());
+    // GPIO8 = built-in LED. Set LED_ACTIVE_HIGH=1 for boards like the C3 Super Mini.
+    let led = Output::new(peripherals.GPIO8, led_level(false), OutputConfig::default());
     spawner.spawn(led_task(led)).unwrap();
 
     let mut flash = FlashStorage::new(peripherals.FLASH);
@@ -793,12 +845,13 @@ async fn main(spawner: Spawner) {
             };
             draw_status_for_mode(display, status.as_str(), oled_portrait_mode);
         }
-        let boot_connected = embassy_time::with_timeout(
-            Duration::from_secs(BOOT_CONNECT_TIMEOUT_SECS),
-            stack.wait_config_up(),
-        )
-        .await
-        .is_ok();
+        let mut boot_connected =
+            wait_for_sta_network(stack, Duration::from_secs(BOOT_CONNECT_TIMEOUT_SECS)).await;
+
+        if !boot_connected && wifi_sta_connected() {
+            log_runtime_line("WiFi STA link is up; waiting a bit longer for IPv4...");
+            boot_connected = wait_for_sta_network(stack, Duration::from_secs(10)).await;
+        }
 
         if boot_connected {
             log_runtime_line("WiFi connected during boot.");
@@ -841,7 +894,7 @@ async fn main(spawner: Spawner) {
     let mut last_temp: Option<f32> = None;
     let mut last_hum: Option<f32> = None;
 
-    let mut net_was_up = stack.is_config_up();
+    let mut net_was_up = stack_has_ipv4(stack);
     let mut next_sensor_at = Instant::now() + Duration::from_secs(SENSOR_INTERVAL_SECS);
     if trigger_sensor_now_after_boot {
         next_sensor_at = Instant::now();
@@ -880,7 +933,7 @@ async fn main(spawner: Spawner) {
                         )
                         .await;
 
-                        if stack.is_config_up() {
+                        if stack_has_ipv4(stack) {
                             log_runtime_line("Button: STA already connected, skipping reconnect.");
                             if let Some(display) = oled.as_mut() {
                                 draw_status_for_mode(
@@ -929,7 +982,7 @@ async fn main(spawner: Spawner) {
             }
         }
 
-        let net_is_up_now = stack.is_config_up();
+        let net_is_up_now = stack_has_ipv4(stack);
         if net_is_up_now && !net_was_up {
             log_runtime_line("WiFi connected");
             if let Some(cfg) = stack.config_v4() {
@@ -970,7 +1023,7 @@ async fn main(spawner: Spawner) {
                 let cfg = config_handle.lock().await;
                 let pending_oled_orientation = cfg.oled_orientation.clone();
                 if has_wifi_config(&cfg) {
-                    let should_reconnect = !stack.is_config_up();
+                    let should_reconnect = !stack_has_ipv4(stack);
                     if should_reconnect {
                         if let Some((ssid, location)) = scan_and_connect_best_configured_wifi(
                             &wifi_sender,
@@ -1047,7 +1100,7 @@ async fn main(spawner: Spawner) {
         }
 
         let now = Instant::now();
-        if now >= next_oled_refresh_at && stack.is_config_up() && !portal_mode.is_open() {
+        if now >= next_oled_refresh_at && stack_has_ipv4(stack) && !portal_mode.is_open() {
             let total_secs = (now.as_millis() / 1000) as usize;
             let last_sent_secs = LAST_SENT_SECS.load(Ordering::Relaxed);
             let data_sent = total_secs.saturating_sub(last_sent_secs) < 5;
@@ -1091,10 +1144,10 @@ async fn main(spawner: Spawner) {
             continue;
         }
 
-        if portal_mode.is_open() && !stack.is_config_up() {
+        if portal_mode.is_open() && !stack_has_ipv4(stack) {
             log_runtime_line("AP active: STA down, sensor post paused");
             continue;
-        } else if portal_mode.is_open() && stack.is_config_up() {
+        } else if portal_mode.is_open() && stack_has_ipv4(stack) {
             log_runtime_line("AP active: STA up, sensor post continues");
         }
 
@@ -1143,7 +1196,7 @@ async fn main(spawner: Spawner) {
                     last_oled_data_sent = data_sent;
                     }
                 }
-                if stack.is_config_up() {
+                if stack_has_ipv4(stack) {
                     post_readings_with_retry(
                         stack,
                         tcp_state,
@@ -1156,12 +1209,12 @@ async fn main(spawner: Spawner) {
                     .await;
                 } else {
                     log_runtime_line("Network down, waiting for reconnect...");
-                    let reconnected = embassy_time::with_timeout(
-                        Duration::from_secs(60),
-                        stack.wait_config_up(),
-                    )
-                    .await
-                    .is_ok();
+                    let mut reconnected =
+                        wait_for_sta_network(stack, Duration::from_secs(60)).await;
+                    if !reconnected && wifi_sta_connected() {
+                        log_runtime_line("WiFi STA link is back; waiting a bit longer for IPv4...");
+                        reconnected = wait_for_sta_network(stack, Duration::from_secs(10)).await;
+                    }
                     if reconnected {
                         log_runtime_line("Reconnected, waiting 5 s before sending...");
                         Timer::after(Duration::from_secs(5)).await;

@@ -80,6 +80,19 @@
       </mat-checkbox>
 
       <button
+        class="compare-toggle compare-icon-button"
+        mat-icon-button
+        type="button"
+        (click)="onCompareModeChange(!compareMode())"
+        [class.is-active]="compareMode()"
+        [matTooltip]="compareMode() ? 'Hide comparison' : 'Compare devices'"
+        [attr.aria-label]="compareMode() ? 'Hide comparison' : 'Compare devices'"
+        [attr.aria-pressed]="compareMode()"
+      >
+        <mat-icon aria-hidden="true">compare_arrows</mat-icon>
+      </button>
+
+      <button
         class="refresh-button"
         mat-flat-button
         color="primary"
@@ -93,6 +106,127 @@
   </div>
 
   <p class="status status-error" *ngIf="!loading() && error()">{{ error() }}</p>
+
+  <section class="compare-panel" *ngIf="compareMode() && !error()">
+    <div class="compare-panel-header">
+      <div>
+        <h2>Device comparison</h2>
+        <p>
+          Use the filters below to compare devices without using the top filter for {{ rangeLabel() }}.
+        </p>
+      </div>
+
+      <div class="compare-panel-controls">
+        <mat-form-field class="compare-filter" appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Compare location</mat-label>
+          <mat-select
+            panelClass="home-select-panel"
+            [value]="compareSelectedLocationId()"
+            (selectionChange)="onCompareLocationChange($event.value)"
+          >
+            <mat-option *ngFor="let option of locationOptions()" [value]="option.id">
+              {{ option.label }}
+            </mat-option>
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field class="compare-filter compare-device-filter" appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Compare devices</mat-label>
+          <mat-select
+            multiple
+            panelClass="home-select-panel"
+            [value]="compareSelectedDeviceIds()"
+            (selectionChange)="onCompareDeviceSelectionChange($event.value)"
+          >
+            <mat-option *ngFor="let device of compareDeviceOptions()" [value]="device.id">
+              {{ device.name }}
+            </mat-option>
+          </mat-select>
+        </mat-form-field>
+      </div>
+    </div>
+
+    <ng-container *ngIf="compareAvailable(); else compareHelpText">
+      <div class="compare-grid">
+        <section class="chart-card compare-card">
+          <h3>Temperature</h3>
+          <div class="chart-shell compare-shell">
+            <canvas #comparisonCanvas></canvas>
+          </div>
+        </section>
+
+        <section class="chart-card compare-card">
+          <h3>Humidity</h3>
+          <div class="chart-shell compare-shell">
+            <canvas #comparisonCanvas></canvas>
+          </div>
+        </section>
+      </div>
+
+      <div class="compare-table-wrap">
+        <table class="compare-table">
+          <thead>
+            <tr>
+              <th>Device</th>
+              <th>Location</th>
+              <th>Temperature</th>
+              <th>Humidity</th>
+              <th>Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let row of comparisonRows()">
+              <td>
+                <span class="compare-device-name">{{ row.name }}</span>
+              </td>
+              <td>{{ row.locationName ?? '—' }}</td>
+              <td>
+                <div class="compare-metric-cell">
+                  <span *ngIf="row.temperature !== null; else emptyTemp" class="reading-badge temp">
+                    {{ row.temperature | number:'1.1-1' }} °C
+                  </span>
+                  <ng-template #emptyTemp>—</ng-template>
+                  <span
+                    class="compare-delta"
+                    *ngIf="row.tempDelta !== null"
+                    [class.positive]="deltaDirection(row.tempDelta) === 'positive'"
+                    [class.negative]="deltaDirection(row.tempDelta) === 'negative'"
+                    [class.unchanged]="deltaDirection(row.tempDelta) === 'unchanged'"
+                  >
+                    {{ formatDelta(row.tempDelta, '°C') }}
+                  </span>
+                </div>
+              </td>
+              <td>
+                <div class="compare-metric-cell">
+                  <span *ngIf="row.humidity !== null; else emptyHum" class="reading-badge hum">
+                    {{ row.humidity | number:'1.1-1' }} %
+                  </span>
+                  <ng-template #emptyHum>—</ng-template>
+                  <span
+                    class="compare-delta"
+                    *ngIf="row.humDelta !== null"
+                    [class.positive]="deltaDirection(row.humDelta) === 'positive'"
+                    [class.negative]="deltaDirection(row.humDelta) === 'negative'"
+                    [class.unchanged]="deltaDirection(row.humDelta) === 'unchanged'"
+                  >
+                    {{ formatDelta(row.humDelta, '%') }}
+                  </span>
+                </div>
+              </td>
+              <td>{{ row.lastSeenTs ? (row.lastSeenTs | timeAgo) : '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </ng-container>
+
+    <ng-template #compareHelpText>
+      <p class="compare-empty">
+        Choose at least two devices, or pick a location with multiple devices, using the comparison filters above.
+      </p>
+    </ng-template>
+  </section>
 
   <div class="chart-grid" [class.two-col]="viewMode() === 2" *ngIf="!error() && viewMode() !== 3">
     <section class="chart-card" *ngFor="let device of visibleDevices()">

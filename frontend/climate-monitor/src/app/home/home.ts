@@ -84,6 +84,19 @@ type RangeOption = {
   label: string;
 };
 
+type ComparisonMetric = 'temperature' | 'humidity';
+
+type ComparisonRow = {
+  deviceId: number;
+  name: string;
+  locationName: string | null;
+  lastSeenTs: string | null;
+  temperature: number | null;
+  humidity: number | null;
+  tempDelta: number | null;
+  humDelta: number | null;
+};
+
 @Component({
   selector: 'app-home',
   standalone: false,
@@ -94,6 +107,9 @@ export class Home implements AfterViewInit, OnDestroy {
   @ViewChildren('deviceCanvas')
   deviceCanvases!: QueryList<ElementRef<HTMLCanvasElement>>;
 
+  @ViewChildren('comparisonCanvas')
+  comparisonCanvases!: QueryList<ElementRef<HTMLCanvasElement>>;
+
   loading = signal(true);
   error = signal('');
   lastUpdated = signal('');
@@ -101,22 +117,70 @@ export class Home implements AfterViewInit, OnDestroy {
   locations = signal<ApiLocation[]>([]);
   devices = signal<ApiDevice[]>([]);
   selectedDeviceIds = signal<number[]>([]);
+  compareSelectedDeviceIds = signal<number[]>([]);
+  compareSelectedLocationId = signal<number | null>(null);
+  compareMode = signal(false);
   viewMode = signal<1 | 2 | 3>(2);
   locationOptions = computed<LocationOption[]>(() => [
     { id: null, label: 'All locations' },
     ...this.locations().map((location) => ({ id: location.id, label: location.name })),
   ]);
-  visibleDevices = computed(() => {
-    const allDevices = this.devices();
-    const selected = this.selectedDeviceIds();
+  devicesWithReadings = computed(() => {
     const readingDeviceIds = new Set(this.readings().map((r) => r.device_id));
-    const withReadings = allDevices.filter((d) => readingDeviceIds.has(d.id));
-    if (selected.length === 0) return withReadings;
-    return withReadings.filter((d) => selected.includes(d.id));
+    return this.devices().filter((d) => readingDeviceIds.has(d.id));
+  });
+  visibleDevices = computed(() => {
+    const locationId = this.selectedLocationId();
+    const selected = this.selectedDeviceIds();
+    const locationDevices =
+      locationId === null
+        ? this.devicesWithReadings()
+        : this.devicesWithReadings().filter((d) => d.location_id === locationId);
+
+    if (selected.length === 0) return locationDevices;
+    return locationDevices.filter((d) => selected.includes(d.id));
+  });
+  compareDeviceOptions = computed(() => {
+    const locationId = this.compareSelectedLocationId();
+    const devices =
+      locationId === null
+        ? this.devicesWithReadings()
+        : this.devicesWithReadings().filter((d) => d.location_id === locationId);
+
+    return [...devices].sort((a, b) => a.name.localeCompare(b.name, this.appLocale));
+  });
+  comparisonDevices = computed(() => {
+    if (!this.compareMode()) {
+      return [] as ApiDevice[];
+    }
+
+    const selected = this.compareSelectedDeviceIds();
+    const devices = this.compareDeviceOptions();
+    const filtered = selected.length === 0 ? devices : devices.filter((d) => selected.includes(d.id));
+    return filtered.length >= 2 ? filtered : [];
+  });
+  compareAvailable = computed(() => this.comparisonDevices().length >= 2);
+  comparisonRows = computed<ComparisonRow[]>(() => {
+    const statsMap = this.deviceStats();
+    return this.comparisonDevices()
+      .map((device) => {
+        const stats = statsMap.get(device.id);
+        return {
+          deviceId: device.id,
+          name: device.name,
+          locationName: this.getLocationName(device.location_id),
+          lastSeenTs: stats?.lastSeenTs ?? null,
+          temperature: stats?.tempLatest ?? null,
+          humidity: stats?.humLatest ?? null,
+          tempDelta: stats?.tempDelta ?? null,
+          humDelta: stats?.humDelta ?? null,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, this.appLocale));
   });
   deviceStats = computed(() => {
     const readings = this.readings();
-    const devices = this.visibleDevices();
+    const devices = this.devicesWithReadings();
     const map = new Map<number, DeviceStats>();
 
     const seriesValues = (deviceId: number, sensorType: string): number[] =>
@@ -254,12 +318,14 @@ export class Home implements AfterViewInit, OnDestroy {
   private locationsSub?: Subscription;
   private devicesSub?: Subscription;
   private deviceCharts = new Map<number, Chart>();
+  private comparisonCharts = new Map<ComparisonMetric, Chart>();
   private colorSchemeMedia?: MediaQueryList;
   private colorSchemeListener?: (event: MediaQueryListEvent) => void;
   private readonly autoRefreshMs = 30000;
   private readonly renderDebounceMs = 120;
   private readonly rangeStorageKey = 'home.selectedRangeHours';
   private readonly viewModeStorageKey = 'home.viewMode';
+  private readonly compareModeStorageKey = 'home.compareMode';
   private readonly derivedMetricsVisibilityStorageKey = 'home.showDerivedMetrics';
   private readonly periodInsightsVisibilityStorageKey = 'home.showPeriodInsights';
   private readonly appLocale = 'et-EE';
@@ -295,7 +361,7 @@ export class Home implements AfterViewInit, OnDestroy {
       this.error.set('');
 
       const sub = this.api
-        .getLatestReadings('asc', selectedLocationId ?? undefined, afterId, fromTs)
+        .getLatestReadings('asc', undefined, afterId, fromTs)
         .pipe(timeout(15000), finalize(() => {
           if (showLoading) {
             this.loading.set(false);
@@ -341,6 +407,7 @@ export class Home implements AfterViewInit, OnDestroy {
               chart.destroy();
             }
             this.deviceCharts.clear();
+            this.destroyComparisonCharts();
           },
         });
 
@@ -354,11 +421,13 @@ export class Home implements AfterViewInit, OnDestroy {
 
       const readings = this.readings();
       const visibleDevices = this.visibleDevices();
+      const comparisonDevices = this.comparisonDevices();
       this.isDarkMode();
       this.viewMode();
 
       const debounceId = window.setTimeout(() => {
         this.renderCharts(readings, visibleDevices);
+        this.renderComparisonCharts(readings, comparisonDevices);
       }, this.renderDebounceMs);
 
       onCleanup(() => {
@@ -397,6 +466,11 @@ export class Home implements AfterViewInit, OnDestroy {
       this.viewMode.set(storedViewMode);
     }
 
+    const storedCompareMode = this.readStoredCompareMode();
+    if (storedCompareMode !== undefined) {
+      this.compareMode.set(storedCompareMode);
+    }
+
     const storedDerivedMetricsVisibility = this.readStoredDerivedMetricsVisibility();
     if (storedDerivedMetricsVisibility !== undefined) {
       this.showDerivedMetrics.set(storedDerivedMetricsVisibility);
@@ -422,6 +496,7 @@ export class Home implements AfterViewInit, OnDestroy {
       chart.destroy();
     }
     this.deviceCharts.clear();
+    this.destroyComparisonCharts();
     this.closeLoadingSnack();
     if (this.colorSchemeMedia && this.colorSchemeListener) {
       this.colorSchemeMedia.removeEventListener('change', this.colorSchemeListener);
@@ -448,7 +523,12 @@ export class Home implements AfterViewInit, OnDestroy {
 
   onLocationChange(value: number | null): void {
     this.selectedLocationId.set(value);
-    this.refresh();
+  }
+
+  onCompareLocationChange(value: number | null): void {
+    this.compareSelectedLocationId.set(value);
+    const allowedIds = new Set(this.compareDeviceOptions().map((device) => device.id));
+    this.compareSelectedDeviceIds.update((ids) => ids.filter((id) => allowedIds.has(id)));
   }
 
   onRangeChange(value: number | null): void {
@@ -473,6 +553,15 @@ export class Home implements AfterViewInit, OnDestroy {
 
   onDeviceSelectionChange(ids: number[]): void {
     this.selectedDeviceIds.set(ids);
+  }
+
+  onCompareDeviceSelectionChange(ids: number[]): void {
+    this.compareSelectedDeviceIds.set(ids);
+  }
+
+  onCompareModeChange(checked: boolean): void {
+    this.compareMode.set(checked);
+    this.persistCompareMode(checked);
   }
 
   onViewModeChange(mode: 1 | 2 | 3): void {
@@ -652,6 +741,178 @@ export class Home implements AfterViewInit, OnDestroy {
         this.deviceCharts.delete(device.id);
       }
     });
+  }
+
+  private renderComparisonCharts(readings: ApiReading[], devices: ApiDevice[]): void {
+    if (devices.length < 2) {
+      this.destroyComparisonCharts();
+      return;
+    }
+
+    const canvases = this.comparisonCanvases?.toArray() ?? [];
+    this.renderComparisonMetricChart('temperature', canvases[0]?.nativeElement, readings, devices);
+    this.renderComparisonMetricChart('humidity', canvases[1]?.nativeElement, readings, devices);
+  }
+
+  private renderComparisonMetricChart(
+    sensorType: ComparisonMetric,
+    canvas: HTMLCanvasElement | undefined,
+    readings: ApiReading[],
+    devices: ApiDevice[],
+  ): void {
+    if (!canvas) {
+      return;
+    }
+
+    const existing = this.comparisonCharts.get(sensorType);
+    const dark = this.isDarkMode();
+    const axisColor = dark ? '#d0d5dd' : '#344054';
+    const gridColor = dark ? 'rgba(208, 213, 221, 0.18)' : 'rgba(52, 64, 84, 0.14)';
+    const unit = sensorType === 'temperature' ? '°C' : '%';
+    const title = sensorType === 'temperature' ? 'Temperature comparison' : 'Humidity comparison';
+
+    const datasets: ChartConfiguration<'line'>['data']['datasets'] = devices.map((device, index) => {
+      const deviceReadings = readings.filter((reading) => reading.device_id === device.id);
+      const series = this.toTimeSeries(this.mapSeries(deviceReadings, sensorType));
+      const lineColor = this.comparisonSeriesColor(index, 1);
+
+      return {
+        label: device.name,
+        data: series,
+        borderColor: lineColor,
+        backgroundColor: this.comparisonSeriesColor(index, 0.18),
+        fill: false,
+        showLine: true,
+        spanGaps: 10 * 60 * 1000,
+        tension: 0.25,
+        borderWidth: 2,
+        pointRadius: 1.5,
+      };
+    });
+
+    if (existing) {
+      existing.data.datasets = datasets;
+
+      const legendLabels = existing.options.plugins?.legend?.labels;
+      if (legendLabels) {
+        legendLabels.color = axisColor;
+      }
+
+      const xScale = existing.options.scales?.['x'];
+      const yScale = existing.options.scales?.['y'];
+
+      if (xScale && 'ticks' in xScale && xScale.ticks) {
+        xScale.ticks.color = axisColor;
+      }
+      if (xScale && 'grid' in xScale && xScale.grid) {
+        xScale.grid.color = gridColor;
+      }
+      if (yScale && 'ticks' in yScale && yScale.ticks) {
+        yScale.ticks.color = axisColor;
+      }
+      if (yScale && 'grid' in yScale && yScale.grid) {
+        yScale.grid.color = gridColor;
+      }
+      if (yScale && 'title' in yScale && yScale.title) {
+        yScale.title.color = axisColor;
+      }
+
+      existing.resize();
+      existing.update('none');
+      return;
+    }
+
+    const config: ChartConfiguration<'line'> = {
+      type: 'line',
+      data: {
+        datasets,
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: {
+          mode: 'nearest',
+          axis: 'x',
+          intersect: false,
+        },
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: {
+              color: axisColor,
+            },
+          },
+          title: {
+            display: false,
+            text: title,
+          },
+          tooltip: {
+            intersect: false,
+            callbacks: {
+              title: (items) => {
+                const item = items[0];
+                const raw = item?.raw as TimePoint | undefined;
+                if (!raw) {
+                  return '';
+                }
+                return new Date(raw.x).toLocaleString(this.appLocale);
+              },
+              label: (context) => {
+                const value = typeof context.parsed?.y === 'number' ? context.parsed.y.toFixed(1) : '—';
+                return `${context.dataset.label}: ${value} ${unit}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: 'linear',
+            ticks: {
+              stepSize: 5 * 60 * 1000,
+              color: axisColor,
+              callback: (value) =>
+                new Date(Number(value)).toLocaleTimeString(this.appLocale, {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                }),
+            },
+            grid: {
+              color: gridColor,
+            },
+          },
+          y: {
+            type: 'linear',
+            ticks: {
+              color: axisColor,
+            },
+            title: {
+              display: true,
+              text: unit,
+              color: axisColor,
+            },
+            grid: {
+              color: gridColor,
+            },
+          },
+        },
+      },
+    };
+
+    this.comparisonCharts.set(sensorType, new Chart(canvas, config));
+  }
+
+  private destroyComparisonCharts(): void {
+    for (const chart of this.comparisonCharts.values()) {
+      chart.destroy();
+    }
+    this.comparisonCharts.clear();
+  }
+
+  private comparisonSeriesColor(index: number, alpha = 1): string {
+    const hues = [12, 205, 272, 145, 35, 320, 88, 252];
+    const hue = hues[index % hues.length];
+    return `hsla(${hue}, 72%, 52%, ${alpha})`;
   }
 
   private mapSeries(readings: ApiReading[], sensorType: string): ReadingPoint[] {
@@ -1012,6 +1273,17 @@ export class Home implements AfterViewInit, OnDestroy {
     }
   }
 
+  private persistCompareMode(enabled: boolean): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(this.compareModeStorageKey, enabled ? '1' : '0');
+    } catch {
+      // Ignore localStorage write errors.
+    }
+  }
+
   private readStoredViewMode(): 1 | 2 | 3 | undefined {
     if (typeof window === 'undefined') {
       return undefined;
@@ -1020,6 +1292,24 @@ export class Home implements AfterViewInit, OnDestroy {
       const raw = window.localStorage.getItem(this.viewModeStorageKey);
       if (raw === '1' || raw === '2' || raw === '3') {
         return Number(raw) as 1 | 2 | 3;
+      }
+    } catch {
+      // ignore
+    }
+    return undefined;
+  }
+
+  private readStoredCompareMode(): boolean | undefined {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    try {
+      const raw = window.localStorage.getItem(this.compareModeStorageKey);
+      if (raw === '1') {
+        return true;
+      }
+      if (raw === '0') {
+        return false;
       }
     } catch {
       // ignore

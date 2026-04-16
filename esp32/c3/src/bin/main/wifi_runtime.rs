@@ -441,8 +441,8 @@ impl WifiRunner {
         if esp_radio::wifi::sta_state() == WifiStaState::Connected {
             return;
         }
-        if self.ap_up {
-            debug!("wifi: AP active, skipping STA reconnect attempt");
+        if self.ap_up && self.ssid.is_empty() {
+            debug!("wifi: AP-only mode, skipping STA reconnect attempt");
             return;
         }
 
@@ -643,8 +643,8 @@ impl WifiRunner {
                         STA_RECONNECT_DELAY_MS / 1000
                     );
                     portal_log("wifi disconnected (sta)");
-                    if self.ap_up {
-                        portal_log("wifi reconnect paused while AP portal is active");
+                    if self.ap_up && self.ssid.is_empty() {
+                        portal_log("wifi reconnect paused in AP-only mode");
                         continue;
                     }
                     Timer::after(Duration::from_millis(STA_RECONNECT_DELAY_MS)).await;

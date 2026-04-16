@@ -32,6 +32,8 @@ wifi = [
     "dep:der",
 ]
 defmt = []
+# Board variant: built-in LED is wired active-high on some ESP32-C3 Super Mini boards.
+supermini = []
 # Use plain HTTP instead of HTTPS (for local/development testing).
 # Combine with wifi: cargo run --release --features wifi,no-tls
 no-tls = []
