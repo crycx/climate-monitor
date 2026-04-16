@@ -22,7 +22,7 @@ pub type OledDisplay<DI> = Ssd1306<DI, DisplaySize128x32, BufferedGraphicsMode<D
 const DISPLAY_WIDTH_PX: i32 = 128;
 const FONT_4X6_CHAR_WIDTH_PX: i32 = 4;
 const BRAND_TEXT: &str = "ClimateMonitor";
-const OLED_PERIODIC_INIT_DRAWS: u16 = 10;
+const OLED_PERIODIC_INIT_DRAWS: u16 = 300;
 static DISPLAY_NEEDS_INIT: AtomicBool = AtomicBool::new(true);
 static DRAW_COUNTER: AtomicU16 = AtomicU16::new(0);
 
