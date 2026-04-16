@@ -233,6 +233,7 @@
     [class.two-col]="viewMode() === 2"
     *ngIf="!error() && viewMode() !== 3"
     cdkDropList
+    cdkDropListOrientation="mixed"
     [cdkDropListData]="visibleDevices()"
     (cdkDropListDropped)="onDeviceDrop($event)"
   >
@@ -245,8 +246,8 @@
           mat-icon-button
           type="button"
           cdkDragHandle
-          matTooltip="Drag to reorder"
-          aria-label="Drag to reorder"
+          matTooltip="Lohista, et muuta järjekorda"
+          aria-label="Lohista, et muuta järjekorda"
         >
           <mat-icon>drag_indicator</mat-icon>
         </button>
@@ -269,6 +270,7 @@
     class="dashboard-grid"
     *ngIf="!error() && viewMode() === 3"
     cdkDropList
+    cdkDropListOrientation="mixed"
     [cdkDropListData]="visibleDevices()"
     (cdkDropListDropped)="onDeviceDrop($event)"
   >
@@ -281,8 +283,8 @@
           mat-icon-button
           type="button"
           cdkDragHandle
-          matTooltip="Drag to reorder"
-          aria-label="Drag to reorder"
+          matTooltip="Lohista, et muuta järjekorda"
+          aria-label="Lohista, et muuta järjekorda"
         >
           <mat-icon>drag_indicator</mat-icon>
         </button>

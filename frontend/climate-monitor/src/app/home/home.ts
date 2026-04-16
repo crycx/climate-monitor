@@ -492,6 +492,9 @@ export class Home implements AfterViewInit, OnDestroy {
 
     effect(() => {
       const availableIds = this.devicesWithReadings().map((device) => device.id);
+      if (availableIds.length === 0) {
+        return;
+      }
       const normalized = this.normalizeDeviceOrder(availableIds, this.deviceOrderIds());
       if (this.areNumberArraysEqual(normalized, this.deviceOrderIds())) {
         return;
