@@ -4,6 +4,7 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
 ## ESP32 firmware docs
 
 - See `esp32/README.md` for detailed firmware documentation, including shared components and board-specific setup for ESP32-C3 and ESP32-WROOM.
+- For ESP32-C3 Super Mini boards, the built-in LED may be active-high. In that case use `LED_ACTIVE_HIGH = "1"` in `.cargo/config.toml` or run the firmware with `cargo run --release --features supermini`.
 
 ## Local development
 1. Create `.env` from template:

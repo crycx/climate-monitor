@@ -108,6 +108,20 @@ cargo run --release
 This compiles, flashes, and opens a serial monitor in one step.
 Press **Ctrl-R** to reset the board, **Ctrl-C** to exit the monitor.
 
+### ESP32-C3 Super Mini note
+
+Some ESP32-C3 Super Mini boards use an active-high built-in LED. If the LED behavior looks inverted, use one of these options:
+
+```bash
+cargo run --release --features supermini
+```
+
+Or set this in `.cargo/config.toml`:
+
+```toml
+LED_ACTIVE_HIGH = "1"
+```
+
 ### WiFi mode — local development (plain HTTP, no TLS)
 
 Use this when the backend runs on your local network over HTTP.
@@ -190,3 +204,4 @@ esp32/c3/
 | `POST → HTTP 500` | Server error | Check server logs: `sudo docker compose logs api --tail 30` |
 | DHT22 always errors | Wiring | Check GPIO5 connection and pull-up resistor |
 | OLED blank screen | Wiring/address mismatch | Check GPIO6/GPIO7, then test OLED I2C address `0x3C` vs `0x3D` |
+| LED works backwards on Super Mini | Board LED polarity is active-high | Use `LED_ACTIVE_HIGH = "1"` in `.cargo/config.toml` or run with `--features supermini` |
