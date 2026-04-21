@@ -1,5 +1,8 @@
 .home-page {
 	padding: 1.25rem;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
 }
 
 .home-header {
@@ -8,6 +11,10 @@
 	align-items: stretch;
 	gap: 0.9rem;
 	margin-bottom: 1rem;
+}
+
+.home-scroll-area {
+	min-height: 0;
 }
 
 .filter-panel {
@@ -787,6 +794,29 @@
 
 	.dash-delta.unchanged {
 		color: #8899b0;
+	}
+}
+
+@media (min-width: 961px) {
+	.home-page {
+		height: calc(100dvh - 2.35rem);
+		overflow: hidden;
+	}
+
+	.home-title {
+		display: none;
+	}
+
+	.home-header {
+		flex: 0 0 auto;
+		margin-bottom: 0.75rem;
+	}
+
+	.home-scroll-area {
+		flex: 1 1 auto;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		padding-right: 0.25rem;
 	}
 }
 

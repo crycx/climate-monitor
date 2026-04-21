@@ -107,69 +107,70 @@
     </div>
   </div>
 
-  <p class="status status-error" *ngIf="!loading() && error()">{{ error() }}</p>
+  <div class="home-scroll-area">
+    <p class="status status-error" *ngIf="!loading() && error()">{{ error() }}</p>
 
-  <div class="charts-section" *ngIf="!error()">
-    <div class="charts-divider"></div>
-  </div>
+    <div class="charts-section" *ngIf="!error()">
+      <div class="charts-divider"></div>
+    </div>
 
-  <div class="chart-grid" [class.two-col]="viewMode() === 2" *ngIf="!error() && viewMode() !== 3">
-    <section class="chart-card" *ngFor="let device of visibleDevices()">
-      <div class="chart-card-header">
-        <h2>{{ device.name }}</h2>
-        <span class="chart-location" *ngIf="getLocationName(device.location_id) as locName">{{ locName }}</span>
-      </div>
-      <div class="reading-badges">
-        <span class="reading-badge temp" *ngIf="getLatestValue(device.id, 'temperature') as t">{{ t | number:'1.1-1' }} °C</span>
-        <span class="reading-badge hum" *ngIf="getLatestValue(device.id, 'humidity') as h">{{ h | number:'1.1-1' }} %</span>
-      </div>
-      <div class="chart-shell">
-        <canvas #deviceCanvas></canvas>
-      </div>
-    </section>
-
-    <p class="no-devices" *ngIf="!loading() && visibleDevices().length === 0 && readings().length > 0">
-      No devices match the current filter.
-    </p>
-  </div>
-
-  <div class="dashboard-grid" *ngIf="!error() && viewMode() === 3">
-    <div class="dash-card" *ngFor="let device of visibleDevices()">
-      <div class="dash-card-header">
-        <span class="dash-device-name">{{ device.name }}</span>
-        <span class="dash-location" *ngIf="getLocationName(device.location_id) as loc">{{ loc }}</span>
-        <div class="dash-period-badge" *ngIf="deviceStats().get(device.id) as stats">
-          <mat-icon class="period-icon">schedule</mat-icon>
-          {{ rangeLabel() }}
-          <span class="dash-last-seen" *ngIf="stats.lastSeenTs">
-            &middot; {{ stats.lastSeenTs | timeAgo }}
-          </span>
+    <div class="chart-grid" [class.two-col]="viewMode() === 2" *ngIf="!error() && viewMode() !== 3">
+      <section class="chart-card" *ngFor="let device of visibleDevices()">
+        <div class="chart-card-header">
+          <h2>{{ device.name }}</h2>
+          <span class="chart-location" *ngIf="getLocationName(device.location_id) as locName">{{ locName }}</span>
         </div>
-        <button
-          class="dash-insight-toggle-btn"
-          mat-icon-button
-          type="button"
-          (click)="onPeriodInsightsVisibilityChange(!showPeriodInsights())"
-          [matTooltip]="showPeriodInsights() ? 'Hide period analysis' : 'Show period analysis'"
-          [attr.aria-label]="showPeriodInsights() ? 'Hide period analysis' : 'Show period analysis'"
-        >
-          <mat-icon>{{ showPeriodInsights() ? 'timeline' : 'insights' }}</mat-icon>
-        </button>
-        <button
-          class="dash-derived-toggle-btn"
-          mat-icon-button
-          type="button"
-          (click)="onDerivedMetricsVisibilityChange(!showDerivedMetrics())"
-          [matTooltip]="showDerivedMetrics() ? 'Hide derived metrics' : 'Show derived metrics'"
-          [attr.aria-label]="showDerivedMetrics() ? 'Hide derived metrics' : 'Show derived metrics'"
-        >
-          <mat-icon>{{ !showDerivedMetrics() ? 'visibility' : 'visibility_off' }}</mat-icon>
-        </button>
-      </div>
-      <div class="dash-summary" *ngIf="showPeriodInsights() && deviceStats().get(device.id) as stats">
-        {{ periodSummaryEt(stats.periodAnalysis) }}
-      </div>
-      <ng-container *ngIf="deviceStats().get(device.id) as stats">
+        <div class="reading-badges">
+          <span class="reading-badge temp" *ngIf="getLatestValue(device.id, 'temperature') as t">{{ t | number:'1.1-1' }} °C</span>
+          <span class="reading-badge hum" *ngIf="getLatestValue(device.id, 'humidity') as h">{{ h | number:'1.1-1' }} %</span>
+        </div>
+        <div class="chart-shell">
+          <canvas #deviceCanvas></canvas>
+        </div>
+      </section>
+
+      <p class="no-devices" *ngIf="!loading() && visibleDevices().length === 0 && readings().length > 0">
+        No devices match the current filter.
+      </p>
+    </div>
+
+    <div class="dashboard-grid" *ngIf="!error() && viewMode() === 3">
+      <div class="dash-card" *ngFor="let device of visibleDevices()">
+        <div class="dash-card-header">
+          <span class="dash-device-name">{{ device.name }}</span>
+          <span class="dash-location" *ngIf="getLocationName(device.location_id) as loc">{{ loc }}</span>
+          <div class="dash-period-badge" *ngIf="deviceStats().get(device.id) as stats">
+            <mat-icon class="period-icon">schedule</mat-icon>
+            {{ rangeLabel() }}
+            <span class="dash-last-seen" *ngIf="stats.lastSeenTs">
+              &middot; {{ stats.lastSeenTs | timeAgo }}
+            </span>
+          </div>
+          <button
+            class="dash-insight-toggle-btn"
+            mat-icon-button
+            type="button"
+            (click)="onPeriodInsightsVisibilityChange(!showPeriodInsights())"
+            [matTooltip]="showPeriodInsights() ? 'Hide period analysis' : 'Show period analysis'"
+            [attr.aria-label]="showPeriodInsights() ? 'Hide period analysis' : 'Show period analysis'"
+          >
+            <mat-icon>{{ showPeriodInsights() ? 'timeline' : 'insights' }}</mat-icon>
+          </button>
+          <button
+            class="dash-derived-toggle-btn"
+            mat-icon-button
+            type="button"
+            (click)="onDerivedMetricsVisibilityChange(!showDerivedMetrics())"
+            [matTooltip]="showDerivedMetrics() ? 'Hide derived metrics' : 'Show derived metrics'"
+            [attr.aria-label]="showDerivedMetrics() ? 'Hide derived metrics' : 'Show derived metrics'"
+          >
+            <mat-icon>{{ !showDerivedMetrics() ? 'visibility' : 'visibility_off' }}</mat-icon>
+          </button>
+        </div>
+        <div class="dash-summary" *ngIf="showPeriodInsights() && deviceStats().get(device.id) as stats">
+          {{ periodSummaryEt(stats.periodAnalysis) }}
+        </div>
+        <ng-container *ngIf="deviceStats().get(device.id) as stats">
         <div class="dash-readings">
           <div class="dash-reading-block temp">
             <div class="dash-block-header">
@@ -349,12 +350,13 @@
             </div>
           </div>
         </div>
-      </ng-container>
+        </ng-container>
+      </div>
+      <p class="no-devices" *ngIf="!loading() && visibleDevices().length === 0 && readings().length > 0">
+        No devices match the current filter.
+      </p>
     </div>
-    <p class="no-devices" *ngIf="!loading() && visibleDevices().length === 0 && readings().length > 0">
-      No devices match the current filter.
-    </p>
-  </div>
 
-  <p class="updated" *ngIf="lastUpdated()">Last updated: {{ lastUpdated() }}</p>
+    <p class="updated" *ngIf="lastUpdated()">Last updated: {{ lastUpdated() }}</p>
+  </div>
 </div>
