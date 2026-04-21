@@ -1,6 +1,10 @@
 <ng-container *ngIf="user$ | async as user; else publicLayout">
   <ng-container *ngIf="showShell(user); else publicLayout">
-    <div class="app-shell" [class.app-shell-mobile-open]="sidebarOpen()">
+    <div
+      class="app-shell"
+      [class.app-shell-mobile-open]="sidebarOpen()"
+      [class.app-shell-sidebar-hidden]="sidebarHidden()"
+    >
       <button
         type="button"
         class="sidebar-overlay"
@@ -43,6 +47,16 @@
       </aside>
 
       <div class="content-wrap">
+        <button
+          mat-icon-button
+          type="button"
+          class="desktop-sidebar-btn"
+          [attr.aria-label]="sidebarHidden() ? 'Show sidebar' : 'Hide sidebar'"
+          [matTooltip]="sidebarHidden() ? 'Show sidebar' : 'Hide sidebar'"
+          (click)="toggleSidebarHidden()"
+        >
+          <mat-icon>{{ sidebarHidden() ? 'keyboard_double_arrow_right' : 'keyboard_double_arrow_left' }}</mat-icon>
+        </button>
         <header class="content-topbar">
           <button mat-icon-button type="button" class="mobile-nav-btn" aria-label="Open navigation" (click)="toggleSidebar()">
             <mat-icon>menu</mat-icon>

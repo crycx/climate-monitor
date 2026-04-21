@@ -24,6 +24,7 @@ export class App implements OnInit {
   protected readonly title = signal('climate-monitor');
   protected readonly currentUrl = signal('');
   protected readonly sidebarOpen = signal(false);
+  protected readonly sidebarHidden = signal(false);
   protected readonly user$: Observable<AuthUser | null>;
   protected readonly navItems: NavItem[] = [
     { label: 'Overview', route: '/', icon: 'dashboard', exact: true },
@@ -99,6 +100,10 @@ export class App implements OnInit {
 
   protected closeSidebar(): void {
     this.sidebarOpen.set(false);
+  }
+
+  protected toggleSidebarHidden(): void {
+    this.sidebarHidden.update((v) => !v);
   }
 
   protected logout(): void {
