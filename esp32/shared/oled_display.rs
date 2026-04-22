@@ -113,6 +113,25 @@ where
     flush_resilient(display)
 }
 
+pub fn prepare_for_sleep<DI>(display: &mut OledDisplay<DI>) -> Result<(), DisplayError>
+where
+    DI: WriteOnlyDataCommand,
+{
+    let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+    let small_style = MonoTextStyle::new(&FONT_4X6, BinaryColor::On);
+
+    display.set_brightness(Brightness::DIMMEST)?;
+    let _ = display.clear(BinaryColor::Off);
+    let _ = Text::with_baseline("Deep sleep", Point::new(0, 0), text_style, Baseline::Top)
+        .draw(display);
+    let _ = Text::with_baseline("Power save on", Point::new(0, 11), text_style, Baseline::Top)
+        .draw(display);
+    let _ = Text::with_baseline(BRAND_TEXT, Point::new(brand_right_x(), 26), small_style, Baseline::Top)
+        .draw(display);
+    let _ = flush_resilient(display);
+    display.set_display_on(false)
+}
+
 #[allow(dead_code)]
 pub fn show_reading<DI>(
     display: &mut OledDisplay<DI>,

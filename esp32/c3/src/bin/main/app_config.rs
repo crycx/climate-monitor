@@ -51,6 +51,7 @@ const WIFI_LOCATION_5_KEY: u64 = fnv1a_hash(b"wifi_location_5");
 const TEMP_OFFSET_KEY: u64 = fnv1a_hash(b"temp_offset");
 const HUM_OFFSET_KEY: u64 = fnv1a_hash(b"hum_offset");
 const SENSOR_INTERVAL_SECS_KEY: u64 = fnv1a_hash(b"sensor_interval_secs");
+const DEEP_SLEEP_ENABLED_KEY: u64 = fnv1a_hash(b"deep_sleep_enabled");
 const OLED_ORIENTATION_KEY: u64 = fnv1a_hash(b"oled_orientation");
 const MQTT_HOST_KEY: u64 = fnv1a_hash(b"mqtt_host");
 const MQTT_PORT_KEY: u64 = fnv1a_hash(b"mqtt_port");
@@ -89,6 +90,7 @@ pub struct AppConfig {
     pub temp_offset: String,
     pub hum_offset: String,
     pub sensor_interval_secs: String,
+    pub deep_sleep_enabled: bool,
     pub oled_orientation: String,
     pub mqtt_host: String,
     pub mqtt_port: String,
@@ -147,6 +149,9 @@ impl Default for AppConfig {
             temp_offset: option_env!("TEMP_OFFSET").unwrap_or("-1.7").into(),
             hum_offset: option_env!("HUM_OFFSET").unwrap_or("-7.0").into(),
             sensor_interval_secs: option_env!("SENSOR_INTERVAL_SECS").unwrap_or("30").into(),
+            deep_sleep_enabled: option_env!("DEEP_SLEEP_ENABLED")
+                .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false),
             oled_orientation: option_env!("OLED_ORIENTATION").unwrap_or("landscape").into(),
             mqtt_host,
             mqtt_port: option_env!("MQTT_PORT").unwrap_or("1883").into(),
@@ -284,6 +289,9 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(SENSOR_INTERVAL_SECS_KEY).await? {
             cfg.sensor_interval_secs = value;
         }
+        if let Some(value) = self.get_u32(DEEP_SLEEP_ENABLED_KEY).await? {
+            cfg.deep_sleep_enabled = value != 0;
+        }
         if let Some(value) = self.get_string(OLED_ORIENTATION_KEY).await? {
             cfg.oled_orientation = value;
         }
@@ -384,6 +392,11 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_string(HUM_OFFSET_KEY, &cfg.hum_offset).await?;
         self.set_string(SENSOR_INTERVAL_SECS_KEY, &cfg.sensor_interval_secs)
             .await?;
+        self.set_u32(
+            DEEP_SLEEP_ENABLED_KEY,
+            if cfg.deep_sleep_enabled { 1 } else { 0 },
+        )
+        .await?;
         self.set_string(OLED_ORIENTATION_KEY, &cfg.oled_orientation)
             .await?;
         self.set_string(MQTT_HOST_KEY, &cfg.mqtt_host).await?;

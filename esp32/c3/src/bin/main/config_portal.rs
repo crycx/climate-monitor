@@ -495,9 +495,11 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next.api_key = query_param(full_path, "api_key").unwrap_or_default();
     next.temp_offset = query_param(full_path, "temp_offset").unwrap_or_else(|| current.temp_offset.clone());
     next.hum_offset = query_param(full_path, "hum_offset").unwrap_or_else(|| current.hum_offset.clone());
+    next.deep_sleep_enabled = query_checkbox(full_path, "deep_sleep_enabled");
     next.sensor_interval_secs = sanitize_sensor_interval_secs(
         query_param(full_path, "sensor_interval_secs"),
         &current.sensor_interval_secs,
+        next.deep_sleep_enabled,
     );
     next.oled_orientation = normalize_oled_orientation(
         query_param(full_path, "oled_orientation")
@@ -533,10 +535,19 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next
 }
 
-fn sanitize_sensor_interval_secs(value: Option<String>, current: &str) -> String {
+fn sanitize_sensor_interval_secs(value: Option<String>, current: &str, deep_sleep_enabled: bool) -> String {
+    const MIN_SECS: u64 = 5;
+    const MAX_SECS: u64 = 3600;
+    const DEEP_SLEEP_MIN_SECS: u64 = 120;
+
     let candidate = value.unwrap_or_else(|| current.into());
     match candidate.trim().parse::<u64>() {
-        Ok(secs) if (5..=3600).contains(&secs) => format!("{}", secs),
+        Ok(mut secs) if (MIN_SECS..=MAX_SECS).contains(&secs) => {
+            if deep_sleep_enabled && secs < DEEP_SLEEP_MIN_SECS {
+                secs = DEEP_SLEEP_MIN_SECS;
+            }
+            format!("{}", secs)
+        }
         _ => current.into(),
     }
 }
@@ -688,7 +699,10 @@ where
     conn.write_all(html_escape(&cfg.hum_offset).as_bytes()).await?;
     conn.write_all(b"'></label><label>Measurement interval (s)<input type='number' min='5' max='3600' step='1' name='sensor_interval_secs' value='").await?;
     conn.write_all(html_escape(&cfg.sensor_interval_secs).as_bytes()).await?;
-    conn.write_all(b"'></label><small>Allowed range: 5-3600 seconds. Default is 30.</small></section><section class='card panel'><h3>Display</h3><label>OLED orientation<select name='oled_orientation'><option value='landscape'").await?;
+    let deep_sleep_checked = if cfg.deep_sleep_enabled { " checked" } else { "" };
+    conn.write_all(b"'></label><label class='check'><input type='checkbox' name='deep_sleep_enabled'").await?;
+    conn.write_all(deep_sleep_checked.as_bytes()).await?;
+    conn.write_all(b"> Deep sleep between measurements</label><small>Allowed interval: 5-3600 seconds. When deep sleep is enabled, minimum interval is 120 seconds.</small></section><section class='card panel'><h3>Display</h3><label>OLED orientation<select name='oled_orientation'><option value='landscape'").await?;
     if cfg.oled_orientation.as_str() != "portrait" {
         conn.write_all(b" selected").await?;
     }

@@ -30,6 +30,8 @@ extern crate alloc;
 #[cfg(feature = "wifi")]
 use alloc::{format, string::String, vec::Vec};
 #[cfg(feature = "wifi")]
+use core::time::Duration as CoreDuration;
+#[cfg(feature = "wifi")]
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use embedded_dht_rs::dht22::Dht22;
@@ -62,6 +64,8 @@ use embassy_net::tcp::TcpSocket;
 use embassy_time::{Duration, Instant, Timer};
 #[cfg(feature = "wifi")]
 use esp_hal::interrupt::software::SoftwareInterruptControl;
+#[cfg(feature = "wifi")]
+use esp_hal::rtc_cntl::{Rtc, sleep::TimerWakeupSource};
 #[cfg(feature = "wifi")]
 use esp_hal::timer::timg::TimerGroup;
 #[cfg(feature = "wifi")]
@@ -132,6 +136,8 @@ const DEFAULT_SENSOR_INTERVAL_SECS: u64 = 30;
 #[cfg(feature = "wifi")]
 const MIN_SENSOR_INTERVAL_SECS: u64 = 5;
 #[cfg(feature = "wifi")]
+const DEEP_SLEEP_MIN_INTERVAL_SECS: u64 = 120;
+#[cfg(feature = "wifi")]
 const MAX_SENSOR_INTERVAL_SECS: u64 = 3600;
 #[cfg(feature = "wifi")]
 const MAIN_LOOP_TICK_MS: u64 = 250;
@@ -174,6 +180,25 @@ fn oled_i2c_address() -> u8 {
         Some("0x3D") | Some("0X3D") | Some("61") => 0x3D,
         _ => 0x3C,
     }
+}
+
+#[cfg(feature = "wifi")]
+fn oled_enabled() -> bool {
+    match option_env!("OLED_ENABLED") {
+        Some("0" | "false" | "FALSE" | "no" | "NO" | "off" | "OFF") => false,
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") => true,
+        // Super Mini boards are often used without SSD1306 attached.
+        None => !cfg!(feature = "supermini"),
+        _ => !cfg!(feature = "supermini"),
+    }
+}
+
+#[cfg(feature = "wifi")]
+fn oled_boot_scan_enabled() -> bool {
+    matches!(
+        option_env!("OLED_BOOT_SCAN"),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
 }
 
 #[cfg(feature = "wifi")]
@@ -235,12 +260,19 @@ fn has_wifi_config(cfg: &AppConfig) -> bool {
 
 #[cfg(feature = "wifi")]
 fn sensor_interval_secs(cfg: &AppConfig) -> u64 {
-    cfg.sensor_interval_secs
+    let mut secs = cfg
+        .sensor_interval_secs
         .trim()
         .parse::<u64>()
         .ok()
         .filter(|secs| (MIN_SENSOR_INTERVAL_SECS..=MAX_SENSOR_INTERVAL_SECS).contains(secs))
-        .unwrap_or(DEFAULT_SENSOR_INTERVAL_SECS)
+        .unwrap_or(DEFAULT_SENSOR_INTERVAL_SECS);
+
+    if cfg.deep_sleep_enabled && secs < DEEP_SLEEP_MIN_INTERVAL_SECS {
+        secs = DEEP_SLEEP_MIN_INTERVAL_SECS;
+    }
+
+    secs
 }
 
 #[cfg(feature = "wifi")]
@@ -338,6 +370,10 @@ async fn set_portal_mode(
 
     match (was_open, will_open) {
         (false, true) => {
+            // Manual portal should be AP-only so configured AP channel (e.g. 6) is applied.
+            if next_mode == PortalMode::Manual {
+                wifi_sender.send(WifiCommand::StaDown).await;
+            }
             wifi_sender
                 .send(WifiCommand::APUp(AP_SSID_PREFIX.into()))
                 .await;
@@ -353,6 +389,53 @@ async fn set_portal_mode(
 }
 
 #[cfg(feature = "wifi")]
+async fn reconnect_after_portal_close(
+    wifi_sender: &wifi_runtime::WifiCommandSender,
+    stack: &'static Stack<'static>,
+    cfg: &AppConfig,
+    active_wifi_ssid: &str,
+    reason_prefix: &str,
+) -> Option<(usize, String, String)> {
+    let mut selected = scan_and_connect_best_configured_wifi(
+        wifi_sender,
+        cfg,
+        format!("{} scanning visible WiFi networks before reconnect...", reason_prefix).as_str(),
+        format!("{} reconnecting to ", reason_prefix).as_str(),
+    )
+    .await;
+
+    if selected.is_none() {
+        selected = connect_configured_wifi_with_failover(
+            wifi_sender,
+            stack,
+            cfg,
+            active_wifi_ssid,
+            format!("{} scan reconnect fallback...", reason_prefix).as_str(),
+            format!("{} trying ", reason_prefix).as_str(),
+            Duration::from_secs(20),
+        )
+        .await;
+    }
+
+    if let Some((slot, ssid, location)) = selected {
+        let mut connected = wait_for_sta_network(stack, Duration::from_secs(20)).await;
+        if !connected && wifi_sta_connected() {
+            log_runtime_line("STA link is up; waiting a bit longer for IPv4...");
+            connected = wait_for_sta_network(stack, Duration::from_secs(8)).await;
+        }
+
+        if connected {
+            log_runtime_line(format!("{} reconnect successful.", reason_prefix).as_str());
+            return Some((slot, ssid, location));
+        }
+
+        log_runtime_line(format!("{} reconnect timed out after STA connect attempt.", reason_prefix).as_str());
+    }
+
+    None
+}
+
+#[cfg(feature = "wifi")]
 async fn connect_best_configured_wifi(
     wifi_sender: &wifi_runtime::WifiCommandSender,
     cfg: &AppConfig,
@@ -360,6 +443,19 @@ async fn connect_best_configured_wifi(
 ) -> Option<(usize, String, String)> {
     if let Some((slot, ssid, pass, location)) = find_best_ssid(cfg) {
         let selected_ssid = ssid.clone();
+        if pass.trim().is_empty() {
+            log_runtime_line(
+                format!(
+                    "WiFi slot {} selected (SSID '{}') with empty password",
+                    slot, ssid
+                )
+                .as_str(),
+            );
+        } else {
+            log_runtime_line(
+                format!("WiFi slot {} selected (SSID '{}')", slot, ssid).as_str(),
+            );
+        }
         if wifi_runtime::scan_ssid_visible(&ssid) {
             log_runtime_line(format!("WiFi pre-scan: visible configured SSID found: {}", ssid).as_str());
         } else if wifi_runtime::has_scan_results() {
@@ -389,6 +485,15 @@ async fn refresh_visible_networks(
     wifi_sender: &wifi_runtime::WifiCommandSender,
     reason: &str,
 ) {
+    refresh_visible_networks_for(wifi_sender, reason, &[]).await;
+}
+
+#[cfg(feature = "wifi")]
+async fn refresh_visible_networks_for(
+    wifi_sender: &wifi_runtime::WifiCommandSender,
+    reason: &str,
+    wanted_ssids: &[&str],
+) {
     log_runtime_line(reason);
     let mut merged_ssids: Vec<String> = Vec::new();
 
@@ -403,6 +508,22 @@ async fn refresh_visible_networks(
                     merged_ssids.push(String::from(ssid));
                 }
             }
+        }
+
+        // Short-circuit: if any wanted SSID is already visible, no need for more scans.
+        if !wanted_ssids.is_empty()
+            && wanted_ssids
+                .iter()
+                .any(|w| merged_ssids.iter().any(|s| s.as_str() == *w))
+        {
+            log_runtime_line(
+                format!(
+                    "WiFi pre-scan: target SSID found after {} attempt(s), stopping early.",
+                    attempt
+                )
+                .as_str(),
+            );
+            break;
         }
     }
 
@@ -434,7 +555,19 @@ async fn scan_and_connect_best_configured_wifi(
     scan_reason: &str,
     connect_context: &str,
 ) -> Option<(usize, String, String)> {
-    refresh_visible_networks(wifi_sender, scan_reason).await;
+    // Collect all configured SSIDs so the scan can stop early when one is found.
+    let wanted: Vec<&str> = [
+        cfg.wifi_ssid.as_str(),
+        cfg.wifi_ssid_2.as_str(),
+        cfg.wifi_ssid_3.as_str(),
+        cfg.wifi_ssid_4.as_str(),
+        cfg.wifi_ssid_5.as_str(),
+    ]
+    .into_iter()
+    .filter(|s| !s.is_empty())
+    .collect();
+
+    refresh_visible_networks_for(wifi_sender, scan_reason, &wanted).await;
     connect_best_configured_wifi(wifi_sender, cfg, connect_context).await
 }
 
@@ -498,6 +631,30 @@ fn build_wifi_candidates(cfg: &AppConfig, skip_ssid: &str) -> Vec<(usize, String
 }
 
 #[cfg(feature = "wifi")]
+fn build_visible_wifi_candidates(
+    cfg: &AppConfig,
+    skip_ssid: &str,
+) -> Vec<(usize, String, String, String)> {
+    let mut visible: Vec<(usize, String, String, String)> = Vec::new();
+
+    for (slot, ssid, pass, location) in configured_wifi_slots(cfg) {
+        if ssid.is_empty() || ssid == skip_ssid {
+            continue;
+        }
+        if wifi_runtime::scan_ssid_visible(ssid) {
+            visible.push((
+                slot,
+                String::from(ssid),
+                String::from(pass),
+                String::from(location.trim()),
+            ));
+        }
+    }
+
+    visible
+}
+
+#[cfg(feature = "wifi")]
 async fn connect_configured_wifi_with_failover(
     wifi_sender: &wifi_runtime::WifiCommandSender,
     stack: &'static Stack<'static>,
@@ -509,35 +666,81 @@ async fn connect_configured_wifi_with_failover(
 ) -> Option<(usize, String, String)> {
     refresh_visible_networks(wifi_sender, scan_reason).await;
 
-    let candidates = build_wifi_candidates(cfg, skip_ssid);
+    let has_scan = wifi_runtime::has_scan_results();
+    let mut candidates = if has_scan {
+        build_visible_wifi_candidates(cfg, skip_ssid)
+    } else {
+        build_wifi_candidates(cfg, skip_ssid)
+    };
+
+    let mut retry_rounds = 1usize;
+
+    if has_scan && candidates.is_empty() {
+        log_runtime_line(
+            "No configured SSID visible in scan; trying all saved WiFi networks for 3 rounds before AP fallback.",
+        );
+        candidates = build_wifi_candidates(cfg, "");
+        retry_rounds = 3;
+    }
+
+    if candidates.is_empty() {
+        candidates = build_wifi_candidates(cfg, "");
+    }
+
     if candidates.is_empty() {
         return None;
     }
 
     let total = candidates.len();
-    for (i, (slot, ssid, pass, location)) in candidates.into_iter().enumerate() {
-        let attempt_no = i + 1;
-        log_runtime_line(
-            format!("{}{} (attempt {}/{})", connect_context, ssid, attempt_no, total).as_str(),
-        );
-
-        // Reset STA before switching credentials.
-        wifi_sender.send(WifiCommand::StaDown).await;
-        Timer::after(Duration::from_millis(150)).await;
-        wifi_sender.send(WifiCommand::StaUp(ssid.clone(), pass)).await;
-
-        let mut connected = wait_for_sta_network(stack, attempt_timeout).await;
-        if !connected && wifi_sta_connected() {
-            log_runtime_line("WiFi STA link is up; waiting a bit longer for IPv4...");
-            connected = wait_for_sta_network(stack, Duration::from_secs(10)).await;
+    for round in 1..=retry_rounds {
+        if retry_rounds > 1 {
+            log_runtime_line(
+                format!("WiFi retry round {}/{}", round, retry_rounds).as_str(),
+            );
         }
 
-        if connected {
-            log_runtime_line(format!("WiFi connected: {}", ssid).as_str());
-            return Some((slot, ssid, location));
-        }
+        for (i, (slot, ssid, pass, location)) in candidates.iter().enumerate() {
+            let attempt_no = i + 1;
+            if pass.trim().is_empty() {
+                log_runtime_line(
+                    format!("WiFi failover slot {} uses empty password", slot).as_str(),
+                );
+            }
+            if retry_rounds > 1 {
+                log_runtime_line(
+                    format!(
+                        "{}{} (round {}/{}, attempt {}/{})",
+                        connect_context, ssid, round, retry_rounds, attempt_no, total
+                    )
+                    .as_str(),
+                );
+            } else {
+                log_runtime_line(
+                    format!("{}{} (attempt {}/{})", connect_context, ssid, attempt_no, total)
+                        .as_str(),
+                );
+            }
 
-        log_runtime_line("WiFi connect attempt failed, trying next (if any)...");
+            // Reset STA before switching credentials.
+            wifi_sender.send(WifiCommand::StaDown).await;
+            Timer::after(Duration::from_millis(150)).await;
+            wifi_sender
+                .send(WifiCommand::StaUp(ssid.clone(), pass.clone()))
+                .await;
+
+            let mut connected = wait_for_sta_network(stack, attempt_timeout).await;
+            if !connected && wifi_sta_connected() {
+                log_runtime_line("WiFi STA link is up; waiting a bit longer for IPv4...");
+                connected = wait_for_sta_network(stack, Duration::from_secs(10)).await;
+            }
+
+            if connected {
+                log_runtime_line(format!("WiFi connected: {}", ssid).as_str());
+                return Some((*slot, ssid.clone(), location.clone()));
+            }
+
+            log_runtime_line("WiFi connect attempt failed, trying next (if any)...");
+        }
     }
 
     None
@@ -803,6 +1006,7 @@ async fn main(spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_ints = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
+    let mut lpwr_for_sleep = Some(peripherals.LPWR);
 
     // GPIO9 = BOOT button (active-low).
     let btn = Input::new(peripherals.GPIO9, InputConfig::default().with_pull(Pull::Up));
@@ -816,36 +1020,45 @@ async fn main(spawner: Spawner) {
     let mut flash = FlashStorage::new(peripherals.FLASH);
 
     let oled_addr = oled_i2c_address();
-    let mut oled = match I2c::new(
-        peripherals.I2C0,
-        I2cConfig::default().with_frequency(Rate::from_khz(400)),
-    ) {
-        Ok(i2c) => {
-            let mut i2c = i2c.with_sda(peripherals.GPIO6).with_scl(peripherals.GPIO7);
-            let mut found_any = false;
-            log_runtime_line("I2C scan start (GPIO6 SDA, GPIO7 SCL)...");
-            for addr in 0x08u8..=0x77u8 {
-                if i2c.write(addr, &[]).is_ok() {
-                    found_any = true;
-                    log_runtime_line(format!("I2C: found device at 0x{:02X}", addr).as_str());
+    let mut oled = if oled_enabled() {
+        match I2c::new(
+            peripherals.I2C0,
+            I2cConfig::default().with_frequency(Rate::from_khz(400)),
+        ) {
+            Ok(i2c) => {
+                let mut i2c = i2c.with_sda(peripherals.GPIO6).with_scl(peripherals.GPIO7);
+                if oled_boot_scan_enabled() {
+                    let mut found_any = false;
+                    log_runtime_line("I2C scan start (GPIO6 SDA, GPIO7 SCL)...");
+                    for addr in 0x08u8..=0x77u8 {
+                        if i2c.write(addr, &[]).is_ok() {
+                            found_any = true;
+                            log_runtime_line(format!("I2C: found device at 0x{:02X}", addr).as_str());
+                        }
+                    }
+                    if !found_any {
+                        log_runtime_line("I2C scan: no device ACK on 0x08..0x77");
+                    }
+                } else {
+                    log_runtime_line("I2C scan skipped (set OLED_BOOT_SCAN=1 to enable).");
                 }
-            }
-            if !found_any {
-                log_runtime_line("I2C scan: no device ACK on 0x08..0x77");
-            }
-            Some(
-                Ssd1306::new(
-                    I2CDisplayInterface::new_custom_address(i2c, oled_addr),
-                    DisplaySize128x32,
-                    DisplayRotation::Rotate0,
+                Some(
+                    Ssd1306::new(
+                        I2CDisplayInterface::new_custom_address(i2c, oled_addr),
+                        DisplaySize128x32,
+                        DisplayRotation::Rotate0,
+                    )
+                    .into_buffered_graphics_mode(),
                 )
-                .into_buffered_graphics_mode(),
-            )
+            }
+            Err(e) => {
+                log_runtime_line(format!("OLED: I2C bus init failed: {:?}", e).as_str());
+                None
+            }
         }
-        Err(e) => {
-            log_runtime_line(format!("OLED: I2C bus init failed: {:?}", e).as_str());
-            None
-        }
+    } else {
+        log_runtime_line("OLED disabled (set OLED_ENABLED=1 to force-enable).");
+        None
     };
 
     if let Some(display) = oled.as_mut() {
@@ -909,20 +1122,30 @@ async fn main(spawner: Spawner) {
         }
     }
 
+    log_runtime_line("Boot: initializing WiFi runtime...");
     let (wifi_stacks, wifi_sender) = wifi_runtime::init(&spawner, peripherals.WIFI).await;
+    log_runtime_line("Boot: WiFi runtime initialized.");
+    log_runtime_line("Boot: starting config portal tasks...");
     config_portal::start(spawner, wifi_stacks.ap, config_handle, config_storage);
+    log_runtime_line("Boot: config portal tasks started.");
     let config_rx = config_portal::config_update_receiver();
 
     spawner.spawn(button_task()).unwrap();
+    log_runtime_line("Boot: button task started.");
 
     let stack: &'static Stack<'static> = NET_STACK.init(wifi_stacks.sta);
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
     let mut portal_mode = PortalMode::Off;
+    let mut deep_sleep_blocked_by_manual_mode = boot_button_held;
     let mut active_wifi_location = String::new();
     let mut active_wifi_ssid = String::new();
     let mut active_wifi_slot: usize = 1;
     let mut oled_portrait_mode = oled_is_portrait(initial_oled_orientation.as_str());
     let mut trigger_sensor_now_after_boot = false;
+
+    log_runtime_line(
+        format!("Boot: button held at startup = {}", boot_button_held).as_str(),
+    );
 
     if boot_button_held {
         wifi_sender.send(WifiCommand::StaDown).await;
@@ -936,6 +1159,7 @@ async fn main(spawner: Spawner) {
             "Boot: button held -> forcing AP portal at 192.168.4.1",
         )
         .await;
+        deep_sleep_blocked_by_manual_mode = true;
     }
 
     // ── Boot: one STA attempt, then AP fallback ─────────────────────────────
@@ -944,15 +1168,15 @@ async fn main(spawner: Spawner) {
     const BOOT_CONNECT_TIMEOUT_SECS: u64 = 25;
 
     if portal_mode == PortalMode::Off {
-    {
-        let cfg = config_handle.lock().await;
-        if has_wifi_config(&cfg) {
+        let cfg_snapshot = { config_handle.lock().await.clone() };
+        if has_wifi_config(&cfg_snapshot) {
             if let Some(display) = oled.as_mut() {
                 draw_status_for_mode(display, "WiFi scan...", oled_portrait_mode);
             }
+            log_runtime_line("Boot: starting initial WiFi scan/connect...");
             if let Some((slot, ssid, location)) = scan_and_connect_best_configured_wifi(
                 &wifi_sender,
-                &cfg,
+                &cfg_snapshot,
                 "Boot: scanning visible WiFi networks before connect...",
                 "Boot: connecting to ",
             )
@@ -969,6 +1193,7 @@ async fn main(spawner: Spawner) {
                 }
             }
         } else {
+            log_runtime_line("Boot: no saved WiFi config, opening AP portal.");
             wifi_sender.send(WifiCommand::StaDown).await;
             if let Some(display) = oled.as_mut() {
                 draw_status_for_mode(display, "AP: 192.168.4.1", oled_portrait_mode);
@@ -981,7 +1206,6 @@ async fn main(spawner: Spawner) {
             )
             .await;
         }
-    }
     }
 
     if portal_mode == PortalMode::Off {
@@ -1093,9 +1317,10 @@ async fn main(spawner: Spawner) {
                         &wifi_sender,
                         &mut portal_mode,
                         PortalMode::Manual,
-                        "Button: long press -> AP portal opening (STA kept active): http://192.168.4.1/",
+                        "Button: long press -> AP portal opening (AP-only, channel override active): http://192.168.4.1/",
                     )
                     .await;
+                    deep_sleep_blocked_by_manual_mode = true;
                 }
                 ButtonEvent::ShortPress => {
                     if portal_mode.is_open() {
@@ -1117,27 +1342,41 @@ async fn main(spawner: Spawner) {
                                 );
                             }
                             next_sensor_at = Instant::now();
+                            deep_sleep_blocked_by_manual_mode = false;
                         } else {
-                            let cfg = config_handle.lock().await;
-                            if has_wifi_config(&cfg) {
-                                if let Some((slot, ssid, location)) = scan_and_connect_best_configured_wifi(
+                            let cfg_snapshot = { config_handle.lock().await.clone() };
+                            if has_wifi_config(&cfg_snapshot) {
+                                if let Some((slot, ssid, location)) = reconnect_after_portal_close(
                                     &wifi_sender,
-                                    &cfg,
-                                    "Button: scanning visible WiFi networks before reconnect...",
-                                    "Button: reconnecting to ",
+                                    stack,
+                                    &cfg_snapshot,
+                                    active_wifi_ssid.as_str(),
+                                    "Button:",
                                 )
-                                .await {
+                                .await
+                                {
                                     active_wifi_slot = slot;
                                     active_wifi_ssid = ssid.clone();
                                     active_wifi_location = location;
                                     if let Some(display) = oled.as_mut() {
                                         draw_status_for_mode(
                                             display,
-                                            format!("Connecting {}", ssid).as_str(),
+                                            format!("WiFi {}", ssid).as_str(),
                                             oled_portrait_mode,
                                         );
                                     }
                                     next_sensor_at = Instant::now();
+                                } else {
+                                    if let Some(display) = oled.as_mut() {
+                                        draw_status_for_mode(display, "AP: 192.168.4.1", oled_portrait_mode);
+                                    }
+                                    set_portal_mode(
+                                        &wifi_sender,
+                                        &mut portal_mode,
+                                        PortalMode::Recovery,
+                                        "Button: reconnect failed; reopening AP portal for recovery.",
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -1149,9 +1388,10 @@ async fn main(spawner: Spawner) {
                             &wifi_sender,
                             &mut portal_mode,
                             PortalMode::Manual,
-                            "Button: short press -> AP portal opening (STA kept active): http://192.168.4.1/",
+                            "Button: short press -> AP portal opening (AP-only, channel override active): http://192.168.4.1/",
                         )
                         .await;
+                        deep_sleep_blocked_by_manual_mode = true;
                     }
                 }
             }
@@ -1160,6 +1400,10 @@ async fn main(spawner: Spawner) {
         let net_is_up_now = stack_has_ipv4(stack);
         if net_is_up_now && !net_was_up {
             log_runtime_line("WiFi connected");
+            if deep_sleep_blocked_by_manual_mode && portal_mode == PortalMode::Off {
+                deep_sleep_blocked_by_manual_mode = false;
+                log_runtime_line("Power-save: normal mode restored, deep sleep unlocked.");
+            }
             if let Some(cfg) = stack.config_v4() {
                 log_runtime_line(format!("Got IP: {:?}", cfg.address).as_str());
                 if let Some(display) = oled.as_mut() {
@@ -1257,6 +1501,36 @@ async fn main(spawner: Spawner) {
                     "Config saved: AP portal closed, continuing WiFi connect.",
                 )
                 .await;
+
+                if !stack_has_ipv4(stack) {
+                    let cfg_snapshot = { config_handle.lock().await.clone() };
+                    if has_wifi_config(&cfg_snapshot) {
+                        if let Some((slot, ssid, location)) = reconnect_after_portal_close(
+                            &wifi_sender,
+                            stack,
+                            &cfg_snapshot,
+                            active_wifi_ssid.as_str(),
+                            "Config save:",
+                        )
+                        .await
+                        {
+                            active_wifi_slot = slot;
+                            active_wifi_ssid = ssid;
+                            active_wifi_location = location;
+                        } else {
+                            if let Some(display) = oled.as_mut() {
+                                draw_status_for_mode(display, "AP: 192.168.4.1", oled_portrait_mode);
+                            }
+                            set_portal_mode(
+                                &wifi_sender,
+                                &mut portal_mode,
+                                PortalMode::Recovery,
+                                "Config save: reconnect failed; AP portal reopened for recovery.",
+                            )
+                            .await;
+                        }
+                    }
+                }
             } else if !has_config {
                 wifi_sender.send(WifiCommand::StaDown).await;
                 if let Some(display) = oled.as_mut() {
@@ -1496,6 +1770,43 @@ async fn main(spawner: Spawner) {
                             )
                             .await;
                         }
+                    }
+                }
+
+                let sleep_interval_secs = {
+                    let cfg = config_handle.lock().await;
+                    if cfg.deep_sleep_enabled {
+                        sensor_interval_secs(&cfg)
+                    } else {
+                        0
+                    }
+                };
+
+                if sleep_interval_secs > 0
+                    && !portal_mode.is_open()
+                    && !deep_sleep_blocked_by_manual_mode
+                {
+                    log_runtime_line(
+                        format!(
+                            "Power-save: entering deep sleep for {} s (min {} s).",
+                            sleep_interval_secs, DEEP_SLEEP_MIN_INTERVAL_SECS
+                        )
+                        .as_str(),
+                    );
+                    if let Some(display) = oled.as_mut() {
+                        if let Err(e) = oled_display::prepare_for_sleep(display) {
+                            log_runtime_line(format!("OLED: sleep prepare failed: {:?}", e).as_str());
+                        }
+                    }
+                    Timer::after(Duration::from_millis(700)).await;
+                    wifi_sender.send(WifiCommand::StaDown).await;
+                    Timer::after(Duration::from_millis(200)).await;
+                    let wakeup = TimerWakeupSource::new(CoreDuration::from_secs(sleep_interval_secs));
+                    if let Some(lpwr) = lpwr_for_sleep.take() {
+                        let mut rtc = Rtc::new(lpwr);
+                        rtc.sleep_deep(&[&wakeup]);
+                    } else {
+                        log_runtime_line("Power-save: LPWR already consumed; deep sleep skipped.");
                     }
                 }
             }
@@ -1811,21 +2122,21 @@ async fn mqtt_publish_with_discovery(
     let hum_unique_id = format!("{}_{}_humidity", base_topic, device_id);
 
     let device_block = format!(
-        r#"{{\"identifiers\":[\"{}:{}\"],\"name\":\"{}\",\"model\":\"ESP32-C3\",\"manufacturer\":\"Climate Monitor\"}}"#,
+        r#"{{"identifiers":["{}:{}"],"name":"{}","model":"ESP32-C3","manufacturer":"Climate Monitor"}}"#,
         base_topic,
         device_id,
         json_escape(device_name.as_str())
     );
 
     let temp_discovery_payload = format!(
-        r#"{{\"name\":\"Temperature\",\"unique_id\":\"{}\",\"state_topic\":\"{}\",\"unit_of_measurement\":\"°C\",\"device_class\":\"temperature\",\"state_class\":\"measurement\",\"availability_topic\":\"{}\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\",\"device\":{}}}"#,
+        r#"{{"name":"Temperature","unique_id":"{}","state_topic":"{}","unit_of_measurement":"°C","device_class":"temperature","state_class":"measurement","availability_topic":"{}","payload_available":"online","payload_not_available":"offline","device":{}}}"#,
         json_escape(temp_unique_id.as_str()),
         json_escape(temp_topic.as_str()),
         json_escape(availability_topic.as_str()),
         device_block,
     );
     let hum_discovery_payload = format!(
-        r#"{{\"name\":\"Humidity\",\"unique_id\":\"{}\",\"state_topic\":\"{}\",\"unit_of_measurement\":\"%\",\"device_class\":\"humidity\",\"state_class\":\"measurement\",\"availability_topic\":\"{}\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\",\"device\":{}}}"#,
+        r#"{{"name":"Humidity","unique_id":"{}","state_topic":"{}","unit_of_measurement":"%","device_class":"humidity","state_class":"measurement","availability_topic":"{}","payload_available":"online","payload_not_available":"offline","device":{}}}"#,
         json_escape(hum_unique_id.as_str()),
         json_escape(hum_topic.as_str()),
         json_escape(availability_topic.as_str()),
@@ -1879,6 +2190,7 @@ async fn mqtt_publish_with_discovery(
     .await;
     socket.close();
     let _ = embassy_time::with_timeout(Duration::from_secs(MQTT_IO_TIMEOUT_SECS), socket.flush()).await;
+    log_runtime_line("MQTT: publish cycle done");
 }
 
 #[cfg(feature = "wifi")]
@@ -1891,7 +2203,11 @@ async fn mqtt_connect(
     let username = username.trim();
     let password = password.trim();
     let has_user = !username.is_empty();
-    let has_pass = !password.is_empty();
+    let has_pass = has_user && !password.is_empty();
+
+    if !has_user && !password.is_empty() {
+        log_runtime_line("MQTT: password provided without username; ignoring password");
+    }
 
     let mut payload: Vec<u8> = Vec::new();
     push_mqtt_utf8(&mut payload, client_id);
