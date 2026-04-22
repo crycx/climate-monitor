@@ -52,6 +52,20 @@ const TEMP_OFFSET_KEY: u64 = fnv1a_hash(b"temp_offset");
 const HUM_OFFSET_KEY: u64 = fnv1a_hash(b"hum_offset");
 const SENSOR_INTERVAL_SECS_KEY: u64 = fnv1a_hash(b"sensor_interval_secs");
 const OLED_ORIENTATION_KEY: u64 = fnv1a_hash(b"oled_orientation");
+const MQTT_HOST_KEY: u64 = fnv1a_hash(b"mqtt_host");
+const MQTT_PORT_KEY: u64 = fnv1a_hash(b"mqtt_port");
+const MQTT_USERNAME_KEY: u64 = fnv1a_hash(b"mqtt_username");
+const MQTT_PASSWORD_KEY: u64 = fnv1a_hash(b"mqtt_password");
+const MQTT_BASE_TOPIC_KEY: u64 = fnv1a_hash(b"mqtt_base_topic");
+const MQTT_DEVICE_ID_KEY: u64 = fnv1a_hash(b"mqtt_device_id");
+// Legacy (global) flag used by earlier firmware builds.
+const MQTT_ENABLED_KEY: u64 = fnv1a_hash(b"mqtt_enabled");
+// Per-WiFi-slot MQTT enablement.
+const MQTT_ENABLED_1_KEY: u64 = fnv1a_hash(b"mqtt_enabled_1");
+const MQTT_ENABLED_2_KEY: u64 = fnv1a_hash(b"mqtt_enabled_2");
+const MQTT_ENABLED_3_KEY: u64 = fnv1a_hash(b"mqtt_enabled_3");
+const MQTT_ENABLED_4_KEY: u64 = fnv1a_hash(b"mqtt_enabled_4");
+const MQTT_ENABLED_5_KEY: u64 = fnv1a_hash(b"mqtt_enabled_5");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -76,10 +90,42 @@ pub struct AppConfig {
     pub hum_offset: String,
     pub sensor_interval_secs: String,
     pub oled_orientation: String,
+    pub mqtt_host: String,
+    pub mqtt_port: String,
+    pub mqtt_username: String,
+    pub mqtt_password: String,
+    pub mqtt_base_topic: String,
+    pub mqtt_device_id: String,
+    pub mqtt_enabled_1: bool,
+    pub mqtt_enabled_2: bool,
+    pub mqtt_enabled_3: bool,
+    pub mqtt_enabled_4: bool,
+    pub mqtt_enabled_5: bool,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
+        let mqtt_host: String = option_env!("MQTT_HOST").unwrap_or("").into();
+        let mqtt_enabled_default = option_env!("MQTT_ENABLED")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(!mqtt_host.is_empty());
+
+        let mqtt_enabled_1 = option_env!("MQTT_ENABLED_1")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(mqtt_enabled_default);
+        let mqtt_enabled_2 = option_env!("MQTT_ENABLED_2")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(mqtt_enabled_default);
+        let mqtt_enabled_3 = option_env!("MQTT_ENABLED_3")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(mqtt_enabled_default);
+        let mqtt_enabled_4 = option_env!("MQTT_ENABLED_4")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(mqtt_enabled_default);
+        let mqtt_enabled_5 = option_env!("MQTT_ENABLED_5")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(mqtt_enabled_default);
+
         Self {
             wifi_ssid: option_env!("WIFI_SSID").unwrap_or("").into(),
             wifi_password: option_env!("WIFI_PASSWORD").unwrap_or("").into(),
@@ -102,6 +148,17 @@ impl Default for AppConfig {
             hum_offset: option_env!("HUM_OFFSET").unwrap_or("-7.0").into(),
             sensor_interval_secs: option_env!("SENSOR_INTERVAL_SECS").unwrap_or("30").into(),
             oled_orientation: option_env!("OLED_ORIENTATION").unwrap_or("landscape").into(),
+            mqtt_host,
+            mqtt_port: option_env!("MQTT_PORT").unwrap_or("1883").into(),
+            mqtt_username: option_env!("MQTT_USERNAME").unwrap_or("").into(),
+            mqtt_password: option_env!("MQTT_PASSWORD").unwrap_or("").into(),
+            mqtt_base_topic: option_env!("MQTT_BASE_TOPIC").unwrap_or("climate_monitor").into(),
+            mqtt_device_id: option_env!("MQTT_DEVICE_ID").unwrap_or("").into(),
+            mqtt_enabled_1,
+            mqtt_enabled_2,
+            mqtt_enabled_3,
+            mqtt_enabled_4,
+            mqtt_enabled_5,
         }
     }
 }
@@ -230,6 +287,76 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(OLED_ORIENTATION_KEY).await? {
             cfg.oled_orientation = value;
         }
+        if let Some(value) = self.get_string(MQTT_HOST_KEY).await? {
+            cfg.mqtt_host = value;
+        }
+        if let Some(value) = self.get_string(MQTT_PORT_KEY).await? {
+            cfg.mqtt_port = value;
+        }
+        if let Some(value) = self.get_string(MQTT_USERNAME_KEY).await? {
+            cfg.mqtt_username = value;
+        }
+        if let Some(value) = self.get_string(MQTT_PASSWORD_KEY).await? {
+            cfg.mqtt_password = value;
+        }
+        if let Some(value) = self.get_string(MQTT_BASE_TOPIC_KEY).await? {
+            cfg.mqtt_base_topic = value;
+        }
+        if let Some(value) = self.get_string(MQTT_DEVICE_ID_KEY).await? {
+            cfg.mqtt_device_id = value;
+        }
+
+        // Backwards compatible default:
+        // - If per-slot flag is missing, fall back to legacy global flag.
+        // - If legacy flag is also missing, enable MQTT when host is set.
+        let legacy_enabled = self
+            .get_u32(MQTT_ENABLED_KEY)
+            .await?
+            .map(|v| v != 0)
+            .unwrap_or(!cfg.mqtt_host.trim().is_empty());
+
+        cfg.mqtt_enabled_1 = self
+            .get_u32(MQTT_ENABLED_1_KEY)
+            .await?
+            .map(|v| v != 0)
+            .unwrap_or(legacy_enabled && !cfg.wifi_ssid.is_empty());
+        cfg.mqtt_enabled_2 = self
+            .get_u32(MQTT_ENABLED_2_KEY)
+            .await?
+            .map(|v| v != 0)
+            .unwrap_or(legacy_enabled && !cfg.wifi_ssid_2.is_empty());
+        cfg.mqtt_enabled_3 = self
+            .get_u32(MQTT_ENABLED_3_KEY)
+            .await?
+            .map(|v| v != 0)
+            .unwrap_or(legacy_enabled && !cfg.wifi_ssid_3.is_empty());
+        cfg.mqtt_enabled_4 = self
+            .get_u32(MQTT_ENABLED_4_KEY)
+            .await?
+            .map(|v| v != 0)
+            .unwrap_or(legacy_enabled && !cfg.wifi_ssid_4.is_empty());
+        cfg.mqtt_enabled_5 = self
+            .get_u32(MQTT_ENABLED_5_KEY)
+            .await?
+            .map(|v| v != 0)
+            .unwrap_or(legacy_enabled && !cfg.wifi_ssid_5.is_empty());
+
+        // Ensure empty slots never have MQTT enabled.
+        if cfg.wifi_ssid.is_empty() {
+            cfg.mqtt_enabled_1 = false;
+        }
+        if cfg.wifi_ssid_2.is_empty() {
+            cfg.mqtt_enabled_2 = false;
+        }
+        if cfg.wifi_ssid_3.is_empty() {
+            cfg.mqtt_enabled_3 = false;
+        }
+        if cfg.wifi_ssid_4.is_empty() {
+            cfg.mqtt_enabled_4 = false;
+        }
+        if cfg.wifi_ssid_5.is_empty() {
+            cfg.mqtt_enabled_5 = false;
+        }
         Ok(cfg)
     }
 
@@ -255,7 +382,34 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_string(WIFI_LOCATION_5_KEY, &cfg.wifi_location_5).await?;
         self.set_string(TEMP_OFFSET_KEY, &cfg.temp_offset).await?;
         self.set_string(HUM_OFFSET_KEY, &cfg.hum_offset).await?;
+        self.set_string(SENSOR_INTERVAL_SECS_KEY, &cfg.sensor_interval_secs)
+            .await?;
         self.set_string(OLED_ORIENTATION_KEY, &cfg.oled_orientation)
+            .await?;
+        self.set_string(MQTT_HOST_KEY, &cfg.mqtt_host).await?;
+        self.set_string(MQTT_PORT_KEY, &cfg.mqtt_port).await?;
+        self.set_string(MQTT_USERNAME_KEY, &cfg.mqtt_username).await?;
+        self.set_string(MQTT_PASSWORD_KEY, &cfg.mqtt_password).await?;
+        self.set_string(MQTT_BASE_TOPIC_KEY, &cfg.mqtt_base_topic).await?;
+        self.set_string(MQTT_DEVICE_ID_KEY, &cfg.mqtt_device_id).await?;
+        self.set_u32(MQTT_ENABLED_1_KEY, if cfg.mqtt_enabled_1 { 1 } else { 0 })
+            .await?;
+        self.set_u32(MQTT_ENABLED_2_KEY, if cfg.mqtt_enabled_2 { 1 } else { 0 })
+            .await?;
+        self.set_u32(MQTT_ENABLED_3_KEY, if cfg.mqtt_enabled_3 { 1 } else { 0 })
+            .await?;
+        self.set_u32(MQTT_ENABLED_4_KEY, if cfg.mqtt_enabled_4 { 1 } else { 0 })
+            .await?;
+        self.set_u32(MQTT_ENABLED_5_KEY, if cfg.mqtt_enabled_5 { 1 } else { 0 })
+            .await?;
+
+        // Keep legacy flag in sync for downgrade compatibility.
+        let any_enabled = cfg.mqtt_enabled_1
+            || cfg.mqtt_enabled_2
+            || cfg.mqtt_enabled_3
+            || cfg.mqtt_enabled_4
+            || cfg.mqtt_enabled_5;
+        self.set_u32(MQTT_ENABLED_KEY, if any_enabled { 1 } else { 0 })
             .await?;
         Ok(())
     }

@@ -346,3 +346,43 @@ def test_create_reading_rejects_non_string_location():
 
     assert response.status_code == 400
     assert response.get_json()["error"] == "location must be a string"
+
+
+def test_latest_device_reading_endpoint_returns_latest_for_api_key_device():
+    with app.app_context():
+        user = User(username="ha-user", email="ha-user@example.com", password_hash="hash")
+        db.session.add(user)
+        db.session.flush()
+
+        device = Device(
+            user_id=user.id,
+            location_id=None,
+            name="ESP32-C3",
+            device_type="esp32",
+            api_key="ha-api-key",
+            is_active=True,
+        )
+        db.session.add(device)
+        db.session.commit()
+
+    client = app.test_client()
+
+    ingest = client.post(
+        "/api/readings",
+        headers={"X-API-Key": "ha-api-key"},
+        json=[
+            {"sensor_type": "temperature", "value": 21.5, "unit": "C"},
+            {"sensor_type": "humidity", "value": 55.0, "unit": "%"},
+        ],
+    )
+    assert ingest.status_code == 201
+
+    latest_temp = client.get(
+        "/api/readings/latest_device?sensor_type=temperature",
+        headers={"X-API-Key": "ha-api-key"},
+    )
+    assert latest_temp.status_code == 200
+    payload = latest_temp.get_json()
+    assert payload["sensor_type"] == "temperature"
+    assert payload["unit"] == "C"
+    assert payload["value"] == 21.5

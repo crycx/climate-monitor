@@ -421,6 +421,7 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next.wifi_ssid = ssid;
     next.wifi_password = pass;
     next.wifi_location = location;
+    next.mqtt_enabled_1 = !next.wifi_ssid.is_empty() && query_checkbox(full_path, "mqtt_enabled_1");
 
     let (ssid, pass, location) = apply_wifi_slot(
         &current.wifi_ssid_2,
@@ -437,6 +438,7 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next.wifi_ssid_2 = ssid;
     next.wifi_password_2 = pass;
     next.wifi_location_2 = location;
+    next.mqtt_enabled_2 = !next.wifi_ssid_2.is_empty() && query_checkbox(full_path, "mqtt_enabled_2");
 
     let (ssid, pass, location) = apply_wifi_slot(
         &current.wifi_ssid_3,
@@ -453,6 +455,7 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next.wifi_ssid_3 = ssid;
     next.wifi_password_3 = pass;
     next.wifi_location_3 = location;
+    next.mqtt_enabled_3 = !next.wifi_ssid_3.is_empty() && query_checkbox(full_path, "mqtt_enabled_3");
 
     let (ssid, pass, location) = apply_wifi_slot(
         &current.wifi_ssid_4,
@@ -469,6 +472,7 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next.wifi_ssid_4 = ssid;
     next.wifi_password_4 = pass;
     next.wifi_location_4 = location;
+    next.mqtt_enabled_4 = !next.wifi_ssid_4.is_empty() && query_checkbox(full_path, "mqtt_enabled_4");
 
     let (ssid, pass, location) = apply_wifi_slot(
         &current.wifi_ssid_5,
@@ -485,6 +489,7 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next.wifi_ssid_5 = ssid;
     next.wifi_password_5 = pass;
     next.wifi_location_5 = location;
+    next.mqtt_enabled_5 = !next.wifi_ssid_5.is_empty() && query_checkbox(full_path, "mqtt_enabled_5");
 
     next.api_url = query_param(full_path, "api_url").unwrap_or_default();
     next.api_key = query_param(full_path, "api_key").unwrap_or_default();
@@ -500,6 +505,31 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
             .as_str(),
     )
     .into();
+
+    let mqtt_host = query_param(full_path, "mqtt_host").unwrap_or_default();
+    let mqtt_port = query_param(full_path, "mqtt_port")
+        .unwrap_or_else(|| current.mqtt_port.clone());
+    let mqtt_username = query_param(full_path, "mqtt_username")
+        .unwrap_or_else(|| current.mqtt_username.clone());
+    let mqtt_password_next = query_param(full_path, "mqtt_password").unwrap_or_default();
+    let mqtt_password = if !mqtt_password_next.is_empty() {
+        mqtt_password_next
+    } else if mqtt_host == current.mqtt_host {
+        current.mqtt_password.clone()
+    } else {
+        String::new()
+    };
+    let mqtt_base_topic = query_param(full_path, "mqtt_base_topic")
+        .unwrap_or_else(|| current.mqtt_base_topic.clone());
+    let mqtt_device_id = query_param(full_path, "mqtt_device_id")
+        .unwrap_or_else(|| current.mqtt_device_id.clone());
+
+    next.mqtt_host = mqtt_host.trim().into();
+    next.mqtt_port = mqtt_port.trim().into();
+    next.mqtt_username = mqtt_username.trim().into();
+    next.mqtt_password = mqtt_password;
+    next.mqtt_base_topic = mqtt_base_topic.trim().into();
+    next.mqtt_device_id = mqtt_device_id.trim().into();
     next
 }
 
@@ -533,7 +563,14 @@ fn html_escape(input: &str) -> String {
     out
 }
 
-fn render_wifi_slot(index: usize, ssid: &str, password: &str, location: &str, visible: bool) -> String {
+fn render_wifi_slot(
+    index: usize,
+    ssid: &str,
+    password: &str,
+    location: &str,
+    mqtt_enabled: bool,
+    visible: bool,
+) -> String {
     let suffix = if index == 1 {
         String::new()
     } else {
@@ -548,9 +585,10 @@ fn render_wifi_slot(index: usize, ssid: &str, password: &str, location: &str, vi
     };
     let placeholder = if password.is_empty() { "" } else { "(unchanged)" };
     let classes = if visible { "card wifi-card" } else { "card wifi-card hidden" };
+    let mqtt_checked = if mqtt_enabled { "checked" } else { "" };
 
     format!(
-        "<section class='{}' data-slot='{}'><div class='card-head'><h3>WiFi slot {}</h3><button class='danger remove-wifi-btn' type='button'>Remove</button></div><label>SSID<input list='wifi-options' name='wifi_ssid{}' value='{}' autocomplete='off'></label><label>Password<input type='password' name='wifi_password{}' value='' placeholder='{}' autocomplete='off'></label><label>Location<input name='wifi_location{}' value='{}' placeholder='e.g. Kodu 3'></label><label class='check'><input type='checkbox' name='wifi_no_password_{}' {}> No password</label></section>",
+        "<section class='{}' data-slot='{}'><div class='card-head'><h3>WiFi slot {}</h3><button class='danger remove-wifi-btn' type='button'>Remove</button></div><label>SSID<input list='wifi-options' name='wifi_ssid{}' value='{}' autocomplete='off'></label><label>Password<input type='password' name='wifi_password{}' value='' placeholder='{}' autocomplete='off'></label><label>Location<input name='wifi_location{}' value='{}' placeholder='e.g. Kodu 3'></label><label class='check'><input type='checkbox' name='wifi_no_password_{}' {}> No password</label><label class='check'><input type='checkbox' name='mqtt_enabled_{}' {}> MQTT enabled</label></section>",
         classes,
         index,
         index,
@@ -562,6 +600,8 @@ fn render_wifi_slot(index: usize, ssid: &str, password: &str, location: &str, vi
         html_escape(location),
         index,
         checked,
+        index,
+        mqtt_checked,
     )
 }
 
@@ -595,16 +635,46 @@ where
     conn.write_all(b"<div class='actions toolbar'><button class='secondary' type='button' id='scan-btn'>Scan WiFi</button><button class='secondary' type='button' id='add-wifi-btn'>Add new config</button><small id='scan-status'>Press Scan WiFi to search networks.</small></div><form method='GET' action='/save'><div class='grid' id='wifi-grid'>").await?;
 
     let slots = [
-        (1usize, cfg.wifi_ssid.as_str(), cfg.wifi_password.as_str(), cfg.wifi_location.as_str()),
-        (2usize, cfg.wifi_ssid_2.as_str(), cfg.wifi_password_2.as_str(), cfg.wifi_location_2.as_str()),
-        (3usize, cfg.wifi_ssid_3.as_str(), cfg.wifi_password_3.as_str(), cfg.wifi_location_3.as_str()),
-        (4usize, cfg.wifi_ssid_4.as_str(), cfg.wifi_password_4.as_str(), cfg.wifi_location_4.as_str()),
-        (5usize, cfg.wifi_ssid_5.as_str(), cfg.wifi_password_5.as_str(), cfg.wifi_location_5.as_str()),
+        (
+            1usize,
+            cfg.wifi_ssid.as_str(),
+            cfg.wifi_password.as_str(),
+            cfg.wifi_location.as_str(),
+            cfg.mqtt_enabled_1,
+        ),
+        (
+            2usize,
+            cfg.wifi_ssid_2.as_str(),
+            cfg.wifi_password_2.as_str(),
+            cfg.wifi_location_2.as_str(),
+            cfg.mqtt_enabled_2,
+        ),
+        (
+            3usize,
+            cfg.wifi_ssid_3.as_str(),
+            cfg.wifi_password_3.as_str(),
+            cfg.wifi_location_3.as_str(),
+            cfg.mqtt_enabled_3,
+        ),
+        (
+            4usize,
+            cfg.wifi_ssid_4.as_str(),
+            cfg.wifi_password_4.as_str(),
+            cfg.wifi_location_4.as_str(),
+            cfg.mqtt_enabled_4,
+        ),
+        (
+            5usize,
+            cfg.wifi_ssid_5.as_str(),
+            cfg.wifi_password_5.as_str(),
+            cfg.wifi_location_5.as_str(),
+            cfg.mqtt_enabled_5,
+        ),
     ];
-    let non_empty = slots.iter().filter(|(_, ssid, _, _)| !ssid.is_empty()).count();
-    for (index, ssid, pass, location) in slots {
+    let non_empty = slots.iter().filter(|(_, ssid, _, _, _)| !ssid.is_empty()).count();
+    for (index, ssid, pass, location, mqtt_enabled) in slots {
         let visible = !ssid.is_empty() || (non_empty == 0 && index == 1);
-        conn.write_all(render_wifi_slot(index, ssid, pass, location, visible).as_bytes())
+        conn.write_all(render_wifi_slot(index, ssid, pass, location, mqtt_enabled, visible).as_bytes())
             .await?;
     }
 
@@ -626,7 +696,24 @@ where
     if cfg.oled_orientation.as_str() == "portrait" {
         conn.write_all(b" selected").await?;
     }
-    conn.write_all(b">Portrait</option></select></label></section><div class='actions panel'><button class='primary' type='submit'>Save settings</button></div></form><section class='card panel'><div class='actions'><h3 style='margin:0'>Runtime log</h3><button class='secondary' type='button' id='log-btn'>Refresh log</button></div><pre id='runtime-log'>Loading...</pre></section><datalist id='wifi-options'>").await?;
+    conn.write_all(b">Portrait</option></select></label></section>").await?;
+
+    conn.write_all(b"<section class='card panel'><h3>MQTT (Home Assistant)</h3><small>Enable/disable MQTT per WiFi slot above.</small><label>Broker host (IP or DNS)<input name='mqtt_host' value='").await?;
+    conn.write_all(html_escape(&cfg.mqtt_host).as_bytes()).await?;
+    conn.write_all(b"'></label><label>Broker port<input name='mqtt_port' value='").await?;
+    conn.write_all(html_escape(&cfg.mqtt_port).as_bytes()).await?;
+    conn.write_all(b"'></label><label>Username<input name='mqtt_username' value='").await?;
+    conn.write_all(html_escape(&cfg.mqtt_username).as_bytes()).await?;
+    let pass_placeholder = if cfg.mqtt_password.is_empty() { "" } else { "(unchanged)" };
+    conn.write_all(b"'></label><label>Password<input type='password' name='mqtt_password' value='' placeholder='").await?;
+    conn.write_all(html_escape(pass_placeholder).as_bytes()).await?;
+    conn.write_all(b"' autocomplete='off'></label><label>Base topic<input name='mqtt_base_topic' value='").await?;
+    conn.write_all(html_escape(&cfg.mqtt_base_topic).as_bytes()).await?;
+    conn.write_all(b"' placeholder='climate_monitor'></label><label>Device id (unique)<input name='mqtt_device_id' value='").await?;
+    conn.write_all(html_escape(&cfg.mqtt_device_id).as_bytes()).await?;
+    conn.write_all(b"' placeholder='e.g. kasvuhoone-c3'></label><small>Home Assistant will create 2 sensors: temperature + humidity.</small></section>").await?;
+
+    conn.write_all(b"<div class='actions panel'><button class='primary' type='submit'>Save settings</button></div></form><section class='card panel'><div class='actions'><h3 style='margin:0'>Runtime log</h3><button class='secondary' type='button' id='log-btn'>Refresh log</button></div><pre id='runtime-log'>Loading...</pre></section><datalist id='wifi-options'>").await?;
     let cached_options = render_cached_wifi_options();
     if !cached_options.is_empty() {
         conn.write_all(cached_options.as_bytes()).await?;

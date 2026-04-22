@@ -79,6 +79,13 @@ runner = "espflash flash --monitor --chip esp32c3 --port COM3 --partition-table 
 [env]
 WIFI_SSID     = "YourNetworkName"
 WIFI_PASSWORD = "YourWifiPassword"
+# Optional: up to 5 saved WiFi networks for automatic fallback.
+# The device will prefer a configured SSID that is visible in a pre-scan.
+# If the first connect times out, it will try the other saved networks before
+# opening the AP recovery portal.
+# WIFI_SSID_2     = "BackupNetwork"
+# WIFI_PASSWORD_2 = "BackupPassword"
+# WIFI_LOCATION_2 = "garage"
 # Optional AP portal tuning
 # AP_CHANNEL = "6"               # 1..11 (often 6 or 11 are best)
 # AP_PORTAL_PASSWORD = "12345678" # WPA2 password, min 8 chars

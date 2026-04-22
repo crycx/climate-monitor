@@ -444,3 +444,25 @@ def latest_readings(current_user: User):
 
     readings = query.limit(clamped_limit).all()
     return jsonify([r.to_dict() for r in readings]), 200
+
+
+@readings_bp.get("/latest_device")
+@api_key_required
+def latest_device_reading(device: Device):
+    """
+    GET /api/readings/latest_device
+    Header: X-API-Key: <device api key>
+    Optional query: sensor_type=temperature
+
+    Returns the latest reading for the calling device.
+    """
+    sensor_type = request.args.get("sensor_type")
+    query = Reading.query.filter_by(device_id=device.id)
+    if sensor_type:
+        query = query.filter(Reading.sensor_type == sensor_type)
+
+    reading = query.order_by(Reading.timestamp.desc(), Reading.id.desc()).first()
+    if not reading:
+        return jsonify({"error": "No readings found"}), 404
+
+    return jsonify(reading.to_dict()), 200
