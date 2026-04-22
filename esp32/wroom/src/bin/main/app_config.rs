@@ -50,6 +50,7 @@ const WIFI_PASSWORD_5_KEY: u64 = fnv1a_hash(b"wifi_password_5");
 const WIFI_LOCATION_5_KEY: u64 = fnv1a_hash(b"wifi_location_5");
 const TEMP_OFFSET_KEY: u64 = fnv1a_hash(b"temp_offset");
 const HUM_OFFSET_KEY: u64 = fnv1a_hash(b"hum_offset");
+const SENSOR_INTERVAL_SECS_KEY: u64 = fnv1a_hash(b"sensor_interval_secs");
 const OLED_ORIENTATION_KEY: u64 = fnv1a_hash(b"oled_orientation");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +74,7 @@ pub struct AppConfig {
     pub wifi_location_5: String,
     pub temp_offset: String,
     pub hum_offset: String,
+    pub sensor_interval_secs: String,
     pub oled_orientation: String,
 }
 
@@ -98,6 +100,7 @@ impl Default for AppConfig {
             wifi_location_5: option_env!("WIFI_LOCATION_5").unwrap_or("").into(),
             temp_offset: option_env!("TEMP_OFFSET").unwrap_or("0.0").into(),
             hum_offset: option_env!("HUM_OFFSET").unwrap_or("0.0").into(),
+            sensor_interval_secs: option_env!("SENSOR_INTERVAL_SECS").unwrap_or("30").into(),
             oled_orientation: option_env!("OLED_ORIENTATION").unwrap_or("landscape").into(),
         }
     }
@@ -183,6 +186,7 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(WIFI_LOCATION_5_KEY).await? { cfg.wifi_location_5 = value; }
         if let Some(value) = self.get_string(TEMP_OFFSET_KEY).await? { cfg.temp_offset = value; }
         if let Some(value) = self.get_string(HUM_OFFSET_KEY).await? { cfg.hum_offset = value; }
+        if let Some(value) = self.get_string(SENSOR_INTERVAL_SECS_KEY).await? { cfg.sensor_interval_secs = value; }
         if let Some(value) = self.get_string(OLED_ORIENTATION_KEY).await? { cfg.oled_orientation = value; }
         Ok(cfg)
     }
@@ -209,6 +213,7 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_string(WIFI_LOCATION_5_KEY, &cfg.wifi_location_5).await?;
         self.set_string(TEMP_OFFSET_KEY, &cfg.temp_offset).await?;
         self.set_string(HUM_OFFSET_KEY, &cfg.hum_offset).await?;
+        self.set_string(SENSOR_INTERVAL_SECS_KEY, &cfg.sensor_interval_secs).await?;
         self.set_string(OLED_ORIENTATION_KEY, &cfg.oled_orientation).await?;
         Ok(())
     }
@@ -265,4 +270,4 @@ pub fn resolve_partition_range(
     let partition_table = partitions::read_partition_table(flash, &mut buffer).map_err(|_| ConfigError::Backend)?;
     let part = partition_table.iter().find(|p| p.label_as_str() == partition_name).ok_or(ConfigError::Backend)?;
     Ok(part.offset()..(part.offset() + part.len()))
-}include!("../../../../c3/src/bin/main/app_config.rs");
+}

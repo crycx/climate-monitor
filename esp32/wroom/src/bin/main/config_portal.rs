@@ -328,8 +328,20 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next.api_key = query_param(full_path, "api_key").unwrap_or_default();
     next.temp_offset = query_param(full_path, "temp_offset").unwrap_or_else(|| current.temp_offset.clone());
     next.hum_offset = query_param(full_path, "hum_offset").unwrap_or_else(|| current.hum_offset.clone());
+    next.sensor_interval_secs = sanitize_sensor_interval_secs(
+        query_param(full_path, "sensor_interval_secs"),
+        &current.sensor_interval_secs,
+    );
     next.oled_orientation = normalize_oled_orientation(query_param(full_path, "oled_orientation").unwrap_or_else(|| current.oled_orientation.clone()).as_str()).into();
     next
+}
+
+fn sanitize_sensor_interval_secs(value: Option<String>, current: &str) -> String {
+    let candidate = value.unwrap_or_else(|| current.into());
+    match candidate.trim().parse::<u64>() {
+        Ok(secs) if (5..=3600).contains(&secs) => format!("{}", secs),
+        _ => current.into(),
+    }
 }
 
 fn normalize_oled_orientation(value: &str) -> &str {
@@ -395,7 +407,9 @@ where
     conn.write_all(html_escape(&cfg.temp_offset).as_bytes()).await?;
     conn.write_all(b"'></label><label>Humidity offset (%)<input name='hum_offset' value='").await?;
     conn.write_all(html_escape(&cfg.hum_offset).as_bytes()).await?;
-    conn.write_all(b"'></label></section><section class='card panel'><h3>Display</h3><label>OLED orientation<select name='oled_orientation'><option value='landscape'").await?;
+    conn.write_all(b"'></label><label>Measurement interval (s)<input type='number' min='5' max='3600' step='1' name='sensor_interval_secs' value='").await?;
+    conn.write_all(html_escape(&cfg.sensor_interval_secs).as_bytes()).await?;
+    conn.write_all(b"'></label><small>Allowed range: 5-3600 seconds. Default is 30.</small></section><section class='card panel'><h3>Display</h3><label>OLED orientation<select name='oled_orientation'><option value='landscape'").await?;
     if cfg.oled_orientation.as_str() != "portrait" { conn.write_all(b" selected").await?; }
     conn.write_all(b">Landscape</option><option value='portrait'").await?;
     if cfg.oled_orientation.as_str() == "portrait" { conn.write_all(b" selected").await?; }
@@ -442,4 +456,4 @@ fn render_cached_wifi_options() -> String {
         }
     }
     out
-}include!("../../../../c3/src/bin/main/config_portal.rs");
+}

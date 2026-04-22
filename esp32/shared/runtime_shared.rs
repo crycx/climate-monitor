@@ -80,7 +80,11 @@ static BUTTON_EVENT: AtomicU8 = AtomicU8::new(BUTTON_EVENT_NONE);
 #[cfg(feature = "wifi")]
 const AP_SSID_PREFIX: &str = "ClimateMonitor-";
 #[cfg(feature = "wifi")]
-const SENSOR_INTERVAL_SECS: u64 = 30;
+const DEFAULT_SENSOR_INTERVAL_SECS: u64 = 30;
+#[cfg(feature = "wifi")]
+const MIN_SENSOR_INTERVAL_SECS: u64 = 5;
+#[cfg(feature = "wifi")]
+const MAX_SENSOR_INTERVAL_SECS: u64 = 3600;
 #[cfg(feature = "wifi")]
 const MAIN_LOOP_TICK_MS: u64 = 250;
 #[cfg(feature = "wifi")]
@@ -149,6 +153,16 @@ fn has_wifi_config(cfg: &AppConfig) -> bool {
         || !cfg.wifi_ssid_3.is_empty()
         || !cfg.wifi_ssid_4.is_empty()
         || !cfg.wifi_ssid_5.is_empty()
+}
+
+#[cfg(feature = "wifi")]
+fn sensor_interval_secs(cfg: &AppConfig) -> u64 {
+    cfg.sensor_interval_secs
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|secs| (MIN_SENSOR_INTERVAL_SECS..=MAX_SENSOR_INTERVAL_SECS).contains(secs))
+        .unwrap_or(DEFAULT_SENSOR_INTERVAL_SECS)
 }
 
 #[cfg(feature = "wifi")]
@@ -531,7 +545,11 @@ async fn main(spawner: Spawner) {
     let mut dht22 = Dht22::new(dht22_pin, Delay::new());
 
     let mut net_was_up = stack.is_config_up();
-    let mut next_sensor_at = Instant::now() + Duration::from_secs(SENSOR_INTERVAL_SECS);
+    let configured_sensor_interval_secs = {
+        let cfg = config_handle.lock().await;
+        sensor_interval_secs(&cfg)
+    };
+    let mut next_sensor_at = Instant::now() + Duration::from_secs(configured_sensor_interval_secs);
     loop {
         let config_save_changed = embassy_time::with_timeout(
             Duration::from_millis(MAIN_LOOP_TICK_MS),
@@ -646,14 +664,22 @@ async fn main(spawner: Spawner) {
                 .await;
             }
 
-            next_sensor_at = Instant::now() + Duration::from_secs(SENSOR_INTERVAL_SECS);
+            let configured_sensor_interval_secs = {
+                let cfg = config_handle.lock().await;
+                sensor_interval_secs(&cfg)
+            };
+            next_sensor_at = Instant::now() + Duration::from_secs(configured_sensor_interval_secs);
             continue;
         }
 
         if Instant::now() < next_sensor_at {
             continue;
         }
-        next_sensor_at = Instant::now() + Duration::from_secs(SENSOR_INTERVAL_SECS);
+        let configured_sensor_interval_secs = {
+            let cfg = config_handle.lock().await;
+            sensor_interval_secs(&cfg)
+        };
+        next_sensor_at = Instant::now() + Duration::from_secs(configured_sensor_interval_secs);
 
         if wifi_runtime::scan_in_progress() {
             log_runtime_line("Scan in progress: pausing sensor post this cycle");

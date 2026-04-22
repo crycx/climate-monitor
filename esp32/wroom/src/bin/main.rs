@@ -58,7 +58,9 @@ use wifi_runtime::WifiCommand;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 const AP_SSID_PREFIX: &str = "ClimateMonitor-";
-const SENSOR_INTERVAL_SECS: u64 = 30;
+const DEFAULT_SENSOR_INTERVAL_SECS: u64 = 30;
+const MIN_SENSOR_INTERVAL_SECS: u64 = 5;
+const MAX_SENSOR_INTERVAL_SECS: u64 = 3600;
 const MAIN_LOOP_TICK_MS: u64 = 250;
 const OLED_REFRESH_MS: u64 = 1000;
 const PRECONNECT_SCAN_WAIT_MS: u64 = 2500;
@@ -199,6 +201,15 @@ fn has_wifi_config(cfg: &AppConfig) -> bool {
         || !cfg.wifi_ssid_3.is_empty()
         || !cfg.wifi_ssid_4.is_empty()
         || !cfg.wifi_ssid_5.is_empty()
+}
+
+fn sensor_interval_secs(cfg: &AppConfig) -> u64 {
+    cfg.sensor_interval_secs
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|secs| (MIN_SENSOR_INTERVAL_SECS..=MAX_SENSOR_INTERVAL_SECS).contains(secs))
+        .unwrap_or(DEFAULT_SENSOR_INTERVAL_SECS)
 }
 
 fn wifi_display_label(location: &str, ssid: &str) -> String {
@@ -561,10 +572,14 @@ async fn main(spawner: Spawner) {
     let mut last_temp: Option<f32> = None;
     let mut last_hum: Option<f32> = None;
     let mut net_was_up = stack.is_config_up();
+    let configured_sensor_interval_secs = {
+        let cfg = config_handle.lock().await;
+        sensor_interval_secs(&cfg)
+    };
     let mut next_sensor_at = if trigger_sensor_now_after_boot {
         Instant::now()
     } else {
-        Instant::now() + Duration::from_secs(SENSOR_INTERVAL_SECS)
+        Instant::now() + Duration::from_secs(configured_sensor_interval_secs)
     };
     let mut next_oled_refresh_at = Instant::now();
     let mut last_oled_data_sent = false;
@@ -759,7 +774,11 @@ async fn main(spawner: Spawner) {
         if Instant::now() < next_sensor_at {
             continue;
         }
-        next_sensor_at = Instant::now() + Duration::from_secs(SENSOR_INTERVAL_SECS);
+        let configured_sensor_interval_secs = {
+            let cfg = config_handle.lock().await;
+            sensor_interval_secs(&cfg)
+        };
+        next_sensor_at = Instant::now() + Duration::from_secs(configured_sensor_interval_secs);
 
         if loop_counter % HEARTBEAT_EVERY_CYCLES == 0 {
             log_runtime_line(

@@ -51,7 +51,7 @@ edge-http = "0.7.0"
 edge-captive = "0.7.0"
 edge-nal = "0.6.0"
 edge-nal-embassy = { version = "0.8.1", default-features = false, features = ["dns", "proto-ipv4", "tcp", "udp"] }
-reqwless = { version = "0.14", default-features = false, features = ["alloc"] }
+reqwless = { version = "0.14", default-features = false, features = ["alloc", "embedded-tls"] }
 static_cell = { version = "2" }
 enumset = { version = "1.1", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }

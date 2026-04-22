@@ -6,7 +6,7 @@ use embassy_net::{
 use embassy_time::Duration;
 use reqwless::{
     headers::ContentType,
-    request::Method,
+    request::{Method, RequestBuilder},
 };
 #[cfg(not(feature = "no-tls"))]
 use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
