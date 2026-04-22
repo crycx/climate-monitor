@@ -245,7 +245,7 @@ export class Home implements AfterViewInit, OnDestroy {
   refreshRequest = signal<{ nonce: number; incremental: boolean }>({ nonce: 0, incremental: false });
   viewReady = signal(false);
   readings = signal<ApiReading[]>([]);
-  isDarkMode = signal(false);
+  isDarkMode = signal(true);
   autoRefreshEnabled = signal(true);
   showDerivedMetrics = signal(true);
   showPeriodInsights = signal(true);
@@ -253,8 +253,6 @@ export class Home implements AfterViewInit, OnDestroy {
   private locationsSub?: Subscription;
   private devicesSub?: Subscription;
   private deviceCharts = new Map<number, Chart>();
-  private colorSchemeMedia?: MediaQueryList;
-  private colorSchemeListener?: (event: MediaQueryListEvent) => void;
   private readonly autoRefreshMs = 30000;
   private readonly renderDebounceMs = 120;
   private readonly rangeStorageKey = 'home.selectedRangeHours';
@@ -379,15 +377,6 @@ export class Home implements AfterViewInit, OnDestroy {
       onCleanup(() => clearInterval(id));
     });
 
-    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-      this.colorSchemeMedia = window.matchMedia('(prefers-color-scheme: dark)');
-      this.isDarkMode.set(this.colorSchemeMedia.matches);
-      this.colorSchemeListener = (event: MediaQueryListEvent) => {
-        this.isDarkMode.set(event.matches);
-      };
-      this.colorSchemeMedia.addEventListener('change', this.colorSchemeListener);
-    }
-
     const storedRange = this.readStoredRangeHours();
     if (storedRange !== undefined) {
       this.selectedRangeHours.set(storedRange);
@@ -424,9 +413,6 @@ export class Home implements AfterViewInit, OnDestroy {
     }
     this.deviceCharts.clear();
     this.closeLoadingSnack();
-    if (this.colorSchemeMedia && this.colorSchemeListener) {
-      this.colorSchemeMedia.removeEventListener('change', this.colorSchemeListener);
-    }
   }
 
   refresh(): void {

@@ -584,12 +584,11 @@
 	border-color: #d0d5dd;
 }
 
-@media (prefers-color-scheme: dark) {
-	.home-header p,
-	.status,
-	.updated {
-		color: #c6d0e1;
-	}
+.home-header p,
+.status,
+.updated {
+	color: #c6d0e1;
+}
 
 	.filter-panel {
 		background: #1d1d1d;
@@ -796,9 +795,8 @@
 		color: #60b4ff;
 	}
 
-	.dash-delta.unchanged {
-		color: #8899b0;
-	}
+.dash-delta.unchanged {
+	color: #8899b0;
 }
 
 @media (min-width: 961px) {
