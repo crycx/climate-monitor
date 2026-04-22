@@ -16,93 +16,95 @@
         <div class="filter-panel-subtitle">Focus the live feed by location, device, and time range.</div>
       </div>
 
-      <div class="filter-grid">
-        <mat-form-field class="filter-field location-filter" appearance="outline" subscriptSizing="dynamic">
-          <mat-label>Location</mat-label>
-          <mat-icon matPrefix>location_on</mat-icon>
-          <mat-select
-            panelClass="home-select-panel"
-            [value]="selectedLocationId()"
-            (selectionChange)="onLocationChange($event.value)"
-          >
-            <mat-option *ngFor="let option of locationOptions()" [value]="option.id">
-              {{ option.label }}
-            </mat-option>
-          </mat-select>
-        </mat-form-field>
+      <div class="filter-row">
+        <div class="filter-grid">
+          <mat-form-field class="filter-field location-filter" appearance="outline" subscriptSizing="dynamic">
+            <mat-label>Location</mat-label>
+            <mat-icon matPrefix>location_on</mat-icon>
+            <mat-select
+              panelClass="home-select-panel"
+              [value]="selectedLocationId()"
+              (selectionChange)="onLocationChange($event.value)"
+            >
+              <mat-option *ngFor="let option of locationOptions()" [value]="option.id">
+                {{ option.label }}
+              </mat-option>
+            </mat-select>
+          </mat-form-field>
 
-        <mat-form-field class="filter-field device-filter" appearance="outline" subscriptSizing="dynamic">
-          <mat-label>Devices</mat-label>
-          <mat-icon matPrefix>devices</mat-icon>
-          <mat-select
-            multiple
-            panelClass="home-select-panel"
-            [value]="selectedDeviceIds()"
-            (selectionChange)="onDeviceSelectionChange($event.value)"
-          >
-            <mat-select-trigger>
-              {{ selectedDeviceIds().length > 0 ? (selectedDeviceIds().length + ' selected') : 'All devices' }}
-            </mat-select-trigger>
-            <mat-option *ngFor="let device of devices()" [value]="device.id">
-              {{ device.name }}
-            </mat-option>
-          </mat-select>
-        </mat-form-field>
+          <mat-form-field class="filter-field device-filter" appearance="outline" subscriptSizing="dynamic">
+            <mat-label>Devices</mat-label>
+            <mat-icon matPrefix>devices</mat-icon>
+            <mat-select
+              multiple
+              panelClass="home-select-panel"
+              [value]="selectedDeviceIds()"
+              (selectionChange)="onDeviceSelectionChange($event.value)"
+            >
+              <mat-select-trigger>
+                {{ selectedDeviceIds().length > 0 ? (selectedDeviceIds().length + ' selected') : 'All devices' }}
+              </mat-select-trigger>
+              <mat-option *ngFor="let device of devices()" [value]="device.id">
+                {{ device.name }}
+              </mat-option>
+            </mat-select>
+          </mat-form-field>
 
-        <mat-form-field class="filter-field range-filter" appearance="outline" subscriptSizing="dynamic">
-          <mat-label>Range</mat-label>
-          <mat-icon matPrefix>schedule</mat-icon>
-          <mat-select
-            panelClass="home-select-panel"
-            [value]="selectedRangeHours()"
-            (selectionChange)="onRangeChange($event.value)"
-          >
-            <mat-option *ngFor="let option of rangeOptions" [value]="option.hours">
-              {{ option.label }}
-            </mat-option>
-          </mat-select>
-        </mat-form-field>
-      </div>
-
-      <div class="filter-actions">
-        <div class="filter-action layout-action">
-          <span class="filter-action-label">Layout</span>
-          <mat-button-toggle-group
-            class="layout-toggle"
-            [value]="viewMode()"
-            (change)="onViewModeChange($event.value)"
-          >
-            <mat-button-toggle [value]="1" matTooltip="Full width">
-              <mat-icon>view_agenda</mat-icon>
-            </mat-button-toggle>
-            <mat-button-toggle [value]="2" matTooltip="Two columns">
-              <mat-icon>grid_view</mat-icon>
-            </mat-button-toggle>
-            <mat-button-toggle [value]="3" matTooltip="Dashboard">
-              <mat-icon>dashboard</mat-icon>
-            </mat-button-toggle>
-          </mat-button-toggle-group>
+          <mat-form-field class="filter-field range-filter" appearance="outline" subscriptSizing="dynamic">
+            <mat-label>Range</mat-label>
+            <mat-icon matPrefix>schedule</mat-icon>
+            <mat-select
+              panelClass="home-select-panel"
+              [value]="selectedRangeHours()"
+              (selectionChange)="onRangeChange($event.value)"
+            >
+              <mat-option *ngFor="let option of rangeOptions" [value]="option.hours">
+                {{ option.label }}
+              </mat-option>
+            </mat-select>
+          </mat-form-field>
         </div>
 
-        <mat-checkbox
-          class="auto-refresh-toggle"
-          [checked]="autoRefreshEnabled()"
-          (change)="onAutoRefreshChange($event.checked)"
-        >
-          Auto refresh (30s)
-        </mat-checkbox>
+        <div class="filter-actions">
+          <div class="filter-action layout-action">
+            <span class="filter-action-label">Layout</span>
+            <mat-button-toggle-group
+              class="layout-toggle"
+              [value]="viewMode()"
+              (change)="onViewModeChange($event.value)"
+            >
+              <mat-button-toggle [value]="1" matTooltip="Full width">
+                <mat-icon>view_agenda</mat-icon>
+              </mat-button-toggle>
+              <mat-button-toggle [value]="2" matTooltip="Two columns">
+                <mat-icon>grid_view</mat-icon>
+              </mat-button-toggle>
+              <mat-button-toggle [value]="3" matTooltip="Dashboard">
+                <mat-icon>dashboard</mat-icon>
+              </mat-button-toggle>
+            </mat-button-toggle-group>
+          </div>
 
-        <button
-          class="refresh-button"
-          mat-flat-button
-          color="primary"
-          type="button"
-          (click)="refresh()"
-          [disabled]="loading()"
-        >
-          <mat-icon>refresh</mat-icon>
-          Refresh
-        </button>
+          <mat-checkbox
+            class="auto-refresh-toggle"
+            [checked]="autoRefreshEnabled()"
+            (change)="onAutoRefreshChange($event.checked)"
+          >
+            Auto refresh (30s)
+          </mat-checkbox>
+
+          <button
+            class="refresh-button"
+            mat-flat-button
+            color="primary"
+            type="button"
+            (click)="refresh()"
+            [disabled]="loading()"
+          >
+            <mat-icon>refresh</mat-icon>
+            Refresh
+          </button>
+        </div>
       </div>
     </div>
   </div>
