@@ -515,5 +515,5 @@ def test_device_readings_csv_uses_time_filter_and_contains_temp_humidity_columns
 
     csv_text = response.get_data(as_text=True)
     assert "timestamp,temperature,humidity" in csv_text
-    assert "2026-04-23T12:00:00Z,24.5,52.1" in csv_text
-    assert "2026-04-21T12:00:00Z" not in csv_text
+    assert "23.04.2026 12:00:00,24.5,52.1" in csv_text
+    assert "21.04.2026 12:00:00" not in csv_text

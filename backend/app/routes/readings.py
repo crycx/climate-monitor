@@ -289,6 +289,10 @@ def _format_csv_number(value) -> str:
     return formatted if formatted else "0"
 
 
+def _format_csv_timestamp(value: datetime) -> str:
+    return value.strftime("%d.%m.%Y %H:%M:%S")
+
+
 def _resolve_location_for_user(current_user: User, location_id: int | None):
     if location_id is None:
         return None, None
@@ -530,7 +534,7 @@ def device_readings_csv(current_user: User, device_id: int):
 
     readings = query.order_by(Reading.timestamp.asc(), Reading.id.asc()).all()
 
-    rows_by_ts: dict[str, dict[str, str]] = {}
+    rows_by_ts: dict[int, dict[str, str]] = {}
     for reading in readings:
         if reading.timestamp is None:
             continue
@@ -544,18 +548,23 @@ def device_readings_csv(current_user: User, device_id: int):
             ts = ts.astimezone(timezone.utc)
 
         # Group by second to align temperature/humidity values captured in the same sample window.
-        key = ts.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        ts_sec = ts.replace(microsecond=0)
+        key = int(ts_sec.timestamp())
         row = rows_by_ts.setdefault(
             key,
-            {"timestamp": key, "temperature": "", "humidity": ""},
+            {
+                "timestamp": _format_csv_timestamp(ts_sec),
+                "temperature": "",
+                "humidity": "",
+            },
         )
         row[reading.sensor_type] = _format_csv_number(reading.value)
 
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=["timestamp", "temperature", "humidity"])
     writer.writeheader()
-    for timestamp in sorted(rows_by_ts.keys()):
-        writer.writerow(rows_by_ts[timestamp])
+    for timestamp_key in sorted(rows_by_ts.keys()):
+        writer.writerow(rows_by_ts[timestamp_key])
 
     response = make_response(output.getvalue())
     response.headers["Content-Type"] = "text/csv; charset=utf-8"
