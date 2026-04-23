@@ -47,16 +47,18 @@
       </aside>
 
       <div class="content-wrap">
-        <button
-          mat-icon-button
-          type="button"
+        <div
           class="desktop-sidebar-btn"
+          role="button"
+          tabindex="0"
           [attr.aria-label]="sidebarHidden() ? 'Show sidebar' : 'Hide sidebar'"
-          [matTooltip]="sidebarHidden() ? 'Show sidebar' : 'Hide sidebar'"
+          [attr.title]="sidebarHidden() ? 'Show sidebar' : 'Hide sidebar'"
           (click)="toggleSidebarHidden()"
+          (keydown.enter)="toggleSidebarHidden()"
+          (keydown.space)="toggleSidebarHidden(); $event.preventDefault()"
         >
           <mat-icon>{{ sidebarHidden() ? 'keyboard_double_arrow_right' : 'keyboard_double_arrow_left' }}</mat-icon>
-        </button>
+        </div>
         <header class="content-topbar">
           <button mat-icon-button type="button" class="mobile-nav-btn" aria-label="Open navigation" (click)="toggleSidebar()">
             <mat-icon>menu</mat-icon>

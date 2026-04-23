@@ -590,6 +590,24 @@ def list_device_shares(current_user: User, device_id: int):
     return jsonify([_share_payload(share) for share in shares]), 200
 
 
+@devices_bp.get("/<int:device_id>/shareable-users")
+@login_required
+def list_shareable_users(current_user: User, device_id: int):
+    device = db.session.get(Device, device_id)
+    if not device:
+        return jsonify({"error": "Device not found"}), 404
+    if not _can_manage_device(current_user, device):
+        return jsonify({"error": "Access denied"}), 403
+
+    users = (
+        User.query
+        .filter(User.id != device.user_id)
+        .order_by(User.username.asc(), User.id.asc())
+        .all()
+    )
+    return jsonify([user.to_dict() for user in users]), 200
+
+
 @devices_bp.post("/<int:device_id>/shares")
 @login_required
 def create_device_share(current_user: User, device_id: int):
@@ -600,13 +618,23 @@ def create_device_share(current_user: User, device_id: int):
         return jsonify({"error": "Access denied"}), 403
 
     payload = request.get_json(silent=True) or {}
+    shared_user = None
+    shared_with_user_id = payload.get("shared_with_user_id")
     email = (payload.get("shared_with_email") or "").strip().lower()
-    if not email:
-        return jsonify({"error": "shared_with_email is required"}), 400
 
-    shared_user = User.query.filter(User.email == email).first()
+    if shared_with_user_id is not None:
+        if not isinstance(shared_with_user_id, int):
+            return jsonify({"error": "shared_with_user_id must be an integer"}), 400
+        shared_user = db.session.get(User, shared_with_user_id)
+        if not shared_user:
+            return jsonify({"error": "User not found for shared_with_user_id"}), 404
+    else:
+        if not email:
+            return jsonify({"error": "shared_with_user_id or shared_with_email is required"}), 400
+        shared_user = User.query.filter(User.email == email).first()
+
     if not shared_user:
-        return jsonify({"error": "User not found for shared_with_email"}), 404
+        return jsonify({"error": "User not found"}), 404
     if shared_user.id == device.user_id:
         return jsonify({"error": "Device owner cannot be added as shared user"}), 400
 

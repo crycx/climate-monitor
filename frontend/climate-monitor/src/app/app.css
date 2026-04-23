@@ -7,6 +7,7 @@
   position: relative;
   min-height: 100vh;
   display: grid;
+  --sidebar-width: 280px;
   grid-template-columns: 280px minmax(0, 1fr);
 }
 
@@ -96,27 +97,50 @@
 }
 
 .desktop-sidebar-btn {
-  position: absolute;
+  --toggle-border-color: rgba(148, 163, 184, 0.22);
+  position: fixed;
   top: 1rem;
-  left: 0;
-  z-index: 4;
+  left: calc(var(--sidebar-width) - 10px);
+  z-index: 6;
   width: 34px;
   height: 46px;
   min-height: 46px;
-  border-radius: 0 12px 12px 0;
-  transform: translateX(-50%);
-  background: #1d1d1d;
-  color: #cbd5e1;
-  border: 1px solid rgba(148, 163, 184, 0.32);
-  border-left: none;
-  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.28);
-  transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+  border-radius: 0 10px 10px 0;
+  background:
+    linear-gradient(var(--toggle-border-color), var(--toggle-border-color)) right top / 72% 1px no-repeat,
+    linear-gradient(var(--toggle-border-color), var(--toggle-border-color)) right bottom / 72% 1px no-repeat,
+    #1d1d1d;
+  color: #c6d0e1;
+  border: 0;
+  border-right: 1px solid var(--toggle-border-color);
+  box-shadow: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 160ms ease, border-color 160ms ease;
 }
 
 .desktop-sidebar-btn:hover {
-  background: #253047;
+  --toggle-border-color: rgba(148, 163, 184, 0.32);
   color: #e5edf9;
-  border-color: rgba(148, 163, 184, 0.48);
+  /* border-right-color: var(--toggle-border-color); */
+}
+
+.desktop-sidebar-btn .mat-icon {
+  transition: color 140ms ease, transform 140ms ease;
+}
+
+.desktop-sidebar-btn:hover .mat-icon {
+  color: #22d3ee;
+  /* transform: scale(1.08); */
+}
+
+.desktop-sidebar-btn:focus-visible {
+  outline: 2px solid rgba(46, 144, 250, 0.85);
+  /* outline-offset: 2px; */
 }
 
 .content-topbar {
@@ -155,7 +179,11 @@
   }
 
   .app-shell.app-shell-sidebar-hidden .desktop-sidebar-btn {
-    transform: translateX(0);
+    left: 0px;
+    background:
+      linear-gradient(var(--toggle-border-color), var(--toggle-border-color)) right top / 100% 1px no-repeat,
+      linear-gradient(var(--toggle-border-color), var(--toggle-border-color)) right bottom / 100% 1px no-repeat,
+      #1d1d1d;
   }
 }
 

@@ -78,6 +78,7 @@ export interface ApiDeviceShare {
 }
 
 export interface CreateDeviceSharePayload {
+  shared_with_user_id?: number;
   shared_with_email: string;
   starts_at: string;
   ends_at: string;
@@ -190,6 +191,12 @@ export class ApiService {
 
   listDeviceShares(deviceId: number): Observable<ApiDeviceShare[]> {
     return this.http.get<ApiDeviceShare[]>(`${this.base}/devices/${deviceId}/shares`, {
+      withCredentials: true,
+    });
+  }
+
+  listShareableUsers(deviceId: number): Observable<ApiUser[]> {
+    return this.http.get<ApiUser[]>(`${this.base}/devices/${deviceId}/shareable-users`, {
       withCredentials: true,
     });
   }

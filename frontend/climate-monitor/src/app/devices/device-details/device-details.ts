@@ -6,6 +6,7 @@ import { MatSnackBar } from '@angular/material/snack-bar';
 import { DialogService } from '../../custom-components/dialog/dialog.service';
 import { Snackbar } from '../../custom-components/snackbar/snackbar';
 import {
+  ApiUser,
   ApiLocation,
   ApiDeviceShare,
   ApiService,
@@ -39,7 +40,9 @@ export class DeviceDetails implements OnInit, OnDestroy {
 
   isCreateMode = false;
   deviceId: number | null = null;
+  deviceOwnerUserId: number | null = null;
   locations = signal<ApiLocation[]>([]);
+  shareableUsers = signal<ApiUser[]>([]);
 
   form: FormGroup;
   shareForm: FormGroup;
@@ -63,7 +66,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
     });
 
     this.shareForm = this.fb.group({
-      shared_with_email: ['', [Validators.required, Validators.email]],
+      shared_with_user_id: ['', [Validators.required]],
       starts_at: ['', [Validators.required]],
       ends_at: ['', [Validators.required]],
     });
@@ -85,6 +88,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
         this.deviceId = null;
         this.canManage.set(true);
         this.shares.set([]);
+        this.shareableUsers.set([]);
         this.shareError.set(null);
         this.form.reset({
           name: '',
@@ -129,6 +133,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
       next: (device) => {
         this.loading.set(false);
         this.canManage.set(device.can_manage ?? true);
+        this.deviceOwnerUserId = device.user_id;
         this.form.patchValue({
           name: device.name,
           device_type: device.device_type ?? '',
@@ -138,9 +143,11 @@ export class DeviceDetails implements OnInit, OnDestroy {
         });
 
         if (this.canManage()) {
+          this.loadShareableUsers(id);
           this.loadShares(id);
         } else {
           this.shares.set([]);
+          this.shareableUsers.set([]);
           this.shareError.set('You can view this device, but sharing is only available for owner/admin.');
         }
       },
@@ -319,17 +326,23 @@ export class DeviceDetails implements OnInit, OnDestroy {
     }
 
     const payload: CreateDeviceSharePayload = {
-      shared_with_email: String(this.shareForm.value.shared_with_email ?? '').trim().toLowerCase(),
+      shared_with_user_id: Number(this.shareForm.value.shared_with_user_id),
+      shared_with_email: '',
       starts_at: startsAtIso,
       ends_at: endsAtIso,
     };
+
+    if (!Number.isInteger(payload.shared_with_user_id) || (payload.shared_with_user_id ?? 0) <= 0) {
+      this.shareError.set('Please select a user.');
+      return;
+    }
 
     this.shareSaving.set(true);
     this.api.createDeviceShare(this.deviceId, payload).pipe(takeUntil(this.destroy$)).subscribe({
       next: () => {
         this.shareSaving.set(false);
         this.shareForm.reset({
-          shared_with_email: '',
+          shared_with_user_id: '',
           starts_at: '',
           ends_at: '',
         });
@@ -396,12 +409,82 @@ export class DeviceDetails implements OnInit, OnDestroy {
     });
   }
 
+  private loadShareableUsers(deviceId: number): void {
+    this.api.listShareableUsers(deviceId).pipe(takeUntil(this.destroy$)).subscribe({
+      next: (users) => {
+        this.shareableUsers.set(users ?? []);
+        if ((users ?? []).length === 0) {
+          this.shareError.set('No other users available for sharing.');
+        }
+      },
+      error: () => {
+        // Fallback for environments where /shareable-users endpoint is not deployed yet.
+        this.api.listUsers().pipe(takeUntil(this.destroy$)).subscribe({
+          next: (users) => {
+            const ownerId = this.deviceOwnerUserId;
+            const filtered = (users ?? []).filter((user) => user.id !== ownerId);
+            this.shareableUsers.set(filtered);
+            if (filtered.length === 0) {
+              this.shareError.set('No other users available for sharing. If this is unexpected, backend may need update.');
+            }
+          },
+          error: () => {
+            this.shareableUsers.set([]);
+            this.shareError.set('Failed to load users for sharing.');
+          },
+        });
+      },
+    });
+  }
+
   private localDateTimeToIso(value: string | null | undefined): string | null {
     if (!value) {
       return null;
     }
 
-    const date = new Date(value);
+    const normalized = String(value).trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const etMatch = normalized.match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})$/);
+    if (etMatch) {
+      const day = Number(etMatch[1]);
+      const month = Number(etMatch[2]);
+      const year = Number(etMatch[3]);
+      const hours = Number(etMatch[4]);
+      const minutes = Number(etMatch[5]);
+
+      if (
+        Number.isNaN(day) ||
+        Number.isNaN(month) ||
+        Number.isNaN(year) ||
+        Number.isNaN(hours) ||
+        Number.isNaN(minutes) ||
+        month < 1 ||
+        month > 12 ||
+        day < 1 ||
+        day > 31 ||
+        hours < 0 ||
+        hours > 23 ||
+        minutes < 0 ||
+        minutes > 59
+      ) {
+        return null;
+      }
+
+      const date = new Date(year, month - 1, day, hours, minutes, 0, 0);
+      if (
+        date.getFullYear() !== year ||
+        date.getMonth() !== month - 1 ||
+        date.getDate() !== day
+      ) {
+        return null;
+      }
+      return date.toISOString();
+    }
+
+    const date = new Date(normalized);
     if (Number.isNaN(date.getTime())) {
       return null;
     }

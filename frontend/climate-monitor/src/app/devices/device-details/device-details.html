@@ -1,5 +1,5 @@
 <div class="container">
-  <div style="max-width: 640px; margin: 0 auto;">
+  <div style="max-width: 1000px; margin: 0 auto;">
     <mat-card appearance="outlined">
       <mat-card-header>
         <mat-card-title *ngIf="!isCreateMode">Device details</mat-card-title>
@@ -84,12 +84,12 @@
         <form [formGroup]="csvForm" class="two-col-form" autocomplete="off">
           <mat-form-field>
             <mat-label>From</mat-label>
-            <input matInput type="datetime-local" formControlName="from_ts" />
+            <input matInput type="text" formControlName="from_ts" placeholder="dd.MM.yyyy HH:mm" />
           </mat-form-field>
 
           <mat-form-field>
             <mat-label>To</mat-label>
-            <input matInput type="datetime-local" formControlName="to_ts" />
+            <input matInput type="text" formControlName="to_ts" placeholder="dd.MM.yyyy HH:mm" />
           </mat-form-field>
         </form>
       </mat-card-content>
@@ -112,18 +112,24 @@
 
         <form [formGroup]="shareForm" class="three-col-form" autocomplete="off">
           <mat-form-field>
-            <mat-label>User email</mat-label>
-            <input matInput type="email" formControlName="shared_with_email" />
+            <mat-label>User</mat-label>
+            <mat-select formControlName="shared_with_user_id">
+              <mat-option value="">Select user</mat-option>
+              <mat-option *ngFor="let user of shareableUsers()" [value]="user.id">
+                {{ user.username }} ({{ user.email }})
+              </mat-option>
+            </mat-select>
+            <mat-hint *ngIf="shareableUsers().length === 0">No shareable users found</mat-hint>
           </mat-form-field>
 
           <mat-form-field>
             <mat-label>Start</mat-label>
-            <input matInput type="datetime-local" formControlName="starts_at" />
+            <input matInput type="text" formControlName="starts_at" placeholder="dd.MM.yyyy HH:mm" />
           </mat-form-field>
 
           <mat-form-field>
             <mat-label>End</mat-label>
-            <input matInput type="datetime-local" formControlName="ends_at" />
+            <input matInput type="text" formControlName="ends_at" placeholder="dd.MM.yyyy HH:mm" />
           </mat-form-field>
         </form>
 
