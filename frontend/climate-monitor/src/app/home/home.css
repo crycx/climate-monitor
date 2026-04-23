@@ -1,5 +1,6 @@
 .home-page {
 	padding: 1.25rem;
+  padding-top: 0;
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
@@ -182,7 +183,7 @@
 
 .home-header p {
 	margin: 0.25rem 0 0;
-	color: #5e6570;
+		top: 0;
 }
 
 .charts-section {
@@ -487,7 +488,7 @@
 	flex-direction: column;
 	gap: 1rem;
   min-width: 430px;
-  max-width: 600px;
+  max-width: 605px;
 }
 
 .dash-card-header {
@@ -498,6 +499,13 @@
 	margin-bottom: 0.75rem;
 }
 
+.dash-title-stack {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 0.25rem;
+}
+
 .dash-device-name {
 	font-size: 1.4rem;
 	font-weight: 700;
@@ -505,6 +513,9 @@
 }
 
 .dash-location {
+	display: inline-flex;
+	align-items: center;
+	line-height: 1.1;
 	font-size: 0.78rem;
 	color: #667085;
 	background: rgba(102, 112, 133, 0.1);
@@ -1048,24 +1059,27 @@
 }
 
 @media (min-width: 961px) {
-	.home-page {
+	/* .home-page {
 		height: calc(100dvh - 2.35rem);
 		overflow: hidden;
-	}
+	} */
 
 	.home-title {
 		display: none;
 	}
 
 	.home-header {
+		position: sticky;
+		top: 0;
+		z-index: 20;
 		flex: 0 0 auto;
 		margin-bottom: 0.75rem;
 	}
 
 	.home-scroll-area {
 		flex: 1 1 auto;
-		overflow-y: auto;
-		overscroll-behavior: contain;
+		/* overflow-y: auto; */
+		/* overscroll-behavior: contain; */
 		padding-right: 0.25rem;
 	}
 }

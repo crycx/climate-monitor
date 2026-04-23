@@ -33,6 +33,16 @@ CREATE TABLE devices (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Device shares table
+CREATE TABLE device_shares (
+    id SERIAL PRIMARY KEY,
+    device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+    shared_with_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    starts_at TIMESTAMP NOT NULL,
+    ends_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Readings table (high-volume, consider partitioning for production)
 CREATE TABLE readings (
     id BIGSERIAL PRIMARY KEY,
@@ -49,6 +59,8 @@ CREATE INDEX idx_locations_user_id ON locations(user_id);
 CREATE INDEX idx_devices_user_id ON devices(user_id);
 CREATE INDEX idx_devices_location_id ON devices(location_id);
 CREATE INDEX idx_devices_api_key ON devices(api_key);
+CREATE INDEX idx_device_shares_device_id ON device_shares(device_id);
+CREATE INDEX idx_device_shares_shared_with_user_id ON device_shares(shared_with_user_id);
 CREATE INDEX idx_readings_device_id ON readings(device_id);
 CREATE INDEX idx_readings_location_id ON readings(location_id);
 CREATE INDEX idx_readings_timestamp ON readings(timestamp DESC);

@@ -8,6 +8,24 @@ This folder contains two firmware targets and one shared code area:
 
 Both board builds currently run as independent Cargo projects. Shared code is extracted, but full one-build-for-all integration is intentionally deferred.
 
+## Home Assistant (MQTT)
+
+ESP32-C3 firmware can publish readings to an MQTT broker and announce Home Assistant entities via MQTT Discovery.
+
+- Configure MQTT in the device AP portal (http://192.168.4.1/) under **MQTT (Home Assistant)**.
+- Once configured, Home Assistant will auto-create two sensors (temperature + humidity) via discovery.
+
+Published topics (defaults):
+
+- Availability: `climate_monitor/<device_id>/availability` (payload: `online`)
+- Temperature: `climate_monitor/<device_id>/temperature`
+- Humidity: `climate_monitor/<device_id>/humidity`
+
+Discovery topics (retained):
+
+- `homeassistant/sensor/<device_id>_temperature/config`
+- `homeassistant/sensor/<device_id>_humidity/config`
+
 ## Directory Layout
 
 ```

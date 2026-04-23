@@ -282,7 +282,7 @@
       No devices match the current filter.
     </p>
   </div>
-  
+
   <div
     class="dashboard-grid"
     *ngIf="!error() && viewMode() === 3"
@@ -291,10 +291,12 @@
     [cdkDropListData]="visibleDevices()"
     (cdkDropListDropped)="onDeviceDrop($event)"
   >
-      <div class="dash-card" *ngFor="let device of visibleDevices()">
+      <div class="dash-card" *ngFor="let device of visibleDevices()" cdkDrag>
         <div class="dash-card-header">
-          <span class="dash-device-name">{{ device.name }}</span>
-          <span class="dash-location" *ngIf="getLocationName(device.location_id) as loc">{{ loc }}</span>
+          <div class="dash-title-stack">
+            <span class="dash-device-name">{{ device.name }}</span>
+            <span class="dash-location" *ngIf="getLocationName(device.location_id) as loc">{{ loc }}</span>
+          </div>
           <div class="dash-period-badge" *ngIf="deviceStats().get(device.id) as stats">
             <mat-icon class="period-icon">schedule</mat-icon>
             {{ rangeLabel() }}
@@ -302,6 +304,16 @@
               &middot; {{ stats.lastSeenTs | timeAgo }}
             </span>
           </div>
+          <button
+            class="drag-handle"
+            mat-icon-button
+            type="button"
+            cdkDragHandle
+            matTooltip="Lohista, et muuta järjekorda"
+            aria-label="Lohista, et muuta järjekorda"
+          >
+            <mat-icon>drag_indicator</mat-icon>
+          </button>
           <button
             class="dash-insight-toggle-btn"
             mat-icon-button

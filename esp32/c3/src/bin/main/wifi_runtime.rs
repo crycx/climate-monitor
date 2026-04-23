@@ -9,7 +9,7 @@ use embassy_futures::select::{Either3, select3};
 use embassy_net::{Ipv4Address, Ipv4Cidr, Runner, Stack, StackResources, StaticConfigV4};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Receiver, Sender};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Instant, Timer, with_timeout};
 use enumset::EnumSet;
 use esp_hal::peripherals::WIFI;
 use esp_hal::rng::Rng;
@@ -447,10 +447,18 @@ impl WifiRunner {
         }
 
         debug!("wifi: connecting to STA");
-        match self.controller.connect_async().await {
-            Ok(_) => debug!("wifi: STA connected"),
-            Err(e) => {
+        // connect_async() blocks until StaConnected or StaDisconnected event.
+        // If neither fires (wifi stack in bad state after scan stop/start), it hangs forever
+        // and the runner can never process further commands (StaDown, StaUp etc).
+        // Timeout prevents permanent deadlock.
+        match with_timeout(Duration::from_secs(20), self.controller.connect_async()).await {
+            Ok(Ok(_)) => debug!("wifi: STA connected"),
+            Ok(Err(e)) => {
                 error!("wifi: STA connect failed: {:?}", e);
+                Timer::after(Duration::from_millis(STA_RECONNECT_DELAY_MS)).await;
+            }
+            Err(_) => {
+                error!("wifi: STA connect timed out - no wifi event received; retrying");
                 Timer::after(Duration::from_millis(STA_RECONNECT_DELAY_MS)).await;
             }
         }

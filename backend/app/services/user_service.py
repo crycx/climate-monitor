@@ -3,6 +3,7 @@ from sqlalchemy import inspect, text
 from werkzeug.security import generate_password_hash
 
 from ..extensions import db
+from ..models import DeviceShare
 from ..utils.env_utils import to_bool
 
 
@@ -22,6 +23,10 @@ def ensure_readings_location_column() -> None:
 
     db.session.execute(text("ALTER TABLE readings ADD COLUMN location_id INTEGER"))
     db.session.commit()
+
+
+def ensure_device_shares_table() -> None:
+    DeviceShare.__table__.create(bind=db.engine, checkfirst=True)
 
 
 def require_manage_access(current_user, user_id: int):
