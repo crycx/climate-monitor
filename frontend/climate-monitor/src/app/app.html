@@ -1,2 +1,75 @@
-<app-header></app-header>
-<router-outlet></router-outlet>
+<ng-container *ngIf="user$ | async as user; else publicLayout">
+  <ng-container *ngIf="showShell(user); else publicLayout">
+    <div
+      class="app-shell"
+      [class.app-shell-mobile-open]="sidebarOpen()"
+      [class.app-shell-sidebar-hidden]="sidebarHidden()"
+    >
+      <button
+        type="button"
+        class="sidebar-overlay"
+        aria-label="Close navigation"
+        (click)="closeSidebar()"
+      ></button>
+
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <mat-icon>airwave</mat-icon>
+          <span>Climate Monitor</span>
+        </div>
+
+        <nav class="sidebar-nav">
+          <a
+            *ngFor="let item of visibleNavItems(user)"
+            class="nav-link"
+            [class.nav-link-active]="isActive(item)"
+            [routerLink]="item.route"
+            (click)="closeSidebar()"
+          >
+            <mat-icon>{{ item.icon }}</mat-icon>
+            <span>{{ item.label }}</span>
+          </a>
+        </nav>
+
+        <div class="sidebar-user">
+          <div class="sidebar-username">{{ user.username }}</div>
+          <div class="user-actions">
+            <a mat-stroked-button routerLink="/change-password">
+              <mat-icon>lock</mat-icon>
+              Password
+            </a>
+            <button mat-flat-button color="primary" type="button" (click)="logout()">
+              <mat-icon>logout</mat-icon>
+              Logout
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <div class="content-wrap">
+        <button
+          mat-icon-button
+          type="button"
+          class="desktop-sidebar-btn"
+          [attr.aria-label]="sidebarHidden() ? 'Show sidebar' : 'Hide sidebar'"
+          [matTooltip]="sidebarHidden() ? 'Show sidebar' : 'Hide sidebar'"
+          (click)="toggleSidebarHidden()"
+        >
+          <mat-icon>{{ sidebarHidden() ? 'keyboard_double_arrow_right' : 'keyboard_double_arrow_left' }}</mat-icon>
+        </button>
+        <header class="content-topbar">
+          <button mat-icon-button type="button" class="mobile-nav-btn" aria-label="Open navigation" (click)="toggleSidebar()">
+            <mat-icon>menu</mat-icon>
+          </button>
+        </header>
+        <main class="content-main">
+          <router-outlet></router-outlet>
+        </main>
+      </div>
+    </div>
+  </ng-container>
+</ng-container>
+
+<ng-template #publicLayout>
+  <router-outlet></router-outlet>
+</ng-template>

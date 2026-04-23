@@ -114,7 +114,6 @@ export class Home implements AfterViewInit, OnDestroy {
   loading = signal(true);
   error = signal('');
   lastUpdated = signal('');
-  filtersOpen = signal(false);
   locations = signal<ApiLocation[]>([]);
   devices = signal<ApiDevice[]>([]);
   deviceOrderIds = signal<number[]>([]);
@@ -313,7 +312,7 @@ export class Home implements AfterViewInit, OnDestroy {
   refreshRequest = signal<{ nonce: number; incremental: boolean }>({ nonce: 0, incremental: false });
   viewReady = signal(false);
   readings = signal<ApiReading[]>([]);
-  isDarkMode = signal(false);
+  isDarkMode = signal(true);
   autoRefreshEnabled = signal(true);
   showDerivedMetrics = signal(true);
   showPeriodInsights = signal(true);
@@ -451,15 +450,6 @@ export class Home implements AfterViewInit, OnDestroy {
       onCleanup(() => clearInterval(id));
     });
 
-    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-      this.colorSchemeMedia = window.matchMedia('(prefers-color-scheme: dark)');
-      this.isDarkMode.set(this.colorSchemeMedia.matches);
-      this.colorSchemeListener = (event: MediaQueryListEvent) => {
-        this.isDarkMode.set(event.matches);
-      };
-      this.colorSchemeMedia.addEventListener('change', this.colorSchemeListener);
-    }
-
     const storedRange = this.readStoredRangeHours();
     if (storedRange !== undefined) {
       this.selectedRangeHours.set(storedRange);
@@ -520,9 +510,6 @@ export class Home implements AfterViewInit, OnDestroy {
     this.deviceCharts.clear();
     this.destroyComparisonCharts();
     this.closeLoadingSnack();
-    if (this.colorSchemeMedia && this.colorSchemeListener) {
-      this.colorSchemeMedia.removeEventListener('change', this.colorSchemeListener);
-    }
   }
 
   refresh(): void {
@@ -537,10 +524,6 @@ export class Home implements AfterViewInit, OnDestroy {
       nonce: request.nonce + 1,
       incremental: true,
     }));
-  }
-
-  toggleFilters(): void {
-    this.filtersOpen.update((v) => !v);
   }
 
   onLocationChange(value: number | null): void {

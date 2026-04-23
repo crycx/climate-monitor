@@ -1,9 +1,18 @@
 import { ApplicationRef, Component, NgZone, OnInit, signal } from '@angular/core';
 import { MatIconRegistry } from '@angular/material/icon';
-import { MatSnackBar } from '@angular/material/snack-bar'
+import { MatSnackBar } from '@angular/material/snack-bar';
+import { NavigationEnd, Router } from '@angular/router';
 import { SwUpdate } from '@angular/service-worker';
-import { filter } from 'rxjs/internal/operators/filter';
-import { first } from 'rxjs/internal/operators/first';
+import { Observable, filter, first } from 'rxjs';
+import { AuthService, AuthUser } from './auth/auth.service';
+
+type NavItem = {
+  label: string;
+  route: string;
+  icon: string;
+  adminOnly?: boolean;
+  exact?: boolean;
+};
 
 @Component({
   selector: 'app-root',
@@ -13,15 +22,41 @@ import { first } from 'rxjs/internal/operators/first';
 })
 export class App implements OnInit {
   protected readonly title = signal('climate-monitor');
+  protected readonly currentUrl = signal('');
+  protected readonly sidebarOpen = signal(false);
+  protected readonly sidebarHidden = signal(false);
+  protected readonly user$: Observable<AuthUser | null>;
+  protected readonly navItems: NavItem[] = [
+    { label: 'Overview', route: '/', icon: 'dashboard', exact: true },
+    { label: 'Devices', route: '/devices', icon: 'memory' },
+    { label: 'Locations', route: '/locations', icon: 'place' },
+    { label: 'Users', route: '/users', icon: 'group', adminOnly: true },
+  ];
   private updateShown = false;
 
-  constructor(private matIconReg: MatIconRegistry,private sw: SwUpdate,private snack: MatSnackBar,private appRef: ApplicationRef,private zone: NgZone,) {
-    if (!this.sw.isEnabled) return;
+  constructor(
+    private matIconReg: MatIconRegistry,
+    private sw: SwUpdate,
+    private snack: MatSnackBar,
+    private appRef: ApplicationRef,
+    private zone: NgZone,
+    private auth: AuthService,
+    private router: Router
+  ) {
+    this.user$ = this.auth.user$;
+    this.currentUrl.set(this.router.url);
 
     // Logi kõik update eventid
     // this.sw.versionUpdates.subscribe(e => console.log('[SW] versionUpdates:', e));
+    this.router.events
+      .pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd))
+      .subscribe((event) => {
+        this.currentUrl.set(event.urlAfterRedirects);
+        this.sidebarOpen.set(false);
+      });
 
     // Kui uus versioon on valmis, näita snackbari
+    if (!this.sw.isEnabled) return;
     this.sw.versionUpdates
       .pipe(filter(e => e.type === 'VERSION_READY'))
       .subscribe(() => this.showUpdateBar());
@@ -43,6 +78,36 @@ export class App implements OnInit {
     // this.auth.me().subscribe((loggedIn) => {
     //   if (loggedIn) this.auth.startMePolling(60_000);
     // });
+  }
+
+  protected showShell(user: AuthUser | null): boolean {
+    return !!user && !this.isPublicRoute(this.currentUrl());
+  }
+
+  protected visibleNavItems(user: AuthUser): NavItem[] {
+    return this.navItems.filter((item) => !item.adminOnly || user.is_admin);
+  }
+
+  protected isActive(item: NavItem): boolean {
+    const url = this.currentUrl();
+    if (item.exact) return url === item.route;
+    return url === item.route || url.startsWith(`${item.route}/`);
+  }
+
+  protected toggleSidebar(): void {
+    this.sidebarOpen.update((v) => !v);
+  }
+
+  protected closeSidebar(): void {
+    this.sidebarOpen.set(false);
+  }
+
+  protected toggleSidebarHidden(): void {
+    this.sidebarHidden.update((v) => !v);
+  }
+
+  protected logout(): void {
+    this.auth.logout().subscribe();
   }
 
   private safeCheck(): void {
@@ -83,5 +148,12 @@ export class App implements OnInit {
     });
   }
 
-
+  private isPublicRoute(url: string): boolean {
+    return (
+      url === '/login' ||
+      url === '/register' ||
+      url === '/forgot-password' ||
+      url.startsWith('/reset-password')
+    );
+  }
 }
