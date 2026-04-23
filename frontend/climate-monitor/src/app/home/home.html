@@ -282,7 +282,7 @@
       No devices match the current filter.
     </p>
   </div>
-
+  
   <div
     class="dashboard-grid"
     *ngIf="!error() && viewMode() === 3"
@@ -291,51 +291,6 @@
     [cdkDropListData]="visibleDevices()"
     (cdkDropListDropped)="onDeviceDrop($event)"
   >
-    <div class="dash-card" *ngFor="let device of visibleDevices()" cdkDrag>
-      <div class="dash-card-header">
-        <span class="dash-device-name">{{ device.name }}</span>
-        <span class="dash-location" *ngIf="getLocationName(device.location_id) as loc">{{ loc }}</span>
-        <button
-          class="drag-handle"
-          mat-icon-button
-          type="button"
-          cdkDragHandle
-          matTooltip="Lohista, et muuta järjekorda"
-          aria-label="Lohista, et muuta järjekorda"
-        >
-          <mat-icon>drag_indicator</mat-icon>
-        </button>
-        <div class="dash-period-badge" *ngIf="deviceStats().get(device.id) as stats">
-          <mat-icon class="period-icon">schedule</mat-icon>
-          {{ rangeLabel() }}
-          <span class="dash-last-seen" *ngIf="stats.lastSeenTs">
-            &middot; {{ stats.lastSeenTs | timeAgo }}
-          </span>
-    <div class="charts-section" *ngIf="!error()">
-      <div class="charts-divider"></div>
-    </div>
-
-    <div class="chart-grid" [class.two-col]="viewMode() === 2" *ngIf="!error() && viewMode() !== 3">
-      <section class="chart-card" *ngFor="let device of visibleDevices()">
-        <div class="chart-card-header">
-          <h2>{{ device.name }}</h2>
-          <span class="chart-location" *ngIf="getLocationName(device.location_id) as locName">{{ locName }}</span>
-        </div>
-        <div class="reading-badges">
-          <span class="reading-badge temp" *ngIf="getLatestValue(device.id, 'temperature') as t">{{ t | number:'1.1-1' }} °C</span>
-          <span class="reading-badge hum" *ngIf="getLatestValue(device.id, 'humidity') as h">{{ h | number:'1.1-1' }} %</span>
-        </div>
-        <div class="chart-shell">
-          <canvas #deviceCanvas></canvas>
-        </div>
-      </section>
-
-      <p class="no-devices" *ngIf="!loading() && visibleDevices().length === 0 && readings().length > 0">
-        No devices match the current filter.
-      </p>
-    </div>
-
-    <div class="dashboard-grid" *ngIf="!error() && viewMode() === 3">
       <div class="dash-card" *ngFor="let device of visibleDevices()">
         <div class="dash-card-header">
           <span class="dash-device-name">{{ device.name }}</span>
