@@ -52,6 +52,12 @@ const TEMP_OFFSET_KEY: u64 = fnv1a_hash(b"temp_offset");
 const HUM_OFFSET_KEY: u64 = fnv1a_hash(b"hum_offset");
 const SENSOR_INTERVAL_SECS_KEY: u64 = fnv1a_hash(b"sensor_interval_secs");
 const DEEP_SLEEP_ENABLED_KEY: u64 = fnv1a_hash(b"deep_sleep_enabled");
+const DEEP_SLEEP_KEEP_ALIVE_PULSE_MS_KEY: u64 =
+    fnv1a_hash(b"deep_sleep_keep_alive_pulse_ms");
+const DEEP_SLEEP_KEEP_ALIVE_WAKE_INTERVAL_SECS_KEY: u64 =
+    fnv1a_hash(b"deep_sleep_keep_alive_wake_interval_secs");
+const POWER_SOURCE_KEY: u64 = fnv1a_hash(b"power_source");
+const OLED_WAIT_MODE_KEY: u64 = fnv1a_hash(b"oled_wait_mode");
 const OLED_ORIENTATION_KEY: u64 = fnv1a_hash(b"oled_orientation");
 const MQTT_HOST_KEY: u64 = fnv1a_hash(b"mqtt_host");
 const MQTT_PORT_KEY: u64 = fnv1a_hash(b"mqtt_port");
@@ -91,6 +97,10 @@ pub struct AppConfig {
     pub hum_offset: String,
     pub sensor_interval_secs: String,
     pub deep_sleep_enabled: bool,
+    pub deep_sleep_keep_alive_pulse_ms: String,
+    pub deep_sleep_keep_alive_wake_interval_secs: String,
+    pub power_source: String,
+    pub oled_wait_mode: String,
     pub oled_orientation: String,
     pub mqtt_host: String,
     pub mqtt_port: String,
@@ -152,6 +162,16 @@ impl Default for AppConfig {
             deep_sleep_enabled: option_env!("DEEP_SLEEP_ENABLED")
                 .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
                 .unwrap_or(false),
+            deep_sleep_keep_alive_pulse_ms: option_env!("DEEP_SLEEP_KEEP_ALIVE_PULSE_MS")
+                .unwrap_or("0")
+                .into(),
+            deep_sleep_keep_alive_wake_interval_secs: option_env!(
+                "DEEP_SLEEP_KEEP_ALIVE_WAKE_INTERVAL_SECS"
+            )
+            .unwrap_or("0")
+            .into(),
+            power_source: option_env!("POWER_SOURCE").unwrap_or("battery").into(),
+            oled_wait_mode: option_env!("OLED_WAIT_MODE").unwrap_or("dim").into(),
             oled_orientation: option_env!("OLED_ORIENTATION").unwrap_or("landscape").into(),
             mqtt_host,
             mqtt_port: option_env!("MQTT_PORT").unwrap_or("1883").into(),
@@ -292,6 +312,21 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_u32(DEEP_SLEEP_ENABLED_KEY).await? {
             cfg.deep_sleep_enabled = value != 0;
         }
+        if let Some(value) = self.get_string(DEEP_SLEEP_KEEP_ALIVE_PULSE_MS_KEY).await? {
+            cfg.deep_sleep_keep_alive_pulse_ms = value;
+        }
+        if let Some(value) = self
+            .get_string(DEEP_SLEEP_KEEP_ALIVE_WAKE_INTERVAL_SECS_KEY)
+            .await?
+        {
+            cfg.deep_sleep_keep_alive_wake_interval_secs = value;
+        }
+        if let Some(value) = self.get_string(POWER_SOURCE_KEY).await? {
+            cfg.power_source = value;
+        }
+        if let Some(value) = self.get_string(OLED_WAIT_MODE_KEY).await? {
+            cfg.oled_wait_mode = value;
+        }
         if let Some(value) = self.get_string(OLED_ORIENTATION_KEY).await? {
             cfg.oled_orientation = value;
         }
@@ -397,6 +432,18 @@ impl<'d> FlashConfigStorage<'d> {
             if cfg.deep_sleep_enabled { 1 } else { 0 },
         )
         .await?;
+        self.set_string(
+            DEEP_SLEEP_KEEP_ALIVE_PULSE_MS_KEY,
+            &cfg.deep_sleep_keep_alive_pulse_ms,
+        )
+        .await?;
+        self.set_string(
+            DEEP_SLEEP_KEEP_ALIVE_WAKE_INTERVAL_SECS_KEY,
+            &cfg.deep_sleep_keep_alive_wake_interval_secs,
+        )
+        .await?;
+        self.set_string(POWER_SOURCE_KEY, &cfg.power_source).await?;
+        self.set_string(OLED_WAIT_MODE_KEY, &cfg.oled_wait_mode).await?;
         self.set_string(OLED_ORIENTATION_KEY, &cfg.oled_orientation)
             .await?;
         self.set_string(MQTT_HOST_KEY, &cfg.mqtt_host).await?;

@@ -501,6 +501,24 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
         &current.sensor_interval_secs,
         next.deep_sleep_enabled,
     );
+    next.deep_sleep_keep_alive_pulse_ms = sanitize_deep_sleep_keep_alive_pulse_ms(
+        query_param(full_path, "deep_sleep_keep_alive_pulse_ms"),
+        &current.deep_sleep_keep_alive_pulse_ms,
+    );
+    next.deep_sleep_keep_alive_wake_interval_secs =
+        current.deep_sleep_keep_alive_wake_interval_secs.clone();
+    next.power_source = normalize_power_source(
+        query_param(full_path, "power_source")
+            .unwrap_or_else(|| current.power_source.clone())
+            .as_str(),
+    )
+    .into();
+    next.oled_wait_mode = normalize_oled_wait_mode(
+        query_param(full_path, "oled_wait_mode")
+            .unwrap_or_else(|| current.oled_wait_mode.clone())
+            .as_str(),
+    )
+    .into();
     next.oled_orientation = normalize_oled_orientation(
         query_param(full_path, "oled_orientation")
             .unwrap_or_else(|| current.oled_orientation.clone())
@@ -535,10 +553,50 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next
 }
 
-fn sanitize_sensor_interval_secs(value: Option<String>, current: &str, deep_sleep_enabled: bool) -> String {
+fn sanitize_deep_sleep_keep_alive_pulse_ms(value: Option<String>, current: &str) -> String {
+    const MAX_MS: u64 = 5000;
+
+    let candidate = value.unwrap_or_else(|| current.into());
+    match candidate.trim().parse::<u64>() {
+        Ok(ms) if ms <= MAX_MS => format!("{}", ms),
+        _ => current.into(),
+    }
+}
+
+#[allow(dead_code)]
+fn sanitize_deep_sleep_keep_alive_wake_interval_secs(value: Option<String>, current: &str) -> String {
+    const MAX_SECS: u64 = 3600;
+
+    let candidate = value.unwrap_or_else(|| current.into());
+    match candidate.trim().parse::<u64>() {
+        Ok(secs) if secs <= MAX_SECS => format!("{}", secs),
+        _ => current.into(),
+    }
+}
+
+fn normalize_power_source(value: &str) -> &str {
+    match value {
+        "power_bank" => "power_bank",
+        _ => "battery",
+    }
+}
+
+fn normalize_oled_wait_mode(value: &str) -> &str {
+    match value {
+        "off" => "off",
+        "on" => "on",
+        _ => "dim",
+    }
+}
+
+fn sanitize_sensor_interval_secs(
+    value: Option<String>,
+    current: &str,
+    deep_sleep_enabled: bool,
+) -> String {
     const MIN_SECS: u64 = 5;
     const MAX_SECS: u64 = 3600;
-    const DEEP_SLEEP_MIN_SECS: u64 = 120;
+    const DEEP_SLEEP_MIN_SECS: u64 = 5;
 
     let candidate = value.unwrap_or_else(|| current.into());
     match candidate.trim().parse::<u64>() {
@@ -699,10 +757,19 @@ where
     conn.write_all(html_escape(&cfg.hum_offset).as_bytes()).await?;
     conn.write_all(b"'></label><label>Measurement interval (s)<input type='number' min='5' max='3600' step='1' name='sensor_interval_secs' value='").await?;
     conn.write_all(html_escape(&cfg.sensor_interval_secs).as_bytes()).await?;
+    conn.write_all(b"'></label><label>Deep sleep keep-alive pulse (ms)<input type='number' min='0' max='5000' step='1' name='deep_sleep_keep_alive_pulse_ms' value='").await?;
+    conn.write_all(html_escape(&cfg.deep_sleep_keep_alive_pulse_ms).as_bytes()).await?;
+    let power_source_battery_sel = if cfg.power_source.as_str() != "power_bank" { " selected" } else { "" };
+    let power_source_power_bank_sel = if cfg.power_source.as_str() == "power_bank" { " selected" } else { "" };
+    conn.write_all(b"'></label><label>Power source<select name='power_source'><option value='battery'").await?;
+    conn.write_all(power_source_battery_sel.as_bytes()).await?;
+    conn.write_all(b">Battery (deep sleep)</option><option value='power_bank'").await?;
+    conn.write_all(power_source_power_bank_sel.as_bytes()).await?;
+    conn.write_all(b">Power bank (modem sleep)</option></select></label>").await?;
     let deep_sleep_checked = if cfg.deep_sleep_enabled { " checked" } else { "" };
-    conn.write_all(b"'></label><label class='check'><input type='checkbox' name='deep_sleep_enabled'").await?;
+    conn.write_all(b"<label class='check'><input type='checkbox' name='deep_sleep_enabled'").await?;
     conn.write_all(deep_sleep_checked.as_bytes()).await?;
-    conn.write_all(b"> Deep sleep between measurements</label><small>Allowed interval: 5-3600 seconds. When deep sleep is enabled, minimum interval is 120 seconds.</small></section><section class='card panel'><h3>Display</h3><label>OLED orientation<select name='oled_orientation'><option value='landscape'").await?;
+    conn.write_all(b"> Deep sleep between measurements</label><small>Measurement interval: 5-3600 s. Battery = deep sleep (~20 \xc2\xb5A, low power). Power bank = modem sleep (~20-50 mA, prevents auto-shutoff). Keep-alive pulse: 0-5000 ms before deep sleep (0 = disabled).</small></section><section class='card panel'><h3>Display</h3><label>OLED orientation<select name='oled_orientation'><option value='landscape'").await?;
     if cfg.oled_orientation.as_str() != "portrait" {
         conn.write_all(b" selected").await?;
     }
@@ -710,7 +777,16 @@ where
     if cfg.oled_orientation.as_str() == "portrait" {
         conn.write_all(b" selected").await?;
     }
-    conn.write_all(b">Portrait</option></select></label></section>").await?;
+    let oled_wait_on_sel = if cfg.oled_wait_mode.as_str() == "on" { " selected" } else { "" };
+    let oled_wait_dim_sel = if cfg.oled_wait_mode.as_str() == "dim" || (cfg.oled_wait_mode.as_str() != "on" && cfg.oled_wait_mode.as_str() != "off") { " selected" } else { "" };
+    let oled_wait_off_sel = if cfg.oled_wait_mode.as_str() == "off" { " selected" } else { "" };
+    conn.write_all(b">Portrait</option></select></label><label>OLED during power bank wait<select name='oled_wait_mode'><option value='on'").await?;
+    conn.write_all(oled_wait_on_sel.as_bytes()).await?;
+    conn.write_all(b">On</option><option value='dim'").await?;
+    conn.write_all(oled_wait_dim_sel.as_bytes()).await?;
+    conn.write_all(b">Dim</option><option value='off'").await?;
+    conn.write_all(oled_wait_off_sel.as_bytes()).await?;
+    conn.write_all(b">Off</option></select></label></section>").await?;
 
     conn.write_all(b"<section class='card panel'><h3>MQTT (Home Assistant)</h3><small>Enable/disable MQTT per WiFi slot above.</small><label>Broker host (IP or DNS)<input name='mqtt_host' value='").await?;
     conn.write_all(html_escape(&cfg.mqtt_host).as_bytes()).await?;

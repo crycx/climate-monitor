@@ -129,6 +129,11 @@ static LAST_SENT_SECS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "wifi")]
 static BUTTON_EVENT: AtomicU8 = AtomicU8::new(BUTTON_EVENT_NONE);
 
+// Retained across deep-sleep resets: remaining seconds until the next full measurement cycle.
+#[cfg(feature = "wifi")]
+#[esp_hal::ram(unstable(rtc_fast))]
+static mut DEEP_SLEEP_KEEP_ALIVE_REMAINING_SECS: u32 = 0;
+
 #[cfg(feature = "wifi")]
 const AP_SSID_PREFIX: &str = "ClimateMonitor-";
 #[cfg(feature = "wifi")]
@@ -136,9 +141,11 @@ const DEFAULT_SENSOR_INTERVAL_SECS: u64 = 30;
 #[cfg(feature = "wifi")]
 const MIN_SENSOR_INTERVAL_SECS: u64 = 5;
 #[cfg(feature = "wifi")]
-const DEEP_SLEEP_MIN_INTERVAL_SECS: u64 = 120;
-#[cfg(feature = "wifi")]
 const MAX_SENSOR_INTERVAL_SECS: u64 = 3600;
+#[cfg(feature = "wifi")]
+const MAX_DEEP_SLEEP_KEEP_ALIVE_PULSE_MS: u64 = 5000;
+#[cfg(feature = "wifi")]
+const MAX_DEEP_SLEEP_KEEP_ALIVE_WAKE_INTERVAL_SECS: u64 = 3600;
 #[cfg(feature = "wifi")]
 const MAIN_LOOP_TICK_MS: u64 = 250;
 #[cfg(feature = "wifi")]
@@ -260,19 +267,81 @@ fn has_wifi_config(cfg: &AppConfig) -> bool {
 
 #[cfg(feature = "wifi")]
 fn sensor_interval_secs(cfg: &AppConfig) -> u64 {
-    let mut secs = cfg
+    cfg
         .sensor_interval_secs
         .trim()
         .parse::<u64>()
         .ok()
         .filter(|secs| (MIN_SENSOR_INTERVAL_SECS..=MAX_SENSOR_INTERVAL_SECS).contains(secs))
-        .unwrap_or(DEFAULT_SENSOR_INTERVAL_SECS);
+        .unwrap_or(DEFAULT_SENSOR_INTERVAL_SECS)
+}
 
-    if cfg.deep_sleep_enabled && secs < DEEP_SLEEP_MIN_INTERVAL_SECS {
-        secs = DEEP_SLEEP_MIN_INTERVAL_SECS;
+#[cfg(feature = "wifi")]
+fn deep_sleep_keep_alive_pulse_ms(cfg: &AppConfig) -> u64 {
+    cfg.deep_sleep_keep_alive_pulse_ms
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|ms| *ms <= MAX_DEEP_SLEEP_KEEP_ALIVE_PULSE_MS)
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "wifi")]
+fn deep_sleep_keep_alive_wake_interval_secs(cfg: &AppConfig) -> u64 {
+    cfg.deep_sleep_keep_alive_wake_interval_secs
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|secs| *secs <= MAX_DEEP_SLEEP_KEEP_ALIVE_WAKE_INTERVAL_SECS)
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "wifi")]
+fn is_power_bank_mode(cfg: &AppConfig) -> bool {
+    cfg.power_source.trim() == "power_bank"
+}
+
+#[cfg(feature = "wifi")]
+fn oled_wait_mode(cfg: &AppConfig) -> &str {
+    match cfg.oled_wait_mode.trim() {
+        "off" => "off",
+        "on" => "on",
+        _ => "dim",
+    }
+}
+
+#[cfg(feature = "wifi")]
+fn clear_keep_alive_sleep_plan() {
+    unsafe {
+        DEEP_SLEEP_KEEP_ALIVE_REMAINING_SECS = 0;
+    }
+}
+
+#[cfg(feature = "wifi")]
+fn has_keep_alive_sleep_plan() -> bool {
+    unsafe { DEEP_SLEEP_KEEP_ALIVE_REMAINING_SECS > 0 }
+}
+
+#[cfg(feature = "wifi")]
+fn next_keep_alive_sleep_chunk_secs(total_interval_secs: u64, wake_interval_secs: u64) -> (u64, bool) {
+    if wake_interval_secs == 0 || wake_interval_secs >= total_interval_secs {
+        clear_keep_alive_sleep_plan();
+        return (total_interval_secs, false);
     }
 
-    secs
+    unsafe {
+        let mut remaining_secs = if DEEP_SLEEP_KEEP_ALIVE_REMAINING_SECS == 0 {
+            total_interval_secs
+        } else {
+            DEEP_SLEEP_KEEP_ALIVE_REMAINING_SECS as u64
+        };
+
+        let chunk_secs = remaining_secs.min(wake_interval_secs);
+        remaining_secs = remaining_secs.saturating_sub(chunk_secs);
+        DEEP_SLEEP_KEEP_ALIVE_REMAINING_SECS = remaining_secs as u32;
+
+        (chunk_secs, remaining_secs > 0)
+    }
 }
 
 #[cfg(feature = "wifi")]
@@ -1103,6 +1172,50 @@ async fn main(spawner: Spawner) {
     let mut config_storage = FlashConfigStorage::new(flash, partition_range);
     config_storage.mount().await.expect("config mount failed");
     let loaded_config = config_storage.load_config().await.expect("config load failed");
+
+    if boot_button_held
+        || !loaded_config.deep_sleep_enabled
+        || is_power_bank_mode(&loaded_config)
+        || deep_sleep_keep_alive_wake_interval_secs(&loaded_config) == 0
+    {
+        clear_keep_alive_sleep_plan();
+    } else if has_keep_alive_sleep_plan() {
+        let configured_interval_secs = sensor_interval_secs(&loaded_config);
+        let wake_interval_secs = deep_sleep_keep_alive_wake_interval_secs(&loaded_config);
+        let (sleep_chunk_secs, has_more_chunks) =
+            next_keep_alive_sleep_chunk_secs(configured_interval_secs, wake_interval_secs);
+        let pulse_ms = deep_sleep_keep_alive_pulse_ms(&loaded_config);
+
+        log_runtime_line(
+            format!(
+                "Power-save: keep-alive wake chunk {} s (remaining chunk cycle: {}).",
+                sleep_chunk_secs,
+                if has_more_chunks { "yes" } else { "no" }
+            )
+            .as_str(),
+        );
+
+        if pulse_ms > 0 {
+            log_runtime_line(
+                format!(
+                    "Power-save: keep-alive pulse {} ms on wake before returning to deep sleep.",
+                    pulse_ms
+                )
+                .as_str(),
+            );
+            // Use a blocking delay so the CPU stays fully active during the pulse,
+            // drawing enough current (~20-30 mA) to keep power banks from shutting off.
+            // Timer::after() would allow the executor to light-sleep the CPU.
+            Delay::new().delay_millis(pulse_ms as u32);
+        }
+
+        let wakeup = TimerWakeupSource::new(CoreDuration::from_secs(sleep_chunk_secs));
+        if let Some(lpwr) = lpwr_for_sleep.take() {
+            let mut rtc = Rtc::new(lpwr);
+            rtc.sleep_deep(&[&wakeup]);
+        }
+    }
+
     let initial_oled_orientation = loaded_config.oled_orientation.clone();
     let config_handle: &'static Mutex<CriticalSectionRawMutex, AppConfig> =
         Box::leak(Box::new(Mutex::new(loaded_config)));
@@ -1773,12 +1886,17 @@ async fn main(spawner: Spawner) {
                     }
                 }
 
-                let sleep_interval_secs = {
+                let (sleep_interval_secs, keep_alive_pulse_ms, use_power_bank_mode, wait_oled_mode): (u64, u64, bool, alloc::string::String) = {
                     let cfg = config_handle.lock().await;
                     if cfg.deep_sleep_enabled {
-                        sensor_interval_secs(&cfg)
+                        (
+                            sensor_interval_secs(&cfg),
+                            deep_sleep_keep_alive_pulse_ms(&cfg),
+                            is_power_bank_mode(&cfg),
+                            oled_wait_mode(&cfg).into(),
+                        )
                     } else {
-                        0
+                        (0, 0, false, "on".into())
                     }
                 };
 
@@ -1786,27 +1904,71 @@ async fn main(spawner: Spawner) {
                     && !portal_mode.is_open()
                     && !deep_sleep_blocked_by_manual_mode
                 {
-                    log_runtime_line(
-                        format!(
-                            "Power-save: entering deep sleep for {} s (min {} s).",
-                            sleep_interval_secs, DEEP_SLEEP_MIN_INTERVAL_SECS
-                        )
-                        .as_str(),
-                    );
-                    if let Some(display) = oled.as_mut() {
-                        if let Err(e) = oled_display::prepare_for_sleep(display) {
-                            log_runtime_line(format!("OLED: sleep prepare failed: {:?}", e).as_str());
+                    if use_power_bank_mode {
+                        // Power bank mode: use timer wait instead of deep sleep so the WiFi modem
+                        // stays in modem-sleep drawing ~20-50 mA, enough to keep power banks alive.
+                        // Deep sleep would draw only ~20 µA which triggers power bank auto-shutoff.
+                        clear_keep_alive_sleep_plan();
+                        log_runtime_line(
+                            format!(
+                                "Power-save: modem sleep {} s (power bank mode).",
+                                sleep_interval_secs
+                            )
+                            .as_str(),
+                        );
+                        if let Some(display) = oled.as_mut() {
+                            match wait_oled_mode.as_str() {
+                                "off" => { let _ = display.set_display_on(false); },
+                                "dim" => { let _ = display.set_brightness(Brightness::DIMMEST); },
+                                _ => {}
+                            }
                         }
-                    }
-                    Timer::after(Duration::from_millis(700)).await;
-                    wifi_sender.send(WifiCommand::StaDown).await;
-                    Timer::after(Duration::from_millis(200)).await;
-                    let wakeup = TimerWakeupSource::new(CoreDuration::from_secs(sleep_interval_secs));
-                    if let Some(lpwr) = lpwr_for_sleep.take() {
-                        let mut rtc = Rtc::new(lpwr);
-                        rtc.sleep_deep(&[&wakeup]);
+                        Timer::after(Duration::from_secs(sleep_interval_secs)).await;
+                        if let Some(display) = oled.as_mut() {
+                            match wait_oled_mode.as_str() {
+                                "off" => {
+                                    let _ = display.set_display_on(true);
+                                    let _ = display.set_brightness(Brightness::BRIGHTEST);
+                                }
+                                "dim" => { let _ = display.set_brightness(Brightness::BRIGHTEST); }
+                                _ => {}
+                            }
+                        }
                     } else {
-                        log_runtime_line("Power-save: LPWR already consumed; deep sleep skipped.");
+                        let (sleep_chunk_secs, _has_more_chunks) =
+                            next_keep_alive_sleep_chunk_secs(sleep_interval_secs, 0);
+                        log_runtime_line(
+                            format!(
+                                "Power-save: entering deep sleep for {} s.",
+                                sleep_chunk_secs,
+                            )
+                            .as_str(),
+                        );
+                        if let Some(display) = oled.as_mut() {
+                            if let Err(e) = oled_display::prepare_for_sleep(display) {
+                                log_runtime_line(format!("OLED: sleep prepare failed: {:?}", e).as_str());
+                            }
+                        }
+                        if keep_alive_pulse_ms > 0 {
+                            log_runtime_line(
+                                format!(
+                                    "Power-save: keep-alive pulse {} ms before deep sleep.",
+                                    keep_alive_pulse_ms
+                                )
+                                .as_str(),
+                            );
+                            Delay::new().delay_millis(keep_alive_pulse_ms as u32);
+                        }
+                        Timer::after(Duration::from_millis(700)).await;
+                        wifi_sender.send(WifiCommand::StaDown).await;
+                        Timer::after(Duration::from_millis(200)).await;
+                        let wakeup = TimerWakeupSource::new(CoreDuration::from_secs(sleep_chunk_secs));
+                        if let Some(lpwr) = lpwr_for_sleep.take() {
+                            let mut rtc = Rtc::new(lpwr);
+                            rtc.sleep_deep(&[&wakeup]);
+                        } else {
+                            log_runtime_line("Power-save: LPWR already consumed; deep sleep skipped.");
+                        }
                     }
                 }
             }
