@@ -72,6 +72,81 @@
       </mat-card-actions>
     </mat-card>
 
+    <mat-card *ngIf="!isCreateMode" appearance="outlined" class="tools-card">
+      <mat-card-header>
+        <mat-card-title>CSV export</mat-card-title>
+      </mat-card-header>
+
+      <mat-card-content>
+        <p class="muted">Download per-device readings with optional time window. CSV contains timestamp, temperature, humidity.</p>
+        <p *ngIf="csvError()" style="color: #c00; margin-top: 8px;">{{ csvError() }}</p>
+
+        <form [formGroup]="csvForm" class="two-col-form" autocomplete="off">
+          <mat-form-field>
+            <mat-label>From</mat-label>
+            <input matInput type="datetime-local" formControlName="from_ts" />
+          </mat-form-field>
+
+          <mat-form-field>
+            <mat-label>To</mat-label>
+            <input matInput type="datetime-local" formControlName="to_ts" />
+          </mat-form-field>
+        </form>
+      </mat-card-content>
+
+      <mat-card-actions>
+        <button matButton="elevated" color="primary" type="button" (click)="exportCsv()" [disabled]="csvExporting() || loading()">
+          Export CSV
+        </button>
+      </mat-card-actions>
+    </mat-card>
+
+    <mat-card *ngIf="!isCreateMode && canManage()" appearance="outlined" class="tools-card">
+      <mat-card-header>
+        <mat-card-title>Share device by time period</mat-card-title>
+      </mat-card-header>
+
+      <mat-card-content>
+        <p class="muted">Grant another user read access for a fixed period.</p>
+        <p *ngIf="shareError()" style="color: #c00; margin-top: 8px;">{{ shareError() }}</p>
+
+        <form [formGroup]="shareForm" class="three-col-form" autocomplete="off">
+          <mat-form-field>
+            <mat-label>User email</mat-label>
+            <input matInput type="email" formControlName="shared_with_email" />
+          </mat-form-field>
+
+          <mat-form-field>
+            <mat-label>Start</mat-label>
+            <input matInput type="datetime-local" formControlName="starts_at" />
+          </mat-form-field>
+
+          <mat-form-field>
+            <mat-label>End</mat-label>
+            <input matInput type="datetime-local" formControlName="ends_at" />
+          </mat-form-field>
+        </form>
+
+        <button mat-stroked-button type="button" (click)="createShare()" [disabled]="shareSaving() || sharesLoading() || loading()">
+          Add sharing period
+        </button>
+
+        <div class="share-list" *ngIf="shares().length > 0">
+          <div class="share-item" *ngFor="let share of shares()">
+            <div>
+              <div><strong>{{ share.shared_with?.username || ('User #' + share.shared_with_user_id) }}</strong> ({{ share.shared_with?.email || 'unknown' }})</div>
+              <div class="muted">{{ sharePeriodLabel(share) }}</div>
+            </div>
+            <button mat-button color="warn" type="button" (click)="deleteShare(share)">Remove</button>
+          </div>
+        </div>
+
+        <p class="muted" *ngIf="!sharesLoading() && shares().length === 0" style="margin-top: 10px;">
+          No sharing periods added yet.
+        </p>
+      </mat-card-content>
+    </mat-card>
+
     <mat-card appearance="outlined" class="config-guide">
       <mat-card-header>
         <mat-card-title>Configuration Guide</mat-card-title>

@@ -60,6 +60,34 @@ export interface ApiDevice {
   last_seen: string | null;
   created_at: string | null;
   api_key?: string;
+  can_manage?: boolean;
+}
+
+export interface ApiDeviceShare {
+  id: number;
+  device_id: number;
+  shared_with_user_id: number;
+  starts_at: string | null;
+  ends_at: string | null;
+  created_at: string | null;
+  shared_with?: {
+    id: number;
+    username: string;
+    email: string;
+  } | null;
+}
+
+export interface CreateDeviceSharePayload {
+  shared_with_email: string;
+  starts_at: string;
+  ends_at: string;
+}
+
+export interface DeviceReadingsFilter {
+  from_ts?: string;
+  to_ts?: string;
+  order?: 'asc' | 'desc';
+  limit?: number;
 }
 
 export interface CreateLocationPayload {
@@ -157,6 +185,61 @@ export class ApiService {
   deleteDevice(deviceId: number): Observable<void> {
     return this.http.delete<void>(`${this.base}/devices/${deviceId}`, {
       withCredentials: true,
+    });
+  }
+
+  listDeviceShares(deviceId: number): Observable<ApiDeviceShare[]> {
+    return this.http.get<ApiDeviceShare[]>(`${this.base}/devices/${deviceId}/shares`, {
+      withCredentials: true,
+    });
+  }
+
+  createDeviceShare(deviceId: number, payload: CreateDeviceSharePayload): Observable<ApiDeviceShare> {
+    return this.http.post<ApiDeviceShare>(`${this.base}/devices/${deviceId}/shares`, payload, {
+      withCredentials: true,
+    });
+  }
+
+  deleteDeviceShare(deviceId: number, shareId: number): Observable<void> {
+    return this.http.delete<void>(`${this.base}/devices/${deviceId}/shares/${shareId}`, {
+      withCredentials: true,
+    });
+  }
+
+  getDeviceReadings(deviceId: number, filter?: DeviceReadingsFilter): Observable<ApiReading[]> {
+    const params: Record<string, string | number> = {};
+    if (filter?.from_ts) {
+      params['from_ts'] = filter.from_ts;
+    }
+    if (filter?.to_ts) {
+      params['to_ts'] = filter.to_ts;
+    }
+    if (filter?.order) {
+      params['order'] = filter.order;
+    }
+    if (filter?.limit) {
+      params['limit'] = filter.limit;
+    }
+
+    return this.http.get<ApiReading[]>(`${this.base}/devices/${deviceId}/readings`, {
+      withCredentials: true,
+      params,
+    });
+  }
+
+  downloadDeviceReadingsCsv(deviceId: number, filter?: DeviceReadingsFilter): Observable<Blob> {
+    const params: Record<string, string | number> = {};
+    if (filter?.from_ts) {
+      params['from_ts'] = filter.from_ts;
+    }
+    if (filter?.to_ts) {
+      params['to_ts'] = filter.to_ts;
+    }
+
+    return this.http.get(`${this.base}/devices/${deviceId}/readings.csv`, {
+      withCredentials: true,
+      params,
+      responseType: 'blob',
     });
   }
 

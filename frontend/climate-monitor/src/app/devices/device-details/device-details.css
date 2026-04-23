@@ -6,6 +6,45 @@
   margin-top: 16px;
 }
 
+.tools-card {
+  margin-top: 16px;
+}
+
+.muted {
+  color: #666;
+  margin: 4px 0 12px;
+}
+
+.two-col-form,
+.three-col-form {
+  display: grid;
+  gap: 12px;
+}
+
+.two-col-form {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.three-col-form {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.share-list {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.share-item {
+  border: 1px solid #e0e0e0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .config-guide mat-card-header {
   display: flex;
   flex-direction: row;

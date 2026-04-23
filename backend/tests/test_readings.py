@@ -386,3 +386,134 @@ def test_latest_device_reading_endpoint_returns_latest_for_api_key_device():
     assert payload["sensor_type"] == "temperature"
     assert payload["unit"] == "C"
     assert payload["value"] == 21.5
+
+
+def test_shared_user_can_access_device_and_readings_within_share_period():
+    owner_client = app.test_client()
+    shared_client = app.test_client()
+    outsider_client = app.test_client()
+
+    owner_register = _register(owner_client, "share-owner", "share-owner@example.com")
+    owner_id = owner_register.get_json()["id"]
+    _register(shared_client, "shared-user", "shared-user@example.com")
+    _register(outsider_client, "outsider-user", "outsider-user@example.com")
+
+    with app.app_context():
+        location = Location(user_id=owner_id, name="Share room")
+        db.session.add(location)
+        db.session.flush()
+
+        device = Device(
+            user_id=owner_id,
+            location_id=location.id,
+            name="Shared device",
+            device_type="esp32",
+            api_key="shared-device-api-key",
+            is_active=True,
+        )
+        db.session.add(device)
+        db.session.flush()
+
+        reading = Reading(
+            device_id=device.id,
+            location_id=location.id,
+            sensor_type="temperature",
+            value=22.4,
+            unit="C",
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.session.add(reading)
+        db.session.commit()
+
+        device_id = device.id
+
+    share_start = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    share_end = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    create_share = owner_client.post(
+        f"/api/devices/{device_id}/shares",
+        json={
+            "shared_with_email": "shared-user@example.com",
+            "starts_at": share_start,
+            "ends_at": share_end,
+        },
+    )
+    assert create_share.status_code == 201
+
+    shared_device = shared_client.get(f"/api/devices/{device_id}")
+    assert shared_device.status_code == 200
+    assert shared_device.get_json()["can_manage"] is False
+
+    shared_latest = shared_client.get("/api/readings/latest")
+    assert shared_latest.status_code == 200
+    latest_payload = shared_latest.get_json()
+    assert len(latest_payload) == 1
+    assert latest_payload[0]["device_id"] == device_id
+
+    outsider_device = outsider_client.get(f"/api/devices/{device_id}")
+    assert outsider_device.status_code == 403
+
+
+def test_device_readings_csv_uses_time_filter_and_contains_temp_humidity_columns():
+    client = app.test_client()
+    register = _register(client, "csv-user", "csv-user@example.com")
+    user_id = register.get_json()["id"]
+
+    with app.app_context():
+        location = Location(user_id=user_id, name="CSV Room")
+        db.session.add(location)
+        db.session.flush()
+
+        device = Device(
+            user_id=user_id,
+            location_id=location.id,
+            name="CSV device",
+            device_type="esp32",
+            api_key="csv-device-api-key",
+            is_active=True,
+        )
+        db.session.add(device)
+        db.session.flush()
+
+        in_range_ts = datetime(2026, 4, 23, 12, 0, 0)
+        out_range_ts = datetime(2026, 4, 21, 12, 0, 0)
+
+        db.session.add_all([
+            Reading(
+                device_id=device.id,
+                location_id=location.id,
+                sensor_type="temperature",
+                value=24.5,
+                unit="C",
+                timestamp=in_range_ts,
+            ),
+            Reading(
+                device_id=device.id,
+                location_id=location.id,
+                sensor_type="humidity",
+                value=52.1,
+                unit="%",
+                timestamp=in_range_ts,
+            ),
+            Reading(
+                device_id=device.id,
+                location_id=location.id,
+                sensor_type="temperature",
+                value=18.0,
+                unit="C",
+                timestamp=out_range_ts,
+            ),
+        ])
+        db.session.commit()
+
+        device_id = device.id
+
+    response = client.get(
+        f"/api/devices/{device_id}/readings.csv?from_ts=2026-04-22T00:00:00Z&to_ts=2026-04-24T00:00:00Z"
+    )
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].startswith("text/csv")
+
+    csv_text = response.get_data(as_text=True)
+    assert "timestamp,temperature,humidity" in csv_text
+    assert "2026-04-23T12:00:00Z,24.5,52.1" in csv_text
+    assert "2026-04-21T12:00:00Z" not in csv_text
