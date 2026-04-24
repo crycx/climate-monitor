@@ -29,6 +29,13 @@
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
+.csv-quick-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
 .share-list {
   margin-top: 12px;
   display: grid;

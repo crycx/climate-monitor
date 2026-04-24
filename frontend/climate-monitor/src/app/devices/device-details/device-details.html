@@ -88,8 +88,23 @@
       </mat-card-header>
 
       <mat-card-content>
-        <p class="muted">Download per-device readings with optional time window. CSV contains timestamp, location, temperature, humidity.</p>
+        <p class="muted">Download per-device readings with optional time window. CSV contains timestamp, location, temperature, humidity. Timestamps in CSV are in UTC.</p>
         <p *ngIf="csvError()" style="color: #c00; margin-top: 8px;">{{ csvError() }}</p>
+
+        <div class="csv-quick-ranges">
+          <button mat-stroked-button type="button" (click)="setCsvQuickRange('today')" [disabled]="csvExporting() || loading()">
+            {{ csvQuickRangeLabel('today') }}
+          </button>
+          <button mat-stroked-button type="button" (click)="setCsvQuickRange('yesterday')" [disabled]="csvExporting() || loading()">
+            {{ csvQuickRangeLabel('yesterday') }}
+          </button>
+          <button mat-stroked-button type="button" (click)="setCsvQuickRange('lastWeek')" [disabled]="csvExporting() || loading()">
+            {{ csvQuickRangeLabel('lastWeek') }}
+          </button>
+          <button mat-stroked-button type="button" (click)="setCsvQuickRange('lastMonth')" [disabled]="csvExporting() || loading()">
+            {{ csvQuickRangeLabel('lastMonth') }}
+          </button>
+        </div>
 
         <form [formGroup]="csvForm" class="two-col-form" autocomplete="off">
           <mat-form-field>

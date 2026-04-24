@@ -49,6 +49,13 @@ export class DeviceDetails implements OnInit, OnDestroy {
   csvForm: FormGroup;
   private destroy$ = new Subject<void>();
 
+  private readonly csvQuickRanges = {
+    today: 'today',
+    yesterday: 'yesterday',
+    lastWeek: 'lastWeek',
+    lastMonth: 'lastMonth',
+  } as const;
+
   constructor(
     private fb: FormBuilder,
     private route: ActivatedRoute,
@@ -303,7 +310,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
       .subscribe({
         next: (blob) => {
           this.csvExporting.set(false);
-          this.triggerBlobDownload(blob, `device-${this.deviceId}-readings.csv`);
+          this.triggerBlobDownload(blob, this.buildCsvFilename(this.deviceId!, fromIso, toIso));
           this.showSnack('CSV export downloaded', 'download_done', '#2e7d32');
         },
         error: (err) => {
@@ -398,9 +405,55 @@ export class DeviceDetails implements OnInit, OnDestroy {
   }
 
   sharePeriodLabel(share: ApiDeviceShare): string {
-    const startsAt = share.starts_at ? new Date(share.starts_at).toLocaleString('et-EE') : 'N/A';
-    const endsAt = share.ends_at ? new Date(share.ends_at).toLocaleString('et-EE') : 'N/A';
-    return `${startsAt} - ${endsAt}`;
+    return `${this.formatEtDateTime(share.starts_at)} - ${this.formatEtDateTime(share.ends_at)}`;
+  }
+
+  setCsvQuickRange(range: 'today' | 'yesterday' | 'lastWeek' | 'lastMonth'): void {
+    const now = new Date();
+    let fromDate = now;
+    let toDate = now;
+
+    if (range === this.csvQuickRanges.today) {
+      fromDate = this.startOfDay(now);
+      toDate = now;
+    } else if (range === this.csvQuickRanges.yesterday) {
+      const yesterday = this.shiftDays(now, -1);
+      fromDate = this.startOfDay(yesterday);
+      toDate = this.endOfDay(yesterday);
+    } else if (range === this.csvQuickRanges.lastWeek) {
+      fromDate = this.startOfDay(this.shiftDays(now, -6));
+      toDate = now;
+    } else {
+      fromDate = this.startOfDay(this.shiftDays(now, -29));
+      toDate = now;
+    }
+
+    this.csvForm.patchValue({
+      from_ts: this.formatDateTimeInput(fromDate),
+      to_ts: this.formatDateTimeInput(toDate),
+    });
+    this.csvError.set(null);
+  }
+
+  csvQuickRangeLabel(range: 'today' | 'yesterday' | 'lastWeek' | 'lastMonth'): string {
+    const now = new Date();
+
+    if (range === this.csvQuickRanges.today) {
+      return `Today (${this.formatDateOnly(now)})`;
+    }
+
+    if (range === this.csvQuickRanges.yesterday) {
+      const yesterday = this.shiftDays(now, -1);
+      return `Yesterday (${this.formatDateOnly(yesterday)})`;
+    }
+
+    if (range === this.csvQuickRanges.lastWeek) {
+      const fromDate = this.shiftDays(now, -6);
+      return `7 days (${this.formatDateOnly(fromDate)} - ${this.formatDateOnly(now)})`;
+    }
+
+    const fromDate = this.shiftDays(now, -29);
+    return `30 days (${this.formatDateOnly(fromDate)} - ${this.formatDateOnly(now)})`;
   }
 
   private loadShares(deviceId: number): void {
@@ -501,6 +554,76 @@ export class DeviceDetails implements OnInit, OnDestroy {
     }
 
     return date.toISOString();
+  }
+
+  private formatEtDateTime(value: string | null | undefined): string {
+    if (!value) {
+      return 'N/A';
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return 'N/A';
+    }
+
+    return `${this.pad2(date.getDate())}.${this.pad2(date.getMonth() + 1)}.${date.getFullYear()}, ${this.pad2(date.getHours())}:${this.pad2(date.getMinutes())}:${this.pad2(date.getSeconds())}`;
+  }
+
+  private formatDateOnly(date: Date): string {
+    return `${this.pad2(date.getDate())}.${this.pad2(date.getMonth() + 1)}.${date.getFullYear()}`;
+  }
+
+  private formatDateTimeInput(date: Date): string {
+    return `${this.pad2(date.getDate())}.${this.pad2(date.getMonth() + 1)}.${date.getFullYear()} ${this.pad2(date.getHours())}:${this.pad2(date.getMinutes())}`;
+  }
+
+  private pad2(value: number): string {
+    return String(value).padStart(2, '0');
+  }
+
+  private startOfDay(date: Date): Date {
+    const result = new Date(date);
+    result.setHours(0, 0, 0, 0);
+    return result;
+  }
+
+  private endOfDay(date: Date): Date {
+    const result = new Date(date);
+    result.setHours(23, 59, 0, 0);
+    return result;
+  }
+
+  private shiftDays(date: Date, days: number): Date {
+    const result = new Date(date);
+    result.setDate(result.getDate() + days);
+    return result;
+  }
+
+  private buildCsvFilename(deviceId: number, fromIso: string | null, toIso: string | null): string {
+    const baseName = `device-${deviceId}-readings`;
+
+    if (fromIso && toIso) {
+      return `${baseName}-${this.formatIsoDateForFilename(fromIso)}_to_${this.formatIsoDateForFilename(toIso)}.csv`;
+    }
+
+    if (fromIso) {
+      return `${baseName}-from_${this.formatIsoDateForFilename(fromIso)}.csv`;
+    }
+
+    if (toIso) {
+      return `${baseName}-until_${this.formatIsoDateForFilename(toIso)}.csv`;
+    }
+
+    return `${baseName}-all.csv`;
+  }
+
+  private formatIsoDateForFilename(isoValue: string): string {
+    const date = new Date(isoValue);
+    if (Number.isNaN(date.getTime())) {
+      return 'invalid-date';
+    }
+
+    return `${date.getUTCFullYear()}${this.pad2(date.getUTCMonth() + 1)}${this.pad2(date.getUTCDate())}`;
   }
 
   private triggerBlobDownload(blob: Blob, filename: string): void {
