@@ -132,7 +132,8 @@ export class DeviceDetails implements OnInit, OnDestroy {
     this.api.getDevice(id).pipe(takeUntil(this.destroy$)).subscribe({
       next: (device) => {
         this.loading.set(false);
-        this.canManage.set(device.can_manage ?? true);
+        const canManage = device.can_manage ?? true;
+        this.canManage.set(canManage);
         this.deviceOwnerUserId = device.user_id;
         this.form.patchValue({
           name: device.name,
@@ -142,7 +143,13 @@ export class DeviceDetails implements OnInit, OnDestroy {
           api_key: device.api_key ?? '',
         });
 
-        if (this.canManage()) {
+        if (!canManage && !this.isCreateMode) {
+          this.form.disable({ emitEvent: false });
+        } else {
+          this.form.enable({ emitEvent: false });
+        }
+
+        if (canManage) {
           this.loadShareableUsers(id);
           this.loadShares(id);
         } else {
@@ -161,6 +168,10 @@ export class DeviceDetails implements OnInit, OnDestroy {
   save(): void {
     this.error.set(null);
     this.success.set(null);
+
+    if (!this.isCreateMode && !this.canManage()) {
+      return;
+    }
 
     if (this.form.invalid) {
       this.form.markAllAsTouched();
@@ -224,7 +235,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
     this.error.set(null);
     this.success.set(null);
 
-    if (this.deviceId === null || this.isCreateMode) {
+    if (this.deviceId === null || this.isCreateMode || !this.canManage()) {
       return;
     }
 
@@ -527,6 +538,10 @@ export class DeviceDetails implements OnInit, OnDestroy {
   }
 
   generateApiKey(): void {
+    if (!this.isCreateMode && !this.canManage()) {
+      return;
+    }
+
     const apiKey = this.generateApiKeyValue();
     this.form.patchValue({ api_key: apiKey });
     this.form.get('api_key')?.markAsDirty();

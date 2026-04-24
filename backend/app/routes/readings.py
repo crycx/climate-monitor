@@ -417,9 +417,11 @@ def get_device(current_user: User, device_id: int):
     if not _can_access_device(current_user, device):
         return jsonify({"error": "Access denied"}), 403
 
+    can_manage = _can_manage_device(current_user, device)
     result = device.to_dict()
-    result["api_key"] = device.api_key
-    result["can_manage"] = _can_manage_device(current_user, device)
+    if can_manage:
+        result["api_key"] = device.api_key
+    result["can_manage"] = can_manage
     return jsonify(result), 200
 
 

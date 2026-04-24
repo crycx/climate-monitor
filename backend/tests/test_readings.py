@@ -441,7 +441,9 @@ def test_shared_user_can_access_device_and_readings_within_share_period():
 
     shared_device = shared_client.get(f"/api/devices/{device_id}")
     assert shared_device.status_code == 200
-    assert shared_device.get_json()["can_manage"] is False
+    shared_payload = shared_device.get_json()
+    assert shared_payload["can_manage"] is False
+    assert "api_key" not in shared_payload
 
     shared_latest = shared_client.get("/api/readings/latest")
     assert shared_latest.status_code == 200

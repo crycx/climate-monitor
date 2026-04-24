@@ -13,6 +13,9 @@
 
         <p *ngIf="error()" style="color: #c00; margin-top: 8px;">{{ error() }}</p>
         <p *ngIf="success()" style="color: #0a7f35; margin-top: 8px;">{{ success() }}</p>
+        <p *ngIf="!isCreateMode && !canManage()" style="margin-top: 8px;">
+          This is a shared device. Device settings are read-only.
+        </p>
 
         <form [formGroup]="form" autocomplete="off">
           <mat-form-field style="width: 100%;">
@@ -35,12 +38,18 @@
 
           <mat-checkbox formControlName="is_active">Active</mat-checkbox>
 
-          <mat-form-field style="width: 100%; margin-top: 8px;">
+          <mat-form-field *ngIf="isCreateMode || canManage()" style="width: 100%; margin-top: 8px;">
             <mat-label>API key (64 chars)</mat-label>
             <input matInput formControlName="api_key" />
           </mat-form-field>
 
-          <button mat-stroked-button type="button" (click)="generateApiKey()" [disabled]="saving() || loading()">
+          <button
+            *ngIf="isCreateMode || canManage()"
+            mat-stroked-button
+            type="button"
+            (click)="generateApiKey()"
+            [disabled]="saving() || loading()"
+          >
             Generate API key
           </button>
         </form>
@@ -50,6 +59,7 @@
         <button mat-button type="button" (click)="back()">Back</button>
         <span style="margin-left: auto;"></span>
         <button
+          *ngIf="isCreateMode || canManage()"
           matButton="elevated"
           color="warn"
           type="button"
@@ -65,7 +75,7 @@
           type="button"
           class="btn-ok"
           (click)="save()"
-          [disabled]="saving() || loading()"
+          [disabled]="saving() || loading() || (!isCreateMode && !canManage())"
         >
           {{ isCreateMode ? 'Create' : 'Save' }}
         </button>
