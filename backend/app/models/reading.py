@@ -17,6 +17,7 @@ class Reading(db.Model):
     value = db.Column(db.Numeric(10, 4), nullable=False)
     unit = db.Column(db.String(20), nullable=False)
     timestamp = db.Column(db.DateTime)
+    location = db.relationship("Location", lazy="joined")
 
     def to_dict(self) -> dict:
         timestamp_value = None
@@ -32,6 +33,7 @@ class Reading(db.Model):
             "id": self.id,
             "device_id": self.device_id,
             "location_id": self.location_id,
+            "location_name": self.location.name if self.location else None,
             "sensor_type": self.sensor_type,
             "value": float(self.value),
             "unit": self.unit,

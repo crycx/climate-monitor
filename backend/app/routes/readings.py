@@ -550,18 +550,22 @@ def device_readings_csv(current_user: User, device_id: int):
         # Group by second to align temperature/humidity values captured in the same sample window.
         ts_sec = ts.replace(microsecond=0)
         key = int(ts_sec.timestamp())
+        location_name = reading.location.name if reading.location else ""
         row = rows_by_ts.setdefault(
             key,
             {
                 "timestamp": _format_csv_timestamp(ts_sec),
+                "location": location_name,
                 "temperature": "",
                 "humidity": "",
             },
         )
+        if location_name and not row["location"]:
+            row["location"] = location_name
         row[reading.sensor_type] = _format_csv_number(reading.value)
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["timestamp", "temperature", "humidity"])
+    writer = csv.DictWriter(output, fieldnames=["timestamp", "location", "temperature", "humidity"])
     writer.writeheader()
     for timestamp_key in sorted(rows_by_ts.keys()):
         writer.writerow(rows_by_ts[timestamp_key])

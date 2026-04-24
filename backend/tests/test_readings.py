@@ -448,12 +448,13 @@ def test_shared_user_can_access_device_and_readings_within_share_period():
     latest_payload = shared_latest.get_json()
     assert len(latest_payload) == 1
     assert latest_payload[0]["device_id"] == device_id
+    assert latest_payload[0]["location_name"] == "Share room"
 
     outsider_device = outsider_client.get(f"/api/devices/{device_id}")
     assert outsider_device.status_code == 403
 
 
-def test_device_readings_csv_uses_time_filter_and_contains_temp_humidity_columns():
+def test_device_readings_csv_uses_time_filter_and_contains_location_temp_humidity_columns():
     client = app.test_client()
     register = _register(client, "csv-user", "csv-user@example.com")
     user_id = register.get_json()["id"]
@@ -514,6 +515,6 @@ def test_device_readings_csv_uses_time_filter_and_contains_temp_humidity_columns
     assert response.headers["Content-Type"].startswith("text/csv")
 
     csv_text = response.get_data(as_text=True)
-    assert "timestamp,temperature,humidity" in csv_text
-    assert "23.04.2026 12:00:00,24.5,52.1" in csv_text
+    assert "timestamp,location,temperature,humidity" in csv_text
+    assert "23.04.2026 12:00:00,CSV Room,24.5,52.1" in csv_text
     assert "21.04.2026 12:00:00" not in csv_text

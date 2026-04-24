@@ -35,6 +35,7 @@ export interface ApiReading {
   id: number;
   device_id: number;
   location_id: number | null;
+  location_name?: string | null;
   sensor_type: string;
   value: number;
   unit: string;

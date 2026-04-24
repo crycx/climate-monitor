@@ -78,7 +78,7 @@
       </mat-card-header>
 
       <mat-card-content>
-        <p class="muted">Download per-device readings with optional time window. CSV contains timestamp, temperature, humidity.</p>
+        <p class="muted">Download per-device readings with optional time window. CSV contains timestamp, location, temperature, humidity.</p>
         <p *ngIf="csvError()" style="color: #c00; margin-top: 8px;">{{ csvError() }}</p>
 
         <form [formGroup]="csvForm" class="two-col-form" autocomplete="off">

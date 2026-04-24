@@ -126,6 +126,26 @@ export class Home implements AfterViewInit, OnDestroy {
     { id: null, label: 'All locations' },
     ...this.locations().map((location) => ({ id: location.id, label: location.name })),
   ]);
+  locationNamesById = computed<Map<number, string>>(() => {
+    const names = new Map<number, string>();
+
+    for (const location of this.locations()) {
+      names.set(location.id, location.name);
+    }
+
+    for (const reading of this.readings()) {
+      if (reading.location_id === null) {
+        continue;
+      }
+      const fallbackName = reading.location_name?.trim();
+      if (!fallbackName || names.has(reading.location_id)) {
+        continue;
+      }
+      names.set(reading.location_id, fallbackName);
+    }
+
+    return names;
+  });
   devicesWithReadings = computed(() => {
     const readingDeviceIds = new Set(this.readings().map((r) => r.device_id));
     return this.devices().filter((d) => readingDeviceIds.has(d.id));
@@ -170,7 +190,7 @@ export class Home implements AfterViewInit, OnDestroy {
         return {
           deviceId: device.id,
           name: device.name,
-          locationName: this.getLocationName(device.location_id),
+          locationName: this.getLocationNameForDevice(device),
           lastSeenTs: stats?.lastSeenTs ?? null,
           temperature: stats?.tempLatest ?? null,
           humidity: stats?.humLatest ?? null,
@@ -737,7 +757,26 @@ export class Home implements AfterViewInit, OnDestroy {
 
   getLocationName(locationId: number | null): string | null {
     if (!locationId) return null;
-    return this.locations().find((l) => l.id === locationId)?.name ?? null;
+    return this.locationNamesById().get(locationId) ?? `Location #${locationId}`;
+  }
+
+  getLocationNameForDevice(device: ApiDevice): string | null {
+    const byDevice = this.readings()
+      .filter((reading) => reading.device_id === device.id && reading.location_id !== null)
+      .sort((a, b) => {
+        const aTs = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const bTs = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+        if (aTs !== bTs) {
+          return bTs - aTs;
+        }
+        return b.id - a.id;
+      })[0];
+
+    if (byDevice?.location_id !== null && byDevice?.location_id !== undefined) {
+      return this.getLocationName(byDevice.location_id);
+    }
+
+    return this.getLocationName(device.location_id);
   }
 
   getLatestValue(deviceId: number, sensorType: 'temperature' | 'humidity'): number | null {

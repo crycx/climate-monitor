@@ -257,7 +257,7 @@
     <section class="chart-card" *ngFor="let device of visibleDevices()" cdkDrag>
       <div class="chart-card-header">
         <h2>{{ device.name }}</h2>
-        <span class="chart-location" *ngIf="getLocationName(device.location_id) as locName">{{ locName }}</span>
+        <span class="chart-location" *ngIf="getLocationNameForDevice(device) as locName">{{ locName }}</span>
         <button
           class="drag-handle"
           mat-icon-button
@@ -295,7 +295,7 @@
         <div class="dash-card-header">
           <div class="dash-title-stack">
             <span class="dash-device-name">{{ device.name }}</span>
-            <span class="dash-location" *ngIf="getLocationName(device.location_id) as loc">{{ loc }}</span>
+            <span class="dash-location" *ngIf="getLocationNameForDevice(device) as loc">{{ loc }}</span>
           </div>
           <div class="dash-period-badge" *ngIf="deviceStats().get(device.id) as stats">
             <mat-icon class="period-icon">schedule</mat-icon>
