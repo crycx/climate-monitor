@@ -494,10 +494,13 @@ export class Home implements AfterViewInit, OnDestroy {
       this.selectedRangeHours.set(storedRange);
     }
 
-    const storedViewMode = this.readStoredViewMode();
-    if (storedViewMode !== undefined) {
-      this.viewMode.set(storedViewMode);
-    }
+
+      const storedViewMode = this.readStoredViewMode();
+      if (storedViewMode !== undefined) {
+        this.viewMode.set(storedViewMode);
+      } else if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+        this.viewMode.set(3);
+      }
 
     const storedCompareMode = this.readStoredCompareMode();
     if (storedCompareMode !== undefined) {
