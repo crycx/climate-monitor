@@ -12,6 +12,17 @@ ng serve
 
 Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
 
+### PWA (install in browser)
+
+The service worker and `ng build` PWA output are only included in a **production** build. A normal `ng serve` uses the development build, so the browser will not offer **Install** and DevTools will show no controlling service worker.
+
+To test the PWA locally:
+
+```bash
+ng serve --configuration production
+or npm run start:pwa
+```
+
 ## Code scaffolding
 
 Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
