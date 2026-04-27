@@ -105,6 +105,9 @@ type ComparisonRow = {
   styleUrl: './home.css',
 })
 export class Home implements AfterViewInit, OnDestroy {
+  isMobile = signal(false);
+  showFilters = signal(true);
+
   @ViewChildren('deviceCanvas')
   deviceCanvases!: QueryList<ElementRef<HTMLCanvasElement>>;
 
@@ -359,6 +362,22 @@ export class Home implements AfterViewInit, OnDestroy {
     private api: ApiService,
     private snackBar: MatSnackBar,
   ) {
+
+    const checkMobile = () => {
+      if (typeof window !== 'undefined') {
+        this.isMobile.set(window.innerWidth <= 768);
+        if (window.innerWidth <= 768) {
+          this.showFilters.set(false);
+        } else {
+          this.showFilters.set(true);
+        }
+      }
+    };
+    if (typeof window !== 'undefined') {
+      checkMobile();
+      window.addEventListener('resize', checkMobile);
+    }
+
     effect((onCleanup) => {
       if (!this.viewReady()) {
         return;
@@ -515,10 +534,20 @@ export class Home implements AfterViewInit, OnDestroy {
   }
 
   ngAfterViewInit(): void {
+    // Ensure mobile check after view init
+    if (typeof window !== 'undefined') {
+      if (window.innerWidth <= 768) {
+        this.showFilters.set(false);
+      }
+    }
     this.loadLocations();
     this.loadDevices();
     this.viewReady.set(true);
     this.refresh();
+  }
+
+  onToggleFilters(): void {
+    this.showFilters.update((v: boolean) => !v);
   }
 
   ngOnDestroy(): void {

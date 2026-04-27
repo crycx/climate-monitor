@@ -4,7 +4,18 @@
       <h1>Climate Overview</h1>
       <p>Temperature and humidity per device.</p>
     </div>
-    <div class="filter-panel">
+    <button
+      *ngIf="isMobile()"
+      class="mobile-filter-toggle"
+      mat-stroked-button
+      type="button"
+      (click)="onToggleFilters()"
+      aria-label="Show/hide filters"
+    >
+      <mat-icon>{{ showFilters() ? 'filter_alt_off' : 'filter_alt' }}</mat-icon>
+      {{ showFilters() ? 'Hide filters' : 'Show filters' }}
+    </button>
+    <div class="filter-panel" *ngIf="!isMobile() || showFilters()">
       <div class="filter-panel-head">
         <div class="filter-panel-title-wrap">
           <div class="filter-panel-kicker">
