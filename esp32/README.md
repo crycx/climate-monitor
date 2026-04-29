@@ -3,10 +3,11 @@
 This folder contains two firmware targets and one shared code area:
 
 - `c3/` for ESP32-C3 (RISC-V)
+- `c6/` for ESP32-C6 (RISC-V)
 - `wroom/` for ESP32-WROOM (Xtensa ESP32)
 - `shared/` for extracted reusable runtime and WiFi/AP config modules
 
-Both board builds currently run as independent Cargo projects. Shared code is extracted, but full one-build-for-all integration is intentionally deferred.
+All board builds currently run as independent Cargo projects. Shared code is extracted, but full one-build-for-all integration is intentionally deferred.
 
 ## Home Assistant (MQTT)
 
@@ -31,6 +32,10 @@ Discovery topics (retained):
 ```
 esp32/
 ├── c3/
+│   ├── .cargo/config.toml
+│   ├── Cargo.toml
+│   └── src/bin/main.rs
+├── c6/
 │   ├── .cargo/config.toml
 │   ├── Cargo.toml
 │   └── src/bin/main.rs
@@ -98,6 +103,20 @@ cd esp32/c3
 cargo run --release
 ```
 
+### C6 (WiFi, HTTPS)
+
+```bash
+cd esp32/c6
+cargo run --release
+```
+
+### C6 (WiFi, HTTP no TLS)
+
+```bash
+cd esp32/c6
+cargo run --release --features no-tls
+```
+
 ### C3 (WiFi, HTTP no TLS)
 
 ```bash
@@ -136,20 +155,24 @@ cargo install just
 # Build
 just build-wroom   # Build ESP32-WROOM (Xtensa)
 just build-c3      # Build ESP32-C3 (RISC-V)
-just build-all     # Build both targets
+just build-c6      # Build ESP32-C6 (RISC-V)
+just build-all     # Build all targets
 
 # Check (fast iteration, no full compilation)
 just check-wroom   # Type-check ESP32-WROOM
 just check-c3      # Type-check ESP32-C3
-just check-all     # Type-check both targets
+just check-c6      # Type-check ESP32-C6
+just check-all     # Type-check all targets
 
 # Run/Flash
 just run-wroom     # Build and flash ESP32-WROOM
 just run-c3        # Build and flash ESP32-C3
+just run-c6        # Build and flash ESP32-C6
 
 # Clean
 just clean-wroom   # Clean ESP32-WROOM build
 just clean-c3      # Clean ESP32-C3 build
+just clean-c6      # Clean ESP32-C6 build
 ```
 
 ### Why Just?

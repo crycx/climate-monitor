@@ -5,12 +5,18 @@ build-wroom:
 build-c3:
     cd c3 && cargo build --release --target riscv32imc-unknown-none-elf
 
+build-c6:
+    cd c6 && cargo build --release --target riscv32imac-unknown-none-elf
+
 # Check commands (fast iteration)
 check-wroom:
     cd wroom && cargo check --target xtensa-esp32-none-elf
 
 check-c3:
     cd c3 && cargo check --target riscv32imc-unknown-none-elf
+
+check-c6:
+    cd c6 && cargo check --target riscv32imac-unknown-none-elf
 
 # Run/flash (runner is set in .cargo/config.toml)
 run-wroom:
@@ -19,6 +25,9 @@ run-wroom:
 run-c3:
     cd c3 && cargo run --release --target riscv32imc-unknown-none-elf
 
+run-c6:
+    cd c6 && cargo run --release --target riscv32imac-unknown-none-elf
+
 # Clean
 clean-wroom:
     cd wroom && cargo clean
@@ -26,6 +35,9 @@ clean-wroom:
 clean-c3:
     cd c3 && cargo clean
 
+clean-c6:
+    cd c6 && cargo clean
+
 # Combined
-check-all: check-wroom check-c3
-build-all: build-wroom build-c3
+check-all: check-wroom check-c3 check-c6
+build-all: build-wroom build-c3 build-c6

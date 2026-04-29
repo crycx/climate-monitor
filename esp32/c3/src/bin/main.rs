@@ -43,11 +43,13 @@ use esp_hal::{
     i2c::master::{Config as I2cConfig, I2c},
     time::Rate,
 };
+#[cfg(all(feature = "wifi", feature = "supermini"))]
+use esp_hal::rmt::{PulseCode, Tx, TxChannelConfig, TxChannelCreator};
 #[cfg(not(feature = "wifi"))]
 use esp_hal::time::Instant as HalInstant;
 use ssd1306::{I2CDisplayInterface, Ssd1306, prelude::*};
 #[cfg(feature = "wifi")]
-use esp_hal::gpio::{Input, InputConfig, Level, Output};
+use esp_hal::gpio::{Input, InputConfig, Level};
 
 // ── WiFi-only imports ────────────────────────────────────────────────────────
 #[cfg(feature = "wifi")]
@@ -65,7 +67,7 @@ use embassy_time::{Duration, Instant, Timer};
 #[cfg(feature = "wifi")]
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 #[cfg(feature = "wifi")]
-use esp_hal::rtc_cntl::{Rtc, sleep::TimerWakeupSource};
+use esp_hal::rtc_cntl::{Rtc, sleep::{TimerWakeupSource, RtcioWakeupSource, WakeupLevel}};
 #[cfg(feature = "wifi")]
 use esp_hal::timer::timg::TimerGroup;
 #[cfg(feature = "wifi")]
@@ -125,6 +127,10 @@ static SENDING: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "wifi")]
 static BOOTING: AtomicBool = AtomicBool::new(true);
 #[cfg(feature = "wifi")]
+static POWER_SAVE_ACTIVE: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "wifi")]
+static WIFI_CONNECTING: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "wifi")]
 static LAST_SENT_SECS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "wifi")]
 static BUTTON_EVENT: AtomicU8 = AtomicU8::new(BUTTON_EVENT_NONE);
@@ -164,6 +170,114 @@ const BUTTON_EVENT_NONE: u8 = 0;
 const BUTTON_EVENT_SHORT: u8 = 1;
 #[cfg(feature = "wifi")]
 const BUTTON_EVENT_LONG: u8 = 2;
+#[cfg(all(feature = "wifi", feature = "supermini"))]
+const LED_SENT_GREEN_WINDOW_SECS: usize = 2;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RGB LED Status Indication (WS2812) — WiFi-only
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(all(feature = "wifi", feature = "supermini"))]
+type StatusLed = esp_hal::rmt::Channel<'static, esp_hal::Blocking, Tx>;
+
+#[cfg(all(feature = "wifi", feature = "supermini"))]
+fn ws2812_encode_grb(g: u8, r: u8, b: u8) -> [PulseCode; 25] {
+    // WS2812 timing at 80MHz RMT source clock and divider=1.
+    const T0H: u16 = 28;
+    const T0L: u16 = 56;
+    const T1H: u16 = 64;
+    const T1L: u16 = 48;
+
+    let zero = PulseCode::new(esp_hal::gpio::Level::High, T0H, esp_hal::gpio::Level::Low, T0L);
+    let one = PulseCode::new(esp_hal::gpio::Level::High, T1H, esp_hal::gpio::Level::Low, T1L);
+
+    let mut out = [PulseCode::end_marker(); 25];
+    let bytes = [g, r, b];
+    let mut i = 0usize;
+    for byte in bytes {
+        for bit in (0..8).rev() {
+            out[i] = if (byte & (1 << bit)) != 0 { one } else { zero };
+            i += 1;
+        }
+    }
+
+    out[24] = PulseCode::end_marker();
+    out
+}
+
+#[cfg(all(feature = "wifi", feature = "supermini"))]
+fn ws2812_write(channel: StatusLed, r: u8, g: u8, b: u8) -> StatusLed {
+    let data = ws2812_encode_grb(g, r, b);
+    match channel.transmit(&data).expect("RMT transmit failed").wait() {
+        Ok(next_channel) => next_channel,
+        Err((_, next_channel)) => next_channel,
+    }
+}
+
+#[cfg(all(feature = "wifi", feature = "supermini"))]
+#[embassy_executor::task]
+async fn led_task(mut channel: StatusLed) {
+    let mut blink = false;
+    let mut connect_level: i16 = 24;
+    let mut connect_step: i16 = 14;
+    let mut send_level: i16 = 24;
+    let mut send_step: i16 = 12;
+
+    loop {
+        if POWER_SAVE_ACTIVE.load(Ordering::Relaxed) {
+            // During sleep preparation/wait, keep RGB LED fully off.
+            channel = ws2812_write(channel, 0, 0, 0);
+            Timer::after(Duration::from_millis(120)).await;
+        } else if WIFI_CONNECTING.load(Ordering::Relaxed) {
+            // WiFi scan/connect in progress: orange breathing pulse.
+            let amber_g = connect_level.clamp(24, 120) as u8;
+            let amber_r = (connect_level * 2).clamp(48, 220) as u8;
+            channel = ws2812_write(channel, amber_r, amber_g, 0);
+
+            connect_level += connect_step;
+            if connect_level >= 120 || connect_level <= 24 {
+                connect_step = -connect_step;
+            }
+            Timer::after(Duration::from_millis(120)).await;
+        } else if BOOTING.load(Ordering::Relaxed) {
+            // Boot: blue
+            channel = ws2812_write(channel, 0, 0, 96);
+            Timer::after(Duration::from_millis(120)).await;
+        } else if AP_ACTIVE.load(Ordering::Relaxed) {
+            // AP mode: purple blink
+            if blink {
+                channel = ws2812_write(channel, 80, 0, 80);
+            } else {
+                channel = ws2812_write(channel, 0, 0, 0);
+            }
+            Timer::after(Duration::from_millis(300)).await;
+            blink = !blink;
+        } else if SENDING.load(Ordering::Relaxed) {
+            // Sending: green breathing pulse (distinct from WiFi connect amber)
+            let green = send_level.clamp(24, 140) as u8;
+            channel = ws2812_write(channel, 0, green, 0);
+            send_level += send_step;
+            if send_level >= 140 || send_level <= 24 {
+                send_step = -send_step;
+            }
+            Timer::after(Duration::from_millis(100)).await;
+        } else {
+            let now_secs = (Instant::now().as_millis() / 1000) as usize;
+            let last_sent_secs = LAST_SENT_SECS.load(Ordering::Relaxed);
+            let recently_sent = now_secs.saturating_sub(last_sent_secs) < LED_SENT_GREEN_WINDOW_SECS;
+
+            if recently_sent {
+                // Sent recently: green
+                channel = ws2812_write(channel, 0, 80, 0);
+                Timer::after(Duration::from_millis(120)).await;
+            } else {
+                // Idle: LED off
+                channel = ws2812_write(channel, 0, 0, 0);
+                Timer::after(Duration::from_millis(250)).await;
+            }
+        }
+    }
+}
 
 fn led_active_high() -> bool {
     cfg!(feature = "supermini")
@@ -254,6 +368,35 @@ fn take_button_event() -> Option<ButtonEvent> {
         BUTTON_EVENT_LONG => Some(ButtonEvent::LongPress),
         _ => None,
     }
+}
+
+#[cfg(feature = "wifi")]
+fn long_press_pending() -> bool {
+    BUTTON_EVENT.load(Ordering::Relaxed) == BUTTON_EVENT_LONG
+}
+
+#[cfg(feature = "wifi")]
+async fn wait_for_scan_settle_interruptible(total: Duration) -> bool {
+    let mut waited = Duration::from_millis(0);
+    let step = Duration::from_millis(100);
+
+    while waited < total {
+        if long_press_pending() {
+            log_runtime_line("WiFi pre-scan aborted: long BOOT press detected (force AP pending).");
+            return false;
+        }
+
+        let remaining = if total > waited {
+            total - waited
+        } else {
+            Duration::from_millis(0)
+        };
+        let chunk = if remaining > step { step } else { remaining };
+        Timer::after(chunk).await;
+        waited += chunk;
+    }
+
+    true
 }
 
 #[cfg(feature = "wifi")]
@@ -367,14 +510,6 @@ fn oled_is_portrait(orientation: &str) -> bool {
 }
 
 #[cfg(feature = "wifi")]
-fn drive_led(led: &mut Output<'static>, is_on: bool) {
-    match led_level(is_on) {
-        Level::High => led.set_high(),
-        Level::Low => led.set_low(),
-    }
-}
-
-#[cfg(feature = "wifi")]
 fn stack_has_ipv4(stack: &Stack<'static>) -> bool {
     stack.is_config_up() || stack.config_v4().is_some()
 }
@@ -386,14 +521,18 @@ fn wifi_sta_connected() -> bool {
 
 #[cfg(feature = "wifi")]
 async fn wait_for_sta_network(stack: &'static Stack<'static>, timeout: Duration) -> bool {
+    WIFI_CONNECTING.store(true, Ordering::Relaxed);
     let started = Instant::now();
     while started.elapsed() < timeout {
         if stack_has_ipv4(stack) {
+            WIFI_CONNECTING.store(false, Ordering::Relaxed);
             return true;
         }
         Timer::after(Duration::from_millis(250)).await;
     }
-    stack_has_ipv4(stack)
+    let ok = stack_has_ipv4(stack);
+    WIFI_CONNECTING.store(false, Ordering::Relaxed);
+    ok
 }
 
 #[cfg(feature = "wifi")]
@@ -550,26 +689,25 @@ async fn connect_best_configured_wifi(
 }
 
 #[cfg(feature = "wifi")]
-async fn refresh_visible_networks(
-    wifi_sender: &wifi_runtime::WifiCommandSender,
-    reason: &str,
-) {
-    refresh_visible_networks_for(wifi_sender, reason, &[]).await;
-}
-
-#[cfg(feature = "wifi")]
 async fn refresh_visible_networks_for(
     wifi_sender: &wifi_runtime::WifiCommandSender,
     reason: &str,
     wanted_ssids: &[&str],
-) {
+) -> bool {
     log_runtime_line(reason);
     let mut merged_ssids: Vec<String> = Vec::new();
 
     for attempt in 1..=BOOT_PRESCAN_ATTEMPTS {
+        if long_press_pending() {
+            log_runtime_line("WiFi pre-scan cancelled before next attempt due to long BOOT press.");
+            return false;
+        }
+
         log_runtime_line(format!("WiFi pre-scan attempt {}/{}...", attempt, BOOT_PRESCAN_ATTEMPTS).as_str());
         wifi_sender.send(WifiCommand::ScanOnce).await;
-        Timer::after(Duration::from_millis(PRECONNECT_SCAN_WAIT_MS)).await;
+        if !wait_for_scan_settle_interruptible(Duration::from_millis(PRECONNECT_SCAN_WAIT_MS)).await {
+            return false;
+        }
 
         if let Some(flat) = wifi_runtime::scan_results_flat() {
             for ssid in flat.lines().filter(|ssid| !ssid.is_empty()) {
@@ -598,7 +736,7 @@ async fn refresh_visible_networks_for(
 
     if merged_ssids.is_empty() {
         log_runtime_line("WiFi pre-scan complete: no visible networks found.");
-        return;
+        return true;
     }
 
     let mut merged_flat = String::new();
@@ -615,6 +753,7 @@ async fn refresh_visible_networks_for(
         format!("WiFi pre-scan complete: {} visible network(s) across {} attempts.", count, BOOT_PRESCAN_ATTEMPTS).as_str(),
     );
     log_runtime_line(format!("Visible SSIDs:\n{}", merged_flat).as_str());
+    true
 }
 
 #[cfg(feature = "wifi")]
@@ -636,7 +775,9 @@ async fn scan_and_connect_best_configured_wifi(
     .filter(|s| !s.is_empty())
     .collect();
 
-    refresh_visible_networks_for(wifi_sender, scan_reason, &wanted).await;
+    if !refresh_visible_networks_for(wifi_sender, scan_reason, &wanted).await {
+        return None;
+    }
     connect_best_configured_wifi(wifi_sender, cfg, connect_context).await
 }
 
@@ -733,7 +874,9 @@ async fn connect_configured_wifi_with_failover(
     connect_context: &str,
     attempt_timeout: Duration,
 ) -> Option<(usize, String, String)> {
-    refresh_visible_networks(wifi_sender, scan_reason).await;
+    if !refresh_visible_networks_for(wifi_sender, scan_reason, &[]).await {
+        return None;
+    }
 
     let has_scan = wifi_runtime::has_scan_results();
     let mut candidates = if has_scan {
@@ -945,32 +1088,6 @@ fn main() -> ! {
 
 #[cfg(feature = "wifi")]
 #[embassy_executor::task]
-async fn led_task(mut led: Output<'static>) {
-    loop {
-        if BOOTING.load(Ordering::Relaxed) {
-            // Boot in progress: keep LED ON until WiFi is connected or AP mode is entered.
-            drive_led(&mut led, true);
-            Timer::after(Duration::from_millis(100)).await;
-        } else if AP_ACTIVE.load(Ordering::Relaxed) {
-            // AP portal aktiivne: vilgub aeglaselt; polarity is controlled by LED_ACTIVE_HIGH.
-            drive_led(&mut led, true);
-            Timer::after(Duration::from_millis(500)).await;
-            drive_led(&mut led, false);
-            Timer::after(Duration::from_millis(500)).await;
-        } else if SENDING.load(Ordering::Relaxed) {
-            // Andmete saatmine: LED püsivalt sees
-            drive_led(&mut led, true);
-            Timer::after(Duration::from_millis(50)).await;
-        } else {
-            // Ooteseisund: LED väljas
-            drive_led(&mut led, false);
-            Timer::after(Duration::from_millis(100)).await;
-        }
-    }
-}
-
-#[cfg(feature = "wifi")]
-#[embassy_executor::task]
 async fn gpio_poll_task(btn: Input<'static>) {
     loop {
         Timer::after(Duration::from_millis(10)).await;
@@ -1076,15 +1193,34 @@ async fn main(spawner: Spawner) {
     let sw_ints = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
     let mut lpwr_for_sleep = Some(peripherals.LPWR);
+    // Super Mini boards in this project use GPIO9 as BOOT button for runtime logic.
+    // GPIO0 wake can cause spurious immediate wakeups on some variants, so keep timer-only wake there.
+    let mut gpio0_wake_pin = if cfg!(feature = "supermini") {
+        None
+    } else {
+        Some(peripherals.GPIO0)
+    };
 
     // GPIO9 = BOOT button (active-low).
     let btn = Input::new(peripherals.GPIO9, InputConfig::default().with_pull(Pull::Up));
     let boot_button_held = btn.level() == Level::Low;
     spawner.spawn(gpio_poll_task(btn)).unwrap();
 
-    // GPIO8 = built-in LED. Set LED_ACTIVE_HIGH=1 for boards like the C3 Super Mini.
-    let led = Output::new(peripherals.GPIO8, led_level(false), OutputConfig::default());
-    spawner.spawn(led_task(led)).unwrap();
+    #[cfg(feature = "supermini")]
+    {
+        // GPIO8 = WS2812 RGB LED on ESP32-C3 Super Mini.
+        let rmt = esp_hal::rmt::Rmt::new(peripherals.RMT, Rate::from_mhz(80)).expect("RMT init failed");
+        let led_tx_cfg = TxChannelConfig::default()
+            .with_clk_divider(1)
+            .with_idle_output_level(Level::Low)
+            .with_idle_output(true)
+            .with_carrier_modulation(false);
+        let led: StatusLed = rmt
+            .channel0
+            .configure_tx(peripherals.GPIO8, led_tx_cfg)
+            .expect("RMT TX channel init failed");
+        spawner.spawn(led_task(led)).unwrap();
+    }
 
     let mut flash = FlashStorage::new(peripherals.FLASH);
 
@@ -1209,6 +1345,7 @@ async fn main(spawner: Spawner) {
             Delay::new().delay_millis(pulse_ms as u32);
         }
 
+        POWER_SAVE_ACTIVE.store(true, Ordering::Relaxed);
         let wakeup = TimerWakeupSource::new(CoreDuration::from_secs(sleep_chunk_secs));
         if let Some(lpwr) = lpwr_for_sleep.take() {
             let mut rtc = Rtc::new(lpwr);
@@ -1383,6 +1520,7 @@ async fn main(spawner: Spawner) {
     }
 
     BOOTING.store(false, Ordering::Relaxed);
+    POWER_SAVE_ACTIVE.store(false, Ordering::Relaxed);
 
     // DHT22 on GPIO5 (open-drain, pull-up).
     let mut dht22_pin = Flex::new(peripherals.GPIO5);
@@ -1916,6 +2054,10 @@ async fn main(spawner: Spawner) {
                             )
                             .as_str(),
                         );
+                        // Keep status LED dark while waiting between measurement cycles.
+                        POWER_SAVE_ACTIVE.store(true, Ordering::Relaxed);
+                        WIFI_CONNECTING.store(false, Ordering::Relaxed);
+                        SENDING.store(false, Ordering::Relaxed);
                         if let Some(display) = oled.as_mut() {
                             match wait_oled_mode.as_str() {
                                 "off" => { let _ = display.set_display_on(false); },
@@ -1934,6 +2076,7 @@ async fn main(spawner: Spawner) {
                                 _ => {}
                             }
                         }
+                        POWER_SAVE_ACTIVE.store(false, Ordering::Relaxed);
                     } else {
                         let (sleep_chunk_secs, _has_more_chunks) =
                             next_keep_alive_sleep_chunk_secs(sleep_interval_secs, 0);
@@ -1949,6 +2092,9 @@ async fn main(spawner: Spawner) {
                                 log_runtime_line(format!("OLED: sleep prepare failed: {:?}", e).as_str());
                             }
                         }
+                        POWER_SAVE_ACTIVE.store(true, Ordering::Relaxed);
+                        WIFI_CONNECTING.store(false, Ordering::Relaxed);
+                        SENDING.store(false, Ordering::Relaxed);
                         if keep_alive_pulse_ms > 0 {
                             log_runtime_line(
                                 format!(
@@ -1962,12 +2108,23 @@ async fn main(spawner: Spawner) {
                         Timer::after(Duration::from_millis(700)).await;
                         wifi_sender.send(WifiCommand::StaDown).await;
                         Timer::after(Duration::from_millis(200)).await;
+                        POWER_SAVE_ACTIVE.store(true, Ordering::Relaxed);
                         let wakeup = TimerWakeupSource::new(CoreDuration::from_secs(sleep_chunk_secs));
                         if let Some(lpwr) = lpwr_for_sleep.take() {
                             let mut rtc = Rtc::new(lpwr);
-                            rtc.sleep_deep(&[&wakeup]);
+                            if let Some(btn_pin) = gpio0_wake_pin.as_mut() {
+                                let mut pins = [(
+                                    btn_pin as &mut dyn esp_hal::gpio::RtcPinWithResistors,
+                                    WakeupLevel::Low,
+                                )];
+                                let button_wake = RtcioWakeupSource::new(&mut pins);
+                                rtc.sleep_deep(&[&wakeup, &button_wake]);
+                            } else {
+                                rtc.sleep_deep(&[&wakeup]);
+                            }
                         } else {
                             log_runtime_line("Power-save: LPWR already consumed; deep sleep skipped.");
+                            POWER_SAVE_ACTIVE.store(false, Ordering::Relaxed);
                         }
                     }
                 }
