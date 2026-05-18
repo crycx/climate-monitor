@@ -17,8 +17,10 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
 
-  # Ära rewrite /api/* päringuid (lase need backend'ile minna)
-  RewriteRule ^api/ - [L]
+  # Suuna /api/*, /swagger, /openapi.yaml backend'i index.php peale
+  RewriteRule ^api(/.*)?$ api/index.php [QSA,L]
+  RewriteRule ^swagger$ api/index.php [QSA,L]
+  RewriteRule ^openapi\.yaml$ api/index.php [QSA,L]
 
   # Kui fail või kaust eksisteerib, serveeri see otse
   RewriteCond %{REQUEST_FILENAME} -f [OR]
