@@ -1,0 +1,4 @@
+INSERT INTO users (id,username,email,password_hash,is_admin,created_at,updated_at) VALUES
+	 (1,'kristjan','kristjan@sinpal.ee','scrypt:32768:8:1$aR92fTMjCZzx5eFv$c77d66cc8bde0a0451a23ccfed9fd3c69255fc1491d62e08d3824fb573a8a8adaa8c7823078d9f6208d82e7ac12a378a436de40ffcc2a421cdbcc04adbc0c0cd',true,'2026-03-28 20:08:26.193613','2026-03-28 20:08:26.193613'),
+	 (2,'artjom','artjom7melnikov@gmail.com','scrypt:32768:8:1$56TFkOQSbg4q2o8d$12fa6185b95b58162adf5166f2d66c85788d4b14663b3cc748cac4b1aa966f970c4a1697ad56fa290e893b66f30e7bb6d9f74d777b99a2523d00ea000e33d210',true,'2026-04-05 19:42:40.349556','2026-04-05 19:42:40.349556'),
+	 (4,'andres','andres@teed.ee','scrypt:32768:8:1$JAsL5fueVVxHvKD0$31216139c6d93bc32bfb2285e8fb0a6437167b32c86b043b409303fd16a482acdc3ea90be5f92551fc2e6dff54a6b6c5a7b42d7fad1ae73596d49ca986dde5cf',false,'2026-04-24 11:07:08.73283','2026-04-24 11:07:08.73283');

@@ -12,8 +12,11 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
     - Bash/zsh: `cp .env.example .env`
 2. Update values in `.env` (at minimum):
     - APP_PORT
-    - POSTGRES_PASSWORD
-    - POSTGRES_DB
+    - DB_HOST
+    - DB_PORT
+    - DB_NAME
+    - DB_USER
+    - DB_PASSWORD
     - SECRET_KEY
         - FRONTEND_ORIGIN (example: http://localhost:4200)
             - Can contain multiple comma-separated origins (example: http://localhost:4200,https://climate.sinpal.ee)
@@ -32,49 +35,32 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
     - (optional, security) FORGOT_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=900
     - (optional, security) RESET_PASSWORD_RATE_LIMIT_COUNT=10
     - (optional, security) RESET_PASSWORD_RATE_LIMIT_WINDOW_SECONDS=900
-3. Run `docker compose up` or with `-d` flag for detached
-     - After any backend/API code, `backend/requirements.txt`, or `backend/Dockerfile` change, run:
-         - `docker compose up -d --build api`
-4. (Optional) Create database tables from `init.sql` in the repo root:
-    - PowerShell:
-        - `Get-Content .\init.sql -Raw | docker exec -i db psql -U postgres -d climate_monitor`
-    - cmd.exe:
-        - `type init.sql | docker exec -i db psql -U postgres -d climate_monitor`
-        - or `cmd /c "docker exec -i db psql -U postgres -d climate_monitor < init.sql"`
-    - Bash/zsh:
-        - `docker exec -i db psql -U postgres -d climate_monitor < init.sql`
-5. Reset PostgreSQL (delete Docker volume; wipes all data):
-    - `docker compose down -v`
-    - `docker compose up -d`
-
-### Docker troubleshooting (local)
-
-- If you see `KeyError: 'ContainerConfig'`, you are likely using old `docker-compose` v1.
-    Use Docker Compose v2 (`docker compose ...`) instead.
-- If API fails with traceback like `While importing 'run' ... ModuleNotFoundError: No module named 'flask_cors'`, rebuild the API image without cache:
-    - `docker compose down --remove-orphans`
-    - `docker compose build --no-cache api`
-    - `docker compose run --rm api python -c "import flask_cors; print('flask_cors ok')"`
-    - `docker compose up -d`
+3. Create the MySQL schema from `init.sql` in the repo root:
+    - PowerShell: `Get-Content .\init.sql -Raw | mysql -h 127.0.0.1 -u root -p climate_monitor`
+    - Bash/zsh: `mysql -h 127.0.0.1 -u root -p climate_monitor < init.sql`
+4. Start the backend:
+    - `php -S 127.0.0.1:8000 -t backend/public`
+5. Start the frontend:
+    - `cd frontend/climate-monitor`
+    - `npm install`
+    - `npm start`
 
 ## Linux server without Docker
 
-- See `DEPLOY_LINUX_NO_DOCKER.md` for a step-by-step guide to run PostgreSQL and the Flask backend directly on a Linux server without Docker.
+- See `DEPLOY_LINUX_PHP_MYSQL.md` for a step-by-step guide to run MySQL and the PHP backend directly on a Linux server without Docker.
 - Recommended stack for production:
-    - PostgreSQL as a system service
-    - Python virtual environment + Gunicorn for the Flask app
+    - MySQL as a system service
+    - PHP 8.x with PHP-FPM or the built-in server for the API
     - Nginx as reverse proxy
 
 Important:
-- `backend/app.py` runs `db.create_all()` on startup, but that only creates tables that exist as SQLAlchemy models in the file.
-- Right now those models are `users` and `password_reset_tokens`.
-- If you also need the tables defined in `init.sql` (`locations`, `devices`, `readings`), import `init.sql` manually into PostgreSQL.
+- `backend/public/index.php` serves the PHP API and expects the MySQL schema from `init.sql`.
+- Import `init.sql` manually before starting the backend.
 
 ## Backend tests
 
-- Run auth tests inside API container:
-    - `docker compose up -d --build api`
-    - `docker compose exec api pytest -q`
+- There is no PHP test suite wired up yet.
+- Smoke test the API with `php -S 127.0.0.1:8000 -t backend/public` and a few `curl` requests.
 
 ## Angular quick start
 
@@ -110,10 +96,10 @@ Important:
 
 ## Tech Stack
 
-Hardware: ESP32 with a DHT22 sensor (Rust). The
-Backend: Python Flask API
+Hardware: ESP32 with a DHT22 sensor (Rust).
+Backend: PHP API
 Frontend: Angular.
-Database: PostgreSQL
+Database: MySQL
 
 ## Mermaid ERP diagram
 
@@ -166,7 +152,7 @@ erDiagram
 ## API Endpoints
 https://editor.swagger.io/
 
-### Swagger UI (served by Flask)
+### Swagger UI (served by the PHP backend)
 
 - Swagger UI: `http://localhost:8000/swagger`
 - OpenAPI spec: `http://localhost:8000/openapi.yaml`

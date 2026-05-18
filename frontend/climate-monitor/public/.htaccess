@@ -17,6 +17,9 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
 
+  # Ära rewrite /api/* päringuid (lase need backend'ile minna)
+  RewriteRule ^api/ - [L]
+
   # Kui fail või kaust eksisteerib, serveeri see otse
   RewriteCond %{REQUEST_FILENAME} -f [OR]
   RewriteCond %{REQUEST_FILENAME} -d

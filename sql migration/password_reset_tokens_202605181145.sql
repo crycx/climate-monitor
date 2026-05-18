@@ -1,0 +1,3 @@
+INSERT INTO password_reset_tokens (id,user_id,token_hash,expires_at,used_at,created_at) VALUES
+	 (2,4,'3d9528e9f42ee761f79646d9c4d10ebd85baa90d9fea15c12d9292a9b7f2ac5b','2026-04-24 11:37:08.939535','2026-04-26 08:25:10.873856','2026-04-24 11:07:08.959655'),
+	 (3,4,'cd1304f4327de9552285e0e8ca03bef4df96a1722355b1d490dfcc762bd8b8e2','2026-04-26 08:55:10.873856',NULL,'2026-04-26 08:25:10.886096');

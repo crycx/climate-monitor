@@ -1,66 +1,86 @@
--- Users table
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    username VARCHAR(100) UNIQUE NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
+CREATE TABLE IF NOT EXISTS users (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    username VARCHAR(100) NOT NULL,
+    email VARCHAR(255) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     is_admin BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_users_username (username),
+    UNIQUE KEY uq_users_email (email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Locations table
-CREATE TABLE locations (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS locations (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id BIGINT UNSIGNED NULL,
     name VARCHAR(255) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+    description TEXT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_locations_user_id (user_id),
+    CONSTRAINT fk_locations_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Devices table
-CREATE TABLE devices (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+CREATE TABLE IF NOT EXISTS devices (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id BIGINT UNSIGNED NOT NULL,
+    location_id BIGINT UNSIGNED NULL,
     name VARCHAR(255) NOT NULL,
-    device_type VARCHAR(50),
-    api_key VARCHAR(64) UNIQUE NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    last_seen TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+    device_type VARCHAR(50) NULL,
+    api_key VARCHAR(64) NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    last_seen TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_devices_api_key (api_key),
+    KEY idx_devices_user_id (user_id),
+    KEY idx_devices_location_id (location_id),
+    CONSTRAINT fk_devices_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_devices_location_id FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Device shares table
-CREATE TABLE device_shares (
-    id SERIAL PRIMARY KEY,
-    device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
-    shared_with_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS device_shares (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    device_id BIGINT UNSIGNED NOT NULL,
+    shared_with_user_id BIGINT UNSIGNED NOT NULL,
     starts_at TIMESTAMP NOT NULL,
-    ends_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+    ends_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_device_shares_device_id (device_id),
+    KEY idx_device_shares_shared_with_user_id (shared_with_user_id),
+    CONSTRAINT fk_device_shares_device_id FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+    CONSTRAINT fk_device_shares_shared_with_user_id FOREIGN KEY (shared_with_user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Readings table (high-volume, consider partitioning for production)
-CREATE TABLE readings (
-    id BIGSERIAL PRIMARY KEY,
-    device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
-    location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+CREATE TABLE IF NOT EXISTS readings (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    device_id BIGINT UNSIGNED NOT NULL,
+    location_id BIGINT UNSIGNED NULL,
     sensor_type VARCHAR(50) NOT NULL,
     value DECIMAL(10, 4) NOT NULL,
     unit VARCHAR(20) NOT NULL,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_readings_device_id (device_id),
+    KEY idx_readings_location_id (location_id),
+    KEY idx_readings_timestamp (timestamp),
+    CONSTRAINT fk_readings_device_id FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+    CONSTRAINT fk_readings_location_id FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Indexes for better query performance
-CREATE INDEX idx_locations_user_id ON locations(user_id);
-CREATE INDEX idx_devices_user_id ON devices(user_id);
-CREATE INDEX idx_devices_location_id ON devices(location_id);
-CREATE INDEX idx_devices_api_key ON devices(api_key);
-CREATE INDEX idx_device_shares_device_id ON device_shares(device_id);
-CREATE INDEX idx_device_shares_shared_with_user_id ON device_shares(shared_with_user_id);
-CREATE INDEX idx_readings_device_id ON readings(device_id);
-CREATE INDEX idx_readings_location_id ON readings(location_id);
-CREATE INDEX idx_readings_timestamp ON readings(timestamp DESC);
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id BIGINT UNSIGNED NOT NULL,
+    token_hash CHAR(64) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_password_reset_tokens_token_hash (token_hash),
+    KEY idx_password_reset_tokens_user_id (user_id),
+    CONSTRAINT fk_password_reset_tokens_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

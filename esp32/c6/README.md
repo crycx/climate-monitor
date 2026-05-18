@@ -178,10 +178,9 @@ A device row must exist in the `devices` table before the API key is accepted.
 Run this on the server (or locally if the DB is accessible):
 
 ```bash
-sudo docker compose -f docker-compose.no-registry.yaml exec db \
-  psql -U postgres -d climate_monitor -P pager=off -c \
+mysql -h 127.0.0.1 -u climate_monitor_user -p climate_monitor -e \
   "INSERT INTO devices (user_id, name, device_type, api_key, is_active, created_at, updated_at)
-  VALUES (1, 'DHT22-C6', 'dht22', 'your-64-char-api-key-here', true, NOW(), NOW());"
+   VALUES (1, 'DHT22-C6', 'dht22', 'your-64-char-api-key-here', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);"
 ```
 
 Replace `user_id` with the ID of the user who owns the device and update the
@@ -210,7 +209,7 @@ esp32/c6/
 | Flashes but no serial output | Monitor not opening | Run `espflash monitor --port COM3` separately |
 | `WiFi: connect error` | Wrong SSID/password | Check `.cargo/config.toml` credentials |
 | `POST → HTTP 401` | Missing/wrong API key | Insert device row in DB or fix `API_KEY` |
-| `POST → HTTP 500` | Server error | Check server logs: `sudo docker compose logs api --tail 30` |
+| `POST → HTTP 500` | Server error | Check the PHP server or Nginx logs |
 | DHT22 always errors | Wiring | Check GPIO5 connection and pull-up resistor |
 | OLED blank screen | Wiring/address mismatch | Check GPIO6/GPIO7, then test OLED I2C address `0x3C` vs `0x3D` |
 | Super Mini RGB LED stays dark | Older firmware on device or different board variant | Reflash latest build and verify board is ESP32-C6 Super Mini (WS2812 LED on GPIO8) |
