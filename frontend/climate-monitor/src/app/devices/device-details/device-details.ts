@@ -5,6 +5,7 @@ import { Subject, takeUntil } from 'rxjs';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { DialogService } from '../../custom-components/dialog/dialog.service';
 import { Snackbar } from '../../custom-components/snackbar/snackbar';
+import { AuthService } from '../../auth/auth.service';
 import {
   ApiUser,
   ApiLocation,
@@ -29,6 +30,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
   success = signal<string | null>(null);
   showGuide = signal(false);
   canManage = signal(true);
+  isAdmin = signal(false);
 
   sharesLoading = signal(false);
   shareSaving = signal(false);
@@ -61,6 +63,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
     private route: ActivatedRoute,
     private router: Router,
     private api: ApiService,
+    private auth: AuthService,
     private dialogService: DialogService,
     private snackBar: MatSnackBar,
   ) {
@@ -85,6 +88,10 @@ export class DeviceDetails implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    this.auth.user$.pipe(takeUntil(this.destroy$)).subscribe((user) => {
+      this.isAdmin.set(!!user?.is_admin);
+    });
+
     this.loadLocations();
 
     this.route.paramMap.pipe(takeUntil(this.destroy$)).subscribe((params) => {
@@ -139,7 +146,7 @@ export class DeviceDetails implements OnInit, OnDestroy {
     this.api.getDevice(id).pipe(takeUntil(this.destroy$)).subscribe({
       next: (device) => {
         this.loading.set(false);
-        const canManage = device.can_manage ?? true;
+        const canManage = (device.can_manage ?? true) || this.isAdmin();
         this.canManage.set(canManage);
         this.deviceOwnerUserId = device.user_id;
         this.form.patchValue({

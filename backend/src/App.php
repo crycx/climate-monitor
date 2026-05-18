@@ -956,7 +956,8 @@ HTML;
 
         if ($method === 'GET') {
             $canManage = $this->canManageDevice($currentUser, $device);
-            $this->json($this->deviceToArray($device, $canManage, $canManage));
+            $device['can_manage'] = $canManage;
+            $this->json($this->deviceToArray($device, $canManage, true));
             return;
         }
 
@@ -1030,7 +1031,9 @@ HTML;
             }
             $updated = $this->fetchDeviceById($deviceId);
             $canManage = $this->canManageDevice($currentUser, $updated ?? $device);
-            $this->json($this->deviceToArray($updated ?? $device, $canManage, $canManage));
+            $responseDevice = $updated ?? $device;
+            $responseDevice['can_manage'] = $canManage;
+            $this->json($this->deviceToArray($responseDevice, $canManage, true));
             return;
         }
 

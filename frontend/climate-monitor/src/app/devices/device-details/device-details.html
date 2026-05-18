@@ -13,7 +13,7 @@
 
         <p *ngIf="error()" style="color: #c00; margin-top: 8px;">{{ error() }}</p>
         <p *ngIf="success()" style="color: #0a7f35; margin-top: 8px;">{{ success() }}</p>
-        <p *ngIf="!isCreateMode && !canManage()" style="margin-top: 8px;">
+        <p *ngIf="!isCreateMode && !canManage() && !isAdmin()" style="margin-top: 8px;">
           This is a shared device. Device settings are read-only.
         </p>
 
