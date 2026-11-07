@@ -104,6 +104,52 @@ build-std = ["core", "alloc"]
 The `API_KEY` must match the `api_key` column of the corresponding row in the
 `devices` table on the server.
 
+## ESP-NOW gateway for battery sensors
+
+This firmware can also receive readings from sensor nodes over ESP-NOW
+(`esp32/xiao-c6-sensor`, or `esp32/c3` with transport `espnow`) and forward
+them to Home Assistant via MQTT and, per sensor, to the backend. Its own
+DHT22, OLED and backend posting keep working as before.
+
+1. Add a shared secret to `[env]` in `.cargo/config.toml` (same value in every
+   sensor build, min 8 chars):
+
+   ```toml
+   ESPNOW_KEY = "a-long-random-string"
+   ```
+
+2. Configure MQTT in the AP portal (**MQTT (Home Assistant)**) and enable it for
+   the WiFi slot in use.
+3. Optional, backend: register each sensor as its own device in the web app,
+   then enter *sensor MAC = that device's API key* on the gateway (portal
+   section **ESP-NOW sensors → backend**, or the USB console
+   `espnow_sensor_mac_N` / `espnow_sensor_api_key_N`). Readings from those
+   sensors are also POSTed to `API_URL`, with the sensor name as location.
+   Sensors without a key only go to MQTT.
+4. Keep deep sleep **disabled** on the gateway; it must stay awake to receive.
+
+The sensor MACs heard since boot are listed in the portal and in the USB
+console (`show` → `info.seen_N`), so they can be copied from there.
+
+### USB console
+
+Settings can also be changed from a computer: open `esp32/tools/config.html`
+in Chrome or Edge and click **Connect**, or use a serial terminal and type
+`help` (`show`, `set <field> <value>`, `save`). `save` writes flash and
+restarts. The gateway does not deep-sleep while a computer is attached.
+
+Boot log shows `ESP-NOW: gateway listening, MAC ...` when enabled, or
+`ESP-NOW: gateway disabled` when `ESPNOW_KEY` is missing. Each received reading
+is logged as `ESP-NOW <mac> '<name>': ...`.
+
+ESP-NOW uses the channel of the WiFi network the gateway is connected to;
+sensors find that channel automatically.
+
+The OLED rotates every 5 s between the gateway's own reading and one page per
+sensor heard recently (name, battery %, temperature/humidity, age and RSSI).
+A newly received reading jumps straight to that sensor's page for 10 s. A
+sensor's page disappears after it misses ~3 reports.
+
 ## Build & Flash
 
 ### WiFi mode (sends data to server via HTTPS)

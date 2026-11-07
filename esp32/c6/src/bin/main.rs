@@ -89,6 +89,15 @@ mod config_portal;
 #[cfg(feature = "wifi")]
 #[path = "main/wifi_runtime.rs"]
 mod wifi_runtime;
+#[cfg(feature = "wifi")]
+#[path = "../../../shared/espnow_packet.rs"]
+mod espnow_packet;
+#[cfg(feature = "wifi")]
+#[path = "main/espnow_gateway.rs"]
+mod espnow_gateway;
+#[cfg(feature = "wifi")]
+#[path = "main/usb_console.rs"]
+mod usb_console;
 
 #[cfg(feature = "wifi")]
 use app_config::{AppConfig, FlashConfigStorage, resolve_partition_range};
@@ -122,6 +131,9 @@ static WIFI_CONNECTING: AtomicBool = AtomicBool::new(false);
 static LAST_SENT_SECS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "wifi")]
 static BUTTON_EVENT: AtomicU8 = AtomicU8::new(BUTTON_EVENT_NONE);
+/// Saved WiFi slot (1..=5) currently in use; selects the per-slot MQTT toggle.
+#[cfg(feature = "wifi")]
+static ACTIVE_WIFI_SLOT: AtomicUsize = AtomicUsize::new(1);
 
 // Retained across deep-sleep resets: remaining seconds until the next full measurement cycle.
 #[cfg(feature = "wifi")]
@@ -144,6 +156,12 @@ const MAX_DEEP_SLEEP_KEEP_ALIVE_WAKE_INTERVAL_SECS: u64 = 3600;
 const MAIN_LOOP_TICK_MS: u64 = 250;
 #[cfg(feature = "wifi")]
 const OLED_REFRESH_MS: u64 = 1000;
+/// OLED page rotation between own reading and ESP-NOW sensors.
+#[cfg(feature = "wifi")]
+const OLED_PAGE_MS: u64 = 5000;
+/// How long a freshly received ESP-NOW reading stays on screen.
+#[cfg(feature = "wifi")]
+const OLED_REMOTE_HOLD_MS: u64 = 10_000;
 #[cfg(feature = "wifi")]
 const PRECONNECT_SCAN_WAIT_MS: u64 = 2500;
 #[cfg(feature = "wifi")]
@@ -1343,6 +1361,10 @@ async fn main(spawner: Spawner) {
         }
     }
 
+    // USB console for configuring from a computer.
+    let usb_serial = esp_hal::usb_serial_jtag::UsbSerialJtag::new(peripherals.USB_DEVICE);
+    spawner.spawn(usb_console::console_task(usb_serial, config_handle, config_storage).unwrap());
+
     log_runtime_line("Boot: initializing WiFi runtime...");
     let (wifi_stacks, wifi_sender) = wifi_runtime::init(&spawner, peripherals.WIFI).await;
     log_runtime_line("Boot: WiFi runtime initialized.");
@@ -1356,6 +1378,18 @@ async fn main(spawner: Spawner) {
 
     let stack: &'static Stack<'static> = NET_STACK.init(wifi_stacks.sta);
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
+
+    if espnow_gateway::key().is_some() {
+        spawner.spawn(espnow_gateway::rx_task(wifi_stacks.esp_now, wifi_stacks.sta_mac).unwrap());
+        spawner.spawn(espnow_gateway::forward_task(stack, tcp_state, config_handle).unwrap());
+        if config_handle.lock().await.deep_sleep_enabled {
+            log_runtime_line(
+                "ESP-NOW: WARNING deep sleep is enabled; sensor packets are missed while the gateway sleeps.",
+            );
+        }
+    } else {
+        log_runtime_line("ESP-NOW: gateway disabled (build with ESPNOW_KEY, min 8 chars, to enable).");
+    }
     let mut portal_mode = PortalMode::Off;
     let mut deep_sleep_blocked_by_manual_mode = boot_button_held;
     let mut active_wifi_location = String::new();
@@ -1520,7 +1554,11 @@ async fn main(spawner: Spawner) {
     }
     let mut next_oled_refresh_at = Instant::now();
     let mut last_oled_data_sent = false;
+    let mut oled_page: usize = 0;
+    let mut next_page_switch_at = Instant::now() + Duration::from_millis(OLED_PAGE_MS);
+    let mut last_remote_generation = espnow_gateway::display_generation();
     loop {
+        ACTIVE_WIFI_SLOT.store(active_wifi_slot, Ordering::Relaxed);
         let config_save_changed = embassy_time::with_timeout(
             Duration::from_millis(MAIN_LOOP_TICK_MS),
             config_rx.receive(),
@@ -1776,6 +1814,44 @@ async fn main(spawner: Spawner) {
 
         let now = Instant::now();
         if now >= next_oled_refresh_at && stack_has_ipv4(stack) && !portal_mode.is_open() {
+            // Page 0 = own reading, page N = N-th ESP-NOW sensor heard recently.
+            // A new remote reading jumps to its page; otherwise pages rotate.
+            let (remote_pages, newest_remote) = espnow_gateway::display_pages();
+            let remote_generation = espnow_gateway::display_generation();
+            let remote_updated = remote_generation != last_remote_generation;
+            let previous_page = oled_page;
+            if remote_updated {
+                last_remote_generation = remote_generation;
+                if let Some(index) = newest_remote {
+                    oled_page = index + 1;
+                    next_page_switch_at = now + Duration::from_millis(OLED_REMOTE_HOLD_MS);
+                }
+            } else if now >= next_page_switch_at {
+                oled_page = (oled_page + 1) % (remote_pages.len() + 1);
+                next_page_switch_at = now + Duration::from_millis(OLED_PAGE_MS);
+            }
+            if oled_page > remote_pages.len() {
+                oled_page = 0;
+            }
+            let page_changed = oled_page != previous_page;
+
+            if oled_page > 0 {
+                next_oled_refresh_at = now + Duration::from_millis(OLED_REFRESH_MS);
+                if page_changed || remote_updated {
+                    if let Some(display) = oled.as_mut() {
+                        let page = &remote_pages[oled_page - 1];
+                        let _ = oled_display::show_remote_reading(
+                            display,
+                            page.name.as_str(),
+                            page.temp,
+                            page.hum,
+                            page.battery_pct,
+                            page.footer.as_str(),
+                            oled_portrait_mode,
+                        );
+                    }
+                }
+            } else {
             let total_secs = (now.as_millis() / 1000) as usize;
             let last_sent_secs = LAST_SENT_SECS.load(Ordering::Relaxed);
             let data_sent = total_secs.saturating_sub(last_sent_secs) < 5;
@@ -1787,8 +1863,9 @@ async fn main(spawner: Spawner) {
             let should_scroll = !oled_portrait_mode && wifi_label.len() > wifi_width;
             let sent_state_changed = data_sent != last_oled_data_sent;
 
-            // Periodic redraw is only needed for marquee scrolling or transient SENT indicator.
-            if should_scroll || data_sent || sent_state_changed {
+            // Periodic redraw is only needed for marquee scrolling, transient SENT
+            // indicator, or when returning from a remote sensor page.
+            if should_scroll || data_sent || sent_state_changed || page_changed {
                 next_oled_refresh_at = now + Duration::from_millis(OLED_REFRESH_MS);
                 if let Some(display) = oled.as_mut() {
                     let tick = (now.as_millis() / OLED_REFRESH_MS as u64) as usize;
@@ -1806,6 +1883,7 @@ async fn main(spawner: Spawner) {
             } else {
                 // No animation needed; check again later with low frequency.
                 next_oled_refresh_at = now + Duration::from_millis(OLED_REFRESH_MS);
+            }
             }
         }
 
@@ -1904,6 +1982,9 @@ async fn main(spawner: Spawner) {
                         oled_portrait_mode,
                     );
                     last_oled_data_sent = data_sent;
+                    // Own reading is on screen now; restart rotation from page 0.
+                    oled_page = 0;
+                    next_page_switch_at = Instant::now() + Duration::from_millis(OLED_PAGE_MS);
                     }
                 }
                 if stack_has_ipv4(stack) {
@@ -2012,9 +2093,14 @@ async fn main(spawner: Spawner) {
                     }
                 };
 
+                let usb_host = sleep_interval_secs > 0 && usb_console::usb_host_present();
+                if usb_host {
+                    log_runtime_line("Power-save: computer on USB, staying awake for the console.");
+                }
                 if sleep_interval_secs > 0
                     && !portal_mode.is_open()
                     && !deep_sleep_blocked_by_manual_mode
+                    && !usb_host
                 {
                     if use_power_bank_mode {
                         POWER_SAVE_ACTIVE.store(true, Ordering::Relaxed);
@@ -2156,8 +2242,10 @@ async fn post_readings(
 
     #[cfg(not(feature = "no-tls"))]
     let tls_seed = esp_hal::rng::Rng::new().random() as u64;
+    // Must hold a full TLS record (16 KiB + overhead): Let's Encrypt's chain
+    // alone is ~4.3 KB, so a 4 KiB buffer fails with Tls(InsufficientSpace).
     #[cfg(not(feature = "no-tls"))]
-    let mut tls_rx = [0u8; 4096];
+    let mut tls_rx = [0u8; 16640];
     #[cfg(not(feature = "no-tls"))]
     let mut tls_tx = [0u8; 4096];
     #[cfg(not(feature = "no-tls"))]

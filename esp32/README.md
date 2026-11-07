@@ -5,7 +5,8 @@ This folder contains two firmware targets and one shared code area:
 - `c3/` for ESP32-C3 (RISC-V)
 - `c6/` for ESP32-C6 (RISC-V)
 - `wroom/` for ESP32-WROOM (Xtensa ESP32)
-- `shared/` for extracted reusable runtime and WiFi/AP config modules
+- `xiao-c6-sensor/` battery DHT22 node for Seeed XIAO ESP32C6, sends over ESP-NOW to the `c6/` gateway
+- `shared/` for extracted reusable runtime and WiFi/AP config modules (`espnow_packet.rs` is compiled into both `c6/` and `xiao-c6-sensor/`)
 
 All board builds currently run as independent Cargo projects. Shared code is extracted, but full one-build-for-all integration is intentionally deferred.
 

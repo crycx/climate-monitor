@@ -168,6 +168,133 @@ where
     flush_resilient(display)
 }
 
+/// Font glyphs are ASCII only: map Estonian/common Latin letters to their base
+/// letter, anything else non-ASCII to '?'.
+#[allow(dead_code)]
+fn push_ascii<const N: usize>(out: &mut String<N>, text: &str, max_chars: usize) {
+    for ch in text.chars().take(max_chars) {
+        let mapped = match ch {
+            'õ' | 'ö' | 'ó' | 'ò' | 'ô' => 'o',
+            'Õ' | 'Ö' | 'Ó' | 'Ò' | 'Ô' => 'O',
+            'ä' | 'á' | 'à' | 'â' | 'å' => 'a',
+            'Ä' | 'Á' | 'À' | 'Â' | 'Å' => 'A',
+            'ü' | 'ú' | 'ù' | 'û' => 'u',
+            'Ü' | 'Ú' | 'Ù' | 'Û' => 'U',
+            'š' => 's',
+            'Š' => 'S',
+            'ž' => 'z',
+            'Ž' => 'Z',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            c if c.is_ascii() => c,
+            _ => '?',
+        };
+        if out.push(mapped).is_err() {
+            break;
+        }
+    }
+}
+
+/// Page for a reading received from a remote (ESP-NOW) sensor.
+///
+/// Landscape:
+/// ```text
+/// <name>              <bat%>
+/// T:21.4C H:45.2%
+/// <footer, small font>
+/// ```
+#[allow(dead_code)]
+pub fn show_remote_reading<DI>(
+    display: &mut OledDisplay<DI>,
+    name: &str,
+    temp: Option<f32>,
+    hum: Option<f32>,
+    battery_pct: Option<u8>,
+    footer: &str,
+    is_portrait: bool,
+) -> Result<(), DisplayError>
+where
+    DI: WriteOnlyDataCommand,
+{
+    const FONT_6X10_CHAR_WIDTH_PX: i32 = 6;
+    let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+    let small_style = MonoTextStyle::new(&FONT_4X6, BinaryColor::On);
+
+    let mut battery: String<8> = String::new();
+    if let Some(pct) = battery_pct {
+        let _ = write!(&mut battery, "{}%", pct);
+    }
+
+    let _ = display.clear(BinaryColor::Off);
+
+    if is_portrait {
+        // 32 px wide: name in small font, values below.
+        let mut name_line: String<12> = String::new();
+        push_ascii(&mut name_line, name, 8);
+        let mut temp_line: String<12> = String::new();
+        let mut hum_line: String<12> = String::new();
+        match (temp, hum) {
+            (Some(t), Some(h)) => {
+                let _ = write!(&mut temp_line, "{:.1}C", t);
+                let _ = write!(&mut hum_line, "{:.1}%", h);
+            }
+            _ => {
+                let _ = write!(&mut temp_line, "-");
+                let _ = write!(&mut hum_line, "-");
+            }
+        }
+        let _ = Text::with_baseline(name_line.as_str(), Point::new(0, 0), small_style, Baseline::Top)
+            .draw(display);
+        let _ = Text::with_baseline(temp_line.as_str(), Point::new(0, 8), text_style, Baseline::Top)
+            .draw(display);
+        let _ = Text::with_baseline(hum_line.as_str(), Point::new(0, 19), text_style, Baseline::Top)
+            .draw(display);
+        if !battery.is_empty() {
+            let mut bat_line: String<12> = String::new();
+            let _ = write!(&mut bat_line, "B:{}", battery.as_str());
+            let _ = Text::with_baseline(bat_line.as_str(), Point::new(0, 30), small_style, Baseline::Top)
+                .draw(display);
+        }
+        return flush_resilient(display);
+    }
+
+    // Name on the left, battery right-aligned on the same line.
+    let battery_width = battery.len() as i32 * FONT_6X10_CHAR_WIDTH_PX;
+    let name_max_chars = ((DISPLAY_WIDTH_PX - battery_width) / FONT_6X10_CHAR_WIDTH_PX - 1).max(1) as usize;
+    let mut name_line: String<24> = String::new();
+    push_ascii(&mut name_line, name, name_max_chars);
+
+    let mut value_line: String<24> = String::new();
+    match (temp, hum) {
+        (Some(t), Some(h)) => {
+            let _ = write!(&mut value_line, "T:{:.1}C H:{:.1}%", t, h);
+        }
+        _ => {
+            let _ = write!(&mut value_line, "T:- H:- (sensor err)");
+        }
+    }
+
+    let mut footer_line: String<40> = String::new();
+    push_ascii(&mut footer_line, footer, (DISPLAY_WIDTH_PX / FONT_4X6_CHAR_WIDTH_PX) as usize);
+
+    let _ = Text::with_baseline(name_line.as_str(), Point::new(0, 0), text_style, Baseline::Top)
+        .draw(display);
+    if !battery.is_empty() {
+        let _ = Text::with_baseline(
+            battery.as_str(),
+            Point::new(DISPLAY_WIDTH_PX - battery_width, 0),
+            text_style,
+            Baseline::Top,
+        )
+        .draw(display);
+    }
+    let _ = Text::with_baseline(value_line.as_str(), Point::new(0, 11), text_style, Baseline::Top)
+        .draw(display);
+    let _ = Text::with_baseline(footer_line.as_str(), Point::new(0, 26), small_style, Baseline::Top)
+        .draw(display);
+
+    flush_resilient(display)
+}
+
 /// Show reading with optional WiFi SSID (for boot/connection phases)
 #[allow(dead_code)]
 pub fn show_reading_with_wifi<DI>(

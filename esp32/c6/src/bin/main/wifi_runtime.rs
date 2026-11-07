@@ -62,6 +62,9 @@ static STA_CONNECTED: AtomicBool = AtomicBool::new(false);
 pub struct WifiStacks {
     pub sta: Stack<'static>,
     pub ap: Stack<'static>,
+    /// ESP-NOW runs on the same radio as STA and receives on the STA channel.
+    pub esp_now: esp_radio::esp_now::EspNow<'static>,
+    pub sta_mac: [u8; 6],
 }
 
 const STA_RECONNECT_DELAY_MS: u64 = 5000;
@@ -95,8 +98,10 @@ pub async fn init(spawner: &Spawner, wifi: WIFI<'static>) -> (WifiStacks, WifiCo
     let (controller, interfaces) = esp_radio::wifi::new(wifi, wifi_config).unwrap();
     let ap_interface = interfaces.access_point;
     let sta_interface = interfaces.station;
+    let esp_now = interfaces.esp_now;
 
     let ap_mac: [u8; 6] = ap_interface.mac_address().try_into().unwrap();
+    let sta_mac: [u8; 6] = sta_interface.mac_address().try_into().unwrap();
     let (sta_stack, sta_runner) = embassy_net::new(
         sta_interface,
         sta_config,
@@ -118,6 +123,8 @@ pub async fn init(spawner: &Spawner, wifi: WIFI<'static>) -> (WifiStacks, WifiCo
         WifiStacks {
             sta: sta_stack,
             ap: ap_stack,
+            esp_now,
+            sta_mac,
         },
         sender,
     )

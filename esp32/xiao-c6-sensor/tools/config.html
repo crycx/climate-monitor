@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Climate Sensor Setup</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--text:#1d2330;--muted:#6b7280;--border:#c8ccd4;--accent:#2563eb;--ok:#15803d;--err:#b91c1c;--log:#0f172a;--logtext:#cbd5e1}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#1a1d24;--text:#e5e7eb;--muted:#9ca3af;--border:#374151;--accent:#3b82f6;--ok:#4ade80;--err:#f87171;--log:#05070a;--logtext:#94a3b8}}
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,sans-serif}
+main{max-width:520px;margin:auto}
+h1{font-size:1.3em;margin:0 0 4px}
+.card{background:var(--card);border-radius:10px;padding:14px 16px;margin:12px 0;box-shadow:0 1px 3px #0002}
+label{display:block;margin:10px 0 2px;font-size:.9em;color:var(--muted)}
+input,select{width:100%;padding:9px;font-size:1em;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)}
+.row{display:flex;gap:10px}.row>div{flex:1}
+.check{display:flex;align-items:center;gap:8px;color:var(--text)}.check input{width:auto}
+button{padding:10px 14px;font-size:1em;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer}
+button.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+button:disabled{opacity:.45;cursor:default}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+small{color:var(--muted)}
+#status{font-weight:600}.ok{color:var(--ok)}.err{color:var(--err)}
+dl{margin:0;display:grid;grid-template-columns:8em 1fr;gap:2px 8px}dt{color:var(--muted)}dd{margin:0;word-break:break-all}
+pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;height:180px;overflow:auto;font-size:12px;margin:0;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<main>
+  <h1>Climate Sensor Setup</h1>
+  <small>XIAO ESP32C6 over USB. Use Chrome or Edge on a desktop. Close <code>espflash monitor</code> first, since only one program can open the port.</small>
+
+  <div class="card">
+    <div class="actions" style="margin-top:0">
+      <button id="connect">Connect</button>
+      <button id="refresh" class="secondary" disabled>Refresh</button>
+    </div>
+    <p id="status">Not connected</p>
+    <small>Plug the sensor in and press RESET first: the console only starts on a fresh boot.</small>
+  </div>
+
+  <div class="card">
+    <dl id="info"><dt>MAC</dt><dd>-</dd></dl>
+  </div>
+
+  <form id="form" class="card">
+    <label for="name">Name (Home Assistant)</label>
+    <input id="name" maxlength="24">
+    <label for="interval">Interval (seconds)</label>
+    <input id="interval" type="number" min="10" max="21600">
+    <small>300 = 5 min, 900 = 15 min</small>
+    <div class="row">
+      <div><label for="temp_offset">Temp offset (°C)</label><input id="temp_offset" type="number" step="0.1"></div>
+      <div><label for="hum_offset">Humidity offset (%)</label><input id="hum_offset" type="number" step="0.1"></div>
+    </div>
+    <label for="key">ESP-NOW key</label>
+    <input id="key" type="password" autocomplete="off" placeholder="leave empty to keep">
+    <small id="keyhint">Must match the gateway's ESPNOW_KEY.</small>
+    <label for="antenna">Antenna</label>
+    <select id="antenna"><option value="internal">Internal (ceramic)</option><option value="external">External (U.FL)</option></select>
+    <div class="row">
+      <div><label for="warmup">DHT22 warm-up (ms)</label><input id="warmup" type="number" min="0" max="5000"></div>
+      <div><label for="divider">Divider ratio</label><input id="divider" type="number" step="0.01" min="1" max="10"></div>
+    </div>
+    <label class="check"><input id="battery" type="checkbox"> Measure battery on D0</label>
+    <div class="actions">
+      <button id="save" type="submit" disabled>Save</button>
+      <button id="test" type="button" class="secondary" disabled>Measure &amp; send now</button>
+    </div>
+  </form>
+
+  <div class="card">
+    <label style="margin-top:0">Serial log</label>
+    <pre id="log"></pre>
+  </div>
+</main>
+<script>
+"use strict";
+const FIELDS = ["name", "interval", "temp_offset", "hum_offset", "antenna", "warmup", "divider"];
+const INFO_KEYS = {mac: "MAC", gateway: "Gateway", channel: "Channel", temperature: "Temperature",
+  humidity: "Humidity", battery_mv: "Battery (mV)", delivered: "Last send", unsaved: "Unsaved", warning: "Warning"};
+const $ = id => document.getElementById(id);
+let port = null, writer = null, pending = null, busy = false;
+let current = {}, info = {};
+
+function log(line) {
+  const el = $("log");
+  el.textContent += line + "\n";
+  if (el.textContent.length > 20000) el.textContent = el.textContent.slice(-15000);
+  el.scrollTop = el.scrollHeight;
+}
+function setStatus(text, cls) { const s = $("status"); s.textContent = text; s.className = cls || ""; }
+function setEnabled(on) { ["refresh", "save", "test"].forEach(id => $(id).disabled = !on); }
+
+function handleLine(line) {
+  log(line);
+  if (line === "OK" || line.startsWith("ERR")) {
+    if (pending) { const p = pending; pending = null; p(line); }
+    return;
+  }
+  const eq = line.indexOf("=");
+  if (eq <= 0) return;
+  const key = line.slice(0, eq), value = line.slice(eq + 1);
+  if (FIELDS.includes(key) || key === "battery" || key === "key_set") current[key] = value;
+  else if (key in INFO_KEYS) info[key] = value;
+}
+
+function render() {
+  for (const f of FIELDS) if (f in current) $(f).value = current[f];
+  if ("battery" in current) $("battery").checked = current.battery === "on";
+  $("keyhint").textContent = current.key_set === "yes"
+    ? "A key is set. Leave empty to keep it."
+    : "No key set: the sensor cannot send until you set one.";
+  $("keyhint").className = current.key_set === "yes" ? "" : "err";
+  $("info").innerHTML = Object.entries(INFO_KEYS).filter(([k]) => k in info)
+    .map(([k, label]) => `<dt>${label}</dt><dd>${escapeHtml(info[k])}</dd>`).join("");
+}
+function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+// Sends one command and resolves with "OK" or "ERR ...". Measuring can take a few seconds.
+function command(text, timeoutMs = 15000) {
+  return new Promise(async resolve => {
+    const timer = setTimeout(() => { pending = null; resolve("ERR timeout"); }, timeoutMs);
+    pending = line => { clearTimeout(timer); resolve(line); };
+    await writer.write(new TextEncoder().encode(text + "\n"));
+  });
+}
+
+async function refresh() {
+  info = {};
+  const r = await command("show");
+  render();
+  return r;
+}
+
+async function readLoop() {
+  const decoder = new TextDecoderStream();
+  port.readable.pipeTo(decoder.writable).catch(() => {});
+  const reader = decoder.readable.getReader();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      let nl;
+      while ((nl = buffer.search(/\r?\n/)) >= 0) {
+        // Strip echoed backspaces and stray carriage returns.
+        const line = buffer.slice(0, nl).replace(/[\x08\r]/g, "").trim();
+        buffer = buffer.slice(buffer[nl] === "\r" ? nl + 2 : nl + 1);
+        if (line) handleLine(line);
+      }
+    }
+  } catch (e) { log("read error: " + e); }
+  setStatus("Disconnected", "err");
+  setEnabled(false);
+}
+
+$("connect").onclick = async () => {
+  if (!("serial" in navigator)) { setStatus("Web Serial not supported: use Chrome or Edge on desktop.", "err"); return; }
+  try {
+    port = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x303a }] });
+    await port.open({ baudRate: 115200 });
+    writer = port.writable.getWriter();
+    readLoop();
+    setStatus("Connected, reading settings...");
+    const r = await refresh();
+    if (r === "OK") { setStatus("Connected", "ok"); setEnabled(true); }
+    else setStatus("No answer. Press RESET on the sensor, then Refresh.", "err");
+    $("refresh").disabled = false;
+  } catch (e) { setStatus("Connect failed: " + e.message, "err"); }
+};
+
+$("refresh").onclick = async () => {
+  const r = await refresh();
+  if (r === "OK") { setStatus("Connected", "ok"); setEnabled(true); } else setStatus(r, "err");
+};
+
+$("form").onsubmit = async ev => {
+  ev.preventDefault();
+  if (busy) return;
+  busy = true; setEnabled(false); setStatus("Saving...");
+  const changes = [];
+  for (const f of FIELDS) {
+    const v = $(f).value.trim();
+    if (v !== (current[f] ?? "")) changes.push(["set", f, v]);
+  }
+  const battery = $("battery").checked ? "on" : "off";
+  if (battery !== current.battery) changes.push(["set", "battery", battery]);
+  if ($("key").value.trim()) changes.push(["set", "key", $("key").value.trim()]);
+  let error = null;
+  for (const [, f, v] of changes) {
+    const r = await command(`set ${f} ${v}`);
+    if (r !== "OK") { error = r.replace(/^ERR\s*/, ""); break; }
+  }
+  if (!error) {
+    const r = await command("save");
+    if (r !== "OK") error = r.replace(/^ERR\s*/, "");
+  }
+  $("key").value = "";
+  await refresh();
+  setStatus(error ? "Not saved: " + error : (changes.length ? "Saved" : "Nothing changed"), error ? "err" : "ok");
+  busy = false; setEnabled(true);
+};
+
+$("test").onclick = async () => {
+  if (busy) return;
+  busy = true; setEnabled(false); setStatus("Measuring and sending...");
+  info = {};
+  const r = await command("test", 30000);
+  render();
+  setStatus(r === "OK" ? (info.delivered === "yes" ? "Delivered to gateway" : "Measured, but gateway not reached") : r,
+            r === "OK" && info.delivered === "yes" ? "ok" : "err");
+  busy = false; setEnabled(true);
+};
+</script>
+</body>
+</html>

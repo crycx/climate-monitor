@@ -201,10 +201,12 @@ dependencies = [
  "esp-rtos",
  "esp-storage",
  "heapless 0.8.0",
+ "hmac",
  "log",
  "reqwless",
  "sequential-storage",
  "serde",
+ "sha2",
  "ssd1306",
  "static_cell",
 ]
