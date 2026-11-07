@@ -30,6 +30,8 @@ wifi = [
     "dep:sequential-storage",
     "dep:serde",
     "dep:der",
+    "dep:hmac",
+    "dep:sha2",
 ]
 defmt = []
 # Board variant: built-in LED is wired active-high on some ESP32-C3 Super Mini boards.
@@ -57,7 +59,7 @@ esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32c3"] }
 esp-hal = { version = "1.0.0", features = ["esp32c3", "unstable"] }
 esp-println = { version = "0.16.1", features = ["esp32c3", "log-04"] }
 esp-storage = { version = "0.8.1", features = ["esp32c3"] }
-esp-radio = { version = "0.17.0", optional = true, features = ["esp32c3", "wifi", "esp-alloc", "unstable", "log-04"] }
+esp-radio = { version = "0.17.0", optional = true, features = ["esp32c3", "wifi", "esp-now", "esp-alloc", "unstable", "log-04"] }
 esp-rtos  = { version = "0.2.0",  optional = true, features = ["esp32c3", "esp-radio", "esp-alloc"] }
 log = { version = "0.4.29" }
 critical-section = "1.2.0"
@@ -80,6 +82,9 @@ enumset = { version = "1.1", default-features = false, optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"], optional = true }
 der = { version = "0.8", features = ["heapless", "derive"], optional = true }
 sequential-storage = { version = "7.0.1", optional = true, features = ["alloc"] }
+# ESP-NOW packet authentication (shared/espnow_packet.rs).
+hmac = { version = "0.12", optional = true, default-features = false }
+sha2 = { version = "0.10", optional = true, default-features = false }
 
 
 [profile.dev]

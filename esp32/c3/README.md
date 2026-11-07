@@ -146,6 +146,44 @@ cargo run --release
 
 DHT22 readings are printed to the serial monitor every 2 seconds.
 
+## Transport: WiFi or ESP-NOW
+
+The same firmware can send readings two ways, chosen with the **transport**
+setting (portal, USB console, or `TRANSPORT = "espnow"` as build default):
+
+| Transport | Path | Notes |
+|---|---|---|
+| `wifi` (default) | WiFi → backend (HTTPS) + MQTT | as before |
+| `espnow` | ESP-NOW → gateway (`esp32/c6`) → MQTT → Home Assistant | no WiFi association; needs `espnow_key` equal to the gateway's `ESPNOW_KEY` |
+
+In ESP-NOW mode the device shows up in Home Assistant as
+"Climate Sensor (<espnow_name>)" (falls back to WiFi slot 1 location). With
+deep sleep on and power source *battery* it wakes, sends one packet and
+sleeps again; otherwise it stays awake and sends every interval. Pressing the
+button restarts it into the AP portal (after power-on/RESET the deep-sleep
+variant waits 3 s for the button).
+
+## Changing settings over USB
+
+A USB console runs in both transports. While a computer is attached the
+device never deep-sleeps, so the console stays reachable (press RESET if it
+was already asleep).
+
+- Easiest: open `esp32/tools/config.html` in Chrome or Edge, **Connect**, edit,
+  **Save & restart**. The page reconnects after the restart.
+- Or any serial terminal (`espflash monitor`), type `help`:
+
+  ```
+  set transport espnow
+  set espnow_key my-shared-secret
+  set espnow_name Elutuba
+  set interval 300
+  save
+  ```
+
+`save` stores the settings in flash and restarts; `show` lists them (secrets
+only as set/not set). The AP portal keeps working as before.
+
 ## Serial output (WiFi mode)
 
 ```

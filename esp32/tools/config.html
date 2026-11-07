@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Climate Monitor Setup</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--text:#1d2330;--muted:#6b7280;--border:#c8ccd4;--accent:#2563eb;--ok:#15803d;--err:#b91c1c;--log:#0f172a;--logtext:#cbd5e1}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#1a1d24;--text:#e5e7eb;--muted:#9ca3af;--border:#374151;--accent:#3b82f6;--ok:#4ade80;--err:#f87171;--log:#05070a;--logtext:#94a3b8}}
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,sans-serif}
+main{max-width:620px;margin:auto}
+h1{font-size:1.3em;margin:0 0 4px}
+h2{font-size:1.05em;margin:0 0 4px}
+.card{background:var(--card);border-radius:10px;padding:14px 16px;margin:12px 0;box-shadow:0 1px 3px #0002}
+label{display:block;margin:10px 0 2px;font-size:.9em;color:var(--muted)}
+input,select{width:100%;padding:9px;font-size:1em;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)}
+.row{display:flex;gap:10px;flex-wrap:wrap}.row>div{flex:1;min-width:150px}
+.check{display:flex;align-items:center;gap:8px;color:var(--text)}.check input{width:auto}
+button{padding:10px 14px;font-size:1em;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer}
+button.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+button:disabled{opacity:.45;cursor:default}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+small{color:var(--muted)}
+#status{font-weight:600}.ok{color:var(--ok)}.err{color:var(--err)}
+details summary{cursor:pointer;font-weight:600}
+.dim{opacity:.55}
+pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;height:180px;overflow:auto;font-size:12px;margin:0;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<main>
+  <h1>Climate Monitor Setup</h1>
+  <small>ESP32-C3 sensor or ESP32-C6 gateway over USB (for the XIAO battery sensor use <code>xiao-c6-sensor/tools/config.html</code>). Use Chrome or Edge on a desktop. Close <code>espflash monitor</code> first, since only one program can open the port.</small>
+
+  <div class="card">
+    <div class="actions" style="margin-top:0">
+      <button id="connect">Connect</button>
+      <button id="refresh" class="secondary" disabled>Refresh</button>
+    </div>
+    <p id="status">Not connected</p>
+    <small>The device does not deep-sleep while a computer is attached. If it was asleep, press RESET.</small>
+  </div>
+
+  <form id="form">
+    <section class="card" data-needs="transport" hidden>
+      <h2>Transport</h2>
+      <label for="transport">Send readings via</label>
+      <select id="transport" data-field="transport">
+        <option value="wifi">WiFi (backend + MQTT)</option>
+        <option value="espnow">ESP-NOW (via gateway)</option>
+      </select>
+      <div id="espnow-fields">
+        <label for="espnow_key">ESP-NOW key</label>
+        <input id="espnow_key" data-secret="espnow_key" type="password" autocomplete="off">
+        <small id="espnow_key_hint">Must match the gateway's ESPNOW_KEY.</small>
+        <label for="espnow_name">Name in Home Assistant</label>
+        <input id="espnow_name" data-field="espnow_name" maxlength="24" placeholder="empty = WiFi slot 1 location">
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Measurement</h2>
+      <div class="row">
+        <div><label for="interval">Interval (s)</label><input id="interval" data-field="interval" type="number" min="5" max="3600"></div>
+        <div><label for="temp_offset">Temp offset (°C)</label><input id="temp_offset" data-field="temp_offset" type="number" step="0.1"></div>
+        <div><label for="hum_offset">Humidity offset (%)</label><input id="hum_offset" data-field="hum_offset" type="number" step="0.1"></div>
+      </div>
+      <label class="check"><input id="deep_sleep" data-field="deep_sleep" type="checkbox"> Deep sleep between measurements</label>
+      <div class="row">
+        <div><label for="power_source">Power source</label>
+          <select id="power_source" data-field="power_source"><option value="battery">Battery (deep sleep)</option><option value="power_bank">Power bank (stay awake)</option></select></div>
+        <div><label for="oled_orientation">OLED</label>
+          <select id="oled_orientation" data-field="oled_orientation"><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></div>
+      </div>
+    </section>
+
+    <section class="card wifi-only">
+      <h2>WiFi</h2>
+      <small>Only used with transport WiFi. Up to 5 networks, tried in order.</small>
+      <div id="wifi-slots"></div>
+    </section>
+
+    <section class="card wifi-only">
+      <h2>MQTT (Home Assistant)</h2>
+      <div class="row">
+        <div><label for="mqtt_host">Broker host</label><input id="mqtt_host" data-field="mqtt_host"></div>
+        <div><label for="mqtt_port">Port</label><input id="mqtt_port" data-field="mqtt_port" type="number" min="1" max="65535"></div>
+      </div>
+      <div class="row">
+        <div><label for="mqtt_username">Username</label><input id="mqtt_username" data-field="mqtt_username" autocomplete="off"></div>
+        <div><label for="mqtt_password">Password</label><input id="mqtt_password" data-secret="mqtt_password" type="password" autocomplete="off"></div>
+      </div>
+      <div class="row">
+        <div><label for="mqtt_base_topic">Base topic</label><input id="mqtt_base_topic" data-field="mqtt_base_topic"></div>
+        <div><label for="mqtt_device_id">Device id</label><input id="mqtt_device_id" data-field="mqtt_device_id"></div>
+      </div>
+    </section>
+
+    <section class="card wifi-only">
+      <h2>Backend</h2>
+      <label for="api_url">API URL (ends with /)</label><input id="api_url" data-field="api_url">
+      <label for="api_key">API key</label><input id="api_key" data-secret="api_key" type="password" autocomplete="off">
+    </section>
+
+    <section class="card" data-needs="espnow_sensor_mac_1" hidden>
+      <h2>ESP-NOW sensors &rarr; backend</h2>
+      <small>Gateway only. Register each sensor as a device in the web app and paste its API key next to the sensor's MAC. Sensors without a key only go to MQTT.</small>
+      <div id="seen"></div>
+      <div id="espnow-slots"></div>
+    </section>
+
+    <div class="card">
+      <div class="actions" style="margin-top:0">
+        <button id="save" type="submit" disabled>Save &amp; restart</button>
+      </div>
+      <small>Saving restarts the device; this page reconnects by itself.</small>
+    </div>
+  </form>
+
+  <div class="card">
+    <label style="margin-top:0">Serial log</label>
+    <pre id="log"></pre>
+  </div>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+// WiFi slot inputs are generated: slot 1 has no suffix.
+for (let i = 1; i <= 5; i++) {
+  const s = i === 1 ? "" : "_" + i;
+  const d = document.createElement("details");
+  d.innerHTML = `<summary>Network ${i} <small id="wifi_sum${s}"></small></summary>
+    <div class="row">
+      <div><label>SSID</label><input data-field="wifi_ssid${s}" autocomplete="off"></div>
+      <div><label>Password</label><input data-secret="wifi_password${s}" type="password" autocomplete="off"></div>
+    </div>
+    <label>Location</label><input data-field="wifi_location${s}">
+    <label class="check"><input data-field="mqtt_enabled${s}" type="checkbox"> MQTT on this network</label>`;
+  $("wifi-slots").appendChild(d);
+}
+
+for (let i = 1; i <= 8; i++) {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `<div><label>Sensor ${i} MAC</label><input data-field="espnow_sensor_mac_${i}" placeholder="aca704bb5b9c" autocomplete="off"></div>
+    <div><label>API key</label><input data-secret="espnow_sensor_api_key_${i}" type="password" autocomplete="off"></div>`;
+  $("espnow-slots").appendChild(row);
+}
+
+let port = null, writer = null, pending = null, busy = false, reconnecting = false;
+let cfg = {}, secrets = {}, info = {};
+
+function log(line) {
+  const el = $("log");
+  el.textContent += line + "\n";
+  if (el.textContent.length > 20000) el.textContent = el.textContent.slice(-15000);
+  el.scrollTop = el.scrollHeight;
+}
+function setStatus(text, cls) { const s = $("status"); s.textContent = text; s.className = cls || ""; }
+function setEnabled(on) { $("refresh").disabled = !on; $("save").disabled = !on; }
+const fieldInputs = () => [...document.querySelectorAll("[data-field]")];
+const secretInputs = () => [...document.querySelectorAll("[data-secret]")];
+const inputValue = el => el.type === "checkbox" ? (el.checked ? "on" : "off") : el.value.trim();
+
+function handleLine(line) {
+  log(line);
+  if (line === "OK" || line.startsWith("ERR")) {
+    if (pending) { const p = pending; pending = null; p(line); }
+    return;
+  }
+  const m = line.match(/^(cfg|secret|info)\.([a-z0-9_]+)=(.*)$/);
+  if (!m) return;
+  ({cfg, secret: secrets, info})[m[1]][m[2]] = m[3];
+}
+
+function render() {
+  for (const el of fieldInputs()) {
+    const v = cfg[el.dataset.field];
+    if (v === undefined) continue;
+    if (el.type === "checkbox") el.checked = v === "on"; else el.value = v;
+  }
+  for (const el of secretInputs()) {
+    el.value = "";
+    el.placeholder = secrets[el.dataset.secret] === "yes" ? "(set, leave empty to keep)" : "(not set)";
+  }
+  const keySet = secrets.espnow_key === "yes";
+  $("espnow_key_hint").textContent = keySet ? "A key is set. Leave empty to keep it." : "No key set: ESP-NOW cannot send until you set one.";
+  $("espnow_key_hint").className = keySet ? "" : "err";
+  for (let i = 1; i <= 5; i++) {
+    const s = i === 1 ? "" : "_" + i;
+    $("wifi_sum" + s).textContent = cfg["wifi_ssid" + s] ? "— " + cfg["wifi_ssid" + s] : "";
+  }
+  document.querySelectorAll("[data-needs]").forEach(el => {
+    const f = el.dataset.needs;
+    el.hidden = !(f in cfg || f in secrets);
+  });
+  renderSeen();
+  updateTransport();
+}
+// "info.seen_N=mac,name,age,backend|mqtt-only" from the gateway.
+function renderSeen() {
+  const seen = Object.keys(info).filter(k => k.startsWith("seen_")).map(k => info[k].split(","));
+  const box = $("seen");
+  box.innerHTML = seen.length ? "<label>Heard since boot (click to add)</label>" : "";
+  for (const [mac, name, age, mode] of seen) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "secondary"; b.style.margin = "4px 4px 0 0";
+    b.textContent = `${name || "?"} ${mac} · ${age}s · ${mode}`;
+    b.onclick = () => {
+      const inputs = [...document.querySelectorAll("[data-field^='espnow_sensor_mac_']")];
+      if (inputs.some(el => el.value.trim().toLowerCase() === mac)) return;
+      const free = inputs.find(el => !el.value.trim());
+      if (free) { free.value = mac; free.closest(".row").querySelector("[data-secret]").focus(); }
+    };
+    box.appendChild(b);
+  }
+}
+function updateTransport() {
+  const espnow = "transport" in cfg && $("transport").value === "espnow";
+  $("espnow-fields").classList.toggle("dim", !espnow);
+  document.querySelectorAll(".wifi-only").forEach(el => el.classList.toggle("dim", espnow));
+}
+$("transport").onchange = updateTransport;
+
+function command(text, timeoutMs = 5000) {
+  return new Promise(async resolve => {
+    const timer = setTimeout(() => { pending = null; resolve("ERR timeout"); }, timeoutMs);
+    pending = line => { clearTimeout(timer); resolve(line); };
+    try { await writer.write(new TextEncoder().encode(text + "\n")); }
+    catch (e) { clearTimeout(timer); pending = null; resolve("ERR " + e.message); }
+  });
+}
+
+async function refresh() {
+  cfg = {}; secrets = {}; info = {};
+  const r = await command("show");
+  if (r === "OK") render();
+  return r;
+}
+
+async function readLoop() {
+  const decoder = new TextDecoderStream();
+  port.readable.pipeTo(decoder.writable).catch(() => {});
+  const reader = decoder.readable.getReader();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      let nl;
+      while ((nl = buffer.search(/\r?\n/)) >= 0) {
+        const line = buffer.slice(0, nl).replace(/[\x08\r]/g, "").trim();
+        buffer = buffer.slice(buffer[nl] === "\r" ? nl + 2 : nl + 1);
+        if (line) handleLine(line);
+      }
+    }
+  } catch (e) { if (!reconnecting) log("read error: " + e.message); }
+  setEnabled(false);
+  if (!reconnecting) setStatus("Disconnected", "err");
+}
+
+async function openPort(p) {
+  port = p;
+  await port.open({ baudRate: 115200 });
+  writer = port.writable.getWriter();
+  readLoop();
+  // The console may still be booting right after a reset.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const r = await refresh();
+    if (r === "OK") { setStatus("Connected", "ok"); setEnabled(true); return true; }
+    await new Promise(res => setTimeout(res, 1000));
+  }
+  setStatus("No answer from the device. Press RESET, then Refresh.", "err");
+  $("refresh").disabled = false;
+  return false;
+}
+
+$("connect").onclick = async () => {
+  if (!("serial" in navigator)) { setStatus("Web Serial not supported: use Chrome or Edge on desktop.", "err"); return; }
+  try {
+    const p = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x303a }] });
+    setStatus("Connecting...");
+    await openPort(p);
+  } catch (e) { setStatus("Connect failed: " + e.message, "err"); }
+};
+
+$("refresh").onclick = async () => {
+  const r = await refresh();
+  if (r === "OK") { setStatus("Connected", "ok"); setEnabled(true); } else setStatus(r, "err");
+};
+
+// After "save" the device restarts and USB re-enumerates: wait for it to come back.
+async function reconnectAfterRestart() {
+  reconnecting = true;
+  setStatus("Saved. Device is restarting...");
+  try { writer.releaseLock(); } catch (_) {}
+  try { await port.close(); } catch (_) {}
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    await new Promise(res => setTimeout(res, 1000));
+    for (const p of await navigator.serial.getPorts()) {
+      try { reconnecting = false; if (await openPort(p)) { setStatus("Saved and restarted", "ok"); return; } }
+      catch (_) { reconnecting = true; }
+    }
+  }
+  reconnecting = false;
+  setStatus("Saved. Click Connect to reconnect.", "ok");
+}
+
+$("form").onsubmit = async ev => {
+  ev.preventDefault();
+  if (busy) return;
+  busy = true; setEnabled(false); setStatus("Saving...");
+  const changes = [];
+  for (const el of fieldInputs()) {
+    if (!(el.dataset.field in cfg)) continue;
+    const v = inputValue(el);
+    if (v !== cfg[el.dataset.field]) changes.push([el.dataset.field, v]);
+  }
+  for (const el of secretInputs()) {
+    if (el.dataset.secret in secrets && el.value.trim()) changes.push([el.dataset.secret, el.value.trim()]);
+  }
+  let error = null;
+  for (const [f, v] of changes) {
+    const r = await command(`set ${f} ${v}`);
+    if (r !== "OK") { error = `${f}: ${r.replace(/^ERR\s*/, "")}`; break; }
+  }
+  if (error) {
+    await command("discard");
+    await refresh();
+    setStatus("Not saved: " + error, "err");
+    setEnabled(true); busy = false;
+    return;
+  }
+  if (!changes.length) { setStatus("Nothing changed", "ok"); setEnabled(true); busy = false; return; }
+  const r = await command("save");
+  busy = false;
+  if (r === "OK") await reconnectAfterRestart();
+  else { setStatus("Not saved: " + r.replace(/^ERR\s*/, ""), "err"); setEnabled(true); }
+};
+</script>
+</body>
+</html>

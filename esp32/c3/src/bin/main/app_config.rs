@@ -73,6 +73,15 @@ const MQTT_ENABLED_2_KEY: u64 = fnv1a_hash(b"mqtt_enabled_2");
 const MQTT_ENABLED_3_KEY: u64 = fnv1a_hash(b"mqtt_enabled_3");
 const MQTT_ENABLED_4_KEY: u64 = fnv1a_hash(b"mqtt_enabled_4");
 const MQTT_ENABLED_5_KEY: u64 = fnv1a_hash(b"mqtt_enabled_5");
+const TRANSPORT_KEY: u64 = fnv1a_hash(b"transport");
+const ESPNOW_KEY_KEY: u64 = fnv1a_hash(b"espnow_key");
+const ESPNOW_NAME_KEY: u64 = fnv1a_hash(b"espnow_name");
+
+/// `AppConfig::transport` values.
+pub const TRANSPORT_WIFI: &str = "wifi";
+pub const TRANSPORT_ESPNOW: &str = "espnow";
+/// Shorter keys are rejected; must match the gateway's ESPNOW_KEY.
+pub const ESPNOW_KEY_MIN_LEN: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -113,6 +122,27 @@ pub struct AppConfig {
     pub mqtt_enabled_3: bool,
     pub mqtt_enabled_4: bool,
     pub mqtt_enabled_5: bool,
+    /// "wifi" (backend + MQTT over WiFi) or "espnow" (send to the ESP-NOW gateway).
+    pub transport: String,
+    /// Shared secret with the ESP-NOW gateway.
+    pub espnow_key: String,
+    /// Name shown in Home Assistant for ESP-NOW mode; falls back to WiFi slot 1 location.
+    pub espnow_name: String,
+}
+
+impl AppConfig {
+    pub fn uses_espnow(&self) -> bool {
+        self.transport == TRANSPORT_ESPNOW
+    }
+
+    pub fn espnow_display_name(&self) -> &str {
+        let name = self.espnow_name.trim();
+        if name.is_empty() { self.wifi_location.trim() } else { name }
+    }
+}
+
+pub fn normalize_transport(value: &str) -> &'static str {
+    if value.trim().eq_ignore_ascii_case(TRANSPORT_ESPNOW) { TRANSPORT_ESPNOW } else { TRANSPORT_WIFI }
 }
 
 impl Default for AppConfig {
@@ -184,6 +214,9 @@ impl Default for AppConfig {
             mqtt_enabled_3,
             mqtt_enabled_4,
             mqtt_enabled_5,
+            transport: normalize_transport(option_env!("TRANSPORT").unwrap_or(TRANSPORT_WIFI)).into(),
+            espnow_key: option_env!("ESPNOW_KEY").unwrap_or("").trim().into(),
+            espnow_name: option_env!("ESPNOW_NAME").unwrap_or("").into(),
         }
     }
 }
@@ -348,6 +381,15 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(MQTT_DEVICE_ID_KEY).await? {
             cfg.mqtt_device_id = value;
         }
+        if let Some(value) = self.get_string(TRANSPORT_KEY).await? {
+            cfg.transport = normalize_transport(&value).into();
+        }
+        if let Some(value) = self.get_string(ESPNOW_KEY_KEY).await? {
+            cfg.espnow_key = value;
+        }
+        if let Some(value) = self.get_string(ESPNOW_NAME_KEY).await? {
+            cfg.espnow_name = value;
+        }
 
         // Backwards compatible default:
         // - If per-slot flag is missing, fall back to legacy global flag.
@@ -452,6 +494,9 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_string(MQTT_PASSWORD_KEY, &cfg.mqtt_password).await?;
         self.set_string(MQTT_BASE_TOPIC_KEY, &cfg.mqtt_base_topic).await?;
         self.set_string(MQTT_DEVICE_ID_KEY, &cfg.mqtt_device_id).await?;
+        self.set_string(TRANSPORT_KEY, &cfg.transport).await?;
+        self.set_string(ESPNOW_KEY_KEY, &cfg.espnow_key).await?;
+        self.set_string(ESPNOW_NAME_KEY, &cfg.espnow_name).await?;
         self.set_u32(MQTT_ENABLED_1_KEY, if cfg.mqtt_enabled_1 { 1 } else { 0 })
             .await?;
         self.set_u32(MQTT_ENABLED_2_KEY, if cfg.mqtt_enabled_2 { 1 } else { 0 })

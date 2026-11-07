@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::{string::String, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 use core::fmt;
 use core::ops::Range;
 
@@ -74,6 +74,28 @@ const MQTT_ENABLED_3_KEY: u64 = fnv1a_hash(b"mqtt_enabled_3");
 const MQTT_ENABLED_4_KEY: u64 = fnv1a_hash(b"mqtt_enabled_4");
 const MQTT_ENABLED_5_KEY: u64 = fnv1a_hash(b"mqtt_enabled_5");
 
+/// ESP-NOW sensors the gateway forwards to the backend, each with its own
+/// backend device API key (sensor MAC -> API key).
+pub const ESPNOW_SENSOR_SLOTS: usize = 8;
+
+fn espnow_sensor_mac_key(index: usize) -> u64 {
+    fnv1a_hash(format!("espnow_sensor_mac_{}", index + 1).as_bytes())
+}
+
+fn espnow_sensor_api_key_key(index: usize) -> u64 {
+    fnv1a_hash(format!("espnow_sensor_api_key_{}", index + 1).as_bytes())
+}
+
+/// Accepts "ac:a7:04:bb:5b:9c", "AC-A7-...", or "aca704bb5b9c"; returns 12 lowercase hex digits.
+pub fn normalize_mac(input: &str) -> Option<String> {
+    let hex: String = input
+        .chars()
+        .filter(|c| !matches!(c, ':' | '-' | ' '))
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    (hex.len() == 12 && hex.chars().all(|c| c.is_ascii_hexdigit())).then_some(hex)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
     pub wifi_ssid: String,
@@ -113,6 +135,21 @@ pub struct AppConfig {
     pub mqtt_enabled_3: bool,
     pub mqtt_enabled_4: bool,
     pub mqtt_enabled_5: bool,
+    /// Normalized MACs (see `normalize_mac`), "" = unused slot.
+    pub espnow_sensor_mac: [String; ESPNOW_SENSOR_SLOTS],
+    /// Backend API key for the sensor in the same slot.
+    pub espnow_sensor_api_key: [String; ESPNOW_SENSOR_SLOTS],
+}
+
+impl AppConfig {
+    /// Backend API key registered for this ESP-NOW sensor, if any.
+    pub fn espnow_backend_api_key(&self, mac_hex: &str) -> Option<&str> {
+        self.espnow_sensor_mac
+            .iter()
+            .zip(self.espnow_sensor_api_key.iter())
+            .find(|(mac, key)| mac.as_str() == mac_hex && !key.is_empty())
+            .map(|(_, key)| key.as_str())
+    }
 }
 
 impl Default for AppConfig {
@@ -184,6 +221,8 @@ impl Default for AppConfig {
             mqtt_enabled_3,
             mqtt_enabled_4,
             mqtt_enabled_5,
+            espnow_sensor_mac: core::array::from_fn(|_| String::new()),
+            espnow_sensor_api_key: core::array::from_fn(|_| String::new()),
         }
     }
 }
@@ -348,6 +387,14 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(MQTT_DEVICE_ID_KEY).await? {
             cfg.mqtt_device_id = value;
         }
+        for i in 0..ESPNOW_SENSOR_SLOTS {
+            if let Some(value) = self.get_string(espnow_sensor_mac_key(i)).await? {
+                cfg.espnow_sensor_mac[i] = normalize_mac(&value).unwrap_or_default();
+            }
+            if let Some(value) = self.get_string(espnow_sensor_api_key_key(i)).await? {
+                cfg.espnow_sensor_api_key[i] = value;
+            }
+        }
 
         // Backwards compatible default:
         // - If per-slot flag is missing, fall back to legacy global flag.
@@ -452,6 +499,10 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_string(MQTT_PASSWORD_KEY, &cfg.mqtt_password).await?;
         self.set_string(MQTT_BASE_TOPIC_KEY, &cfg.mqtt_base_topic).await?;
         self.set_string(MQTT_DEVICE_ID_KEY, &cfg.mqtt_device_id).await?;
+        for i in 0..ESPNOW_SENSOR_SLOTS {
+            self.set_string(espnow_sensor_mac_key(i), &cfg.espnow_sensor_mac[i]).await?;
+            self.set_string(espnow_sensor_api_key_key(i), &cfg.espnow_sensor_api_key[i]).await?;
+        }
         self.set_u32(MQTT_ENABLED_1_KEY, if cfg.mqtt_enabled_1 { 1 } else { 0 })
             .await?;
         self.set_u32(MQTT_ENABLED_2_KEY, if cfg.mqtt_enabled_2 { 1 } else { 0 })

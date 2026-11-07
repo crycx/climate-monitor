@@ -1,0 +1,43 @@
+# Copy to .cargo/config.toml (git-ignored) and adjust.
+[target.riscv32imac-unknown-none-elf]
+# Add --port COMx if espflash does not pick the right port.
+runner = "espflash flash --monitor --chip esp32c6 --partition-table partitions.csv --target-app-partition factory"
+
+[env]
+# All values below are DEFAULTS. Settings saved over USB (tools/config.html)
+# or the WiFi portal override them and survive reflashing the app.
+
+# Shared secret, must match ESPNOW_KEY in the gateway (esp32/c6) build.
+# Min 8 chars, e.g. `openssl rand -hex 16`. Can also be set over USB/portal;
+# the sensor does not send until a key is set.
+# ESPNOW_KEY = "change-me-to-a-long-random-string"
+
+# Shown in Home Assistant as "Climate Sensor (<name>)". Max 24 bytes.
+# SENSOR_NAME = "Magamistuba"
+
+# Seconds between measurements (10..21600). Default 300.
+# SENSOR_INTERVAL_SECS = "300"
+
+# Calibration offsets added to the raw DHT22 values.
+# TEMP_OFFSET = "0.0"
+# HUM_OFFSET  = "0.0"
+
+# DHT22 power-up settle time in ms (DHT22 VCC is switched from D3/GPIO21).
+# Set to "0" only if DHT22 VCC is wired permanently to 3V3. Default 1500.
+# DHT22_WARMUP_MS = "1500"
+
+# Battery voltage via divider on D0/GPIO0 (2 x 1 MOhm + 100 nF). Default on.
+# BATTERY_ADC = "1"
+# BATTERY_DIVIDER = "2.0"
+
+# "external" selects the U.FL connector instead of the ceramic antenna.
+# ANTENNA = "internal"
+
+# Serial log output. Default on; harmless without USB but can be disabled.
+# SERIAL_LOG = "1"
+
+[build]
+target = "riscv32imac-unknown-none-elf"
+
+[unstable]
+build-std = ["core", "alloc"]

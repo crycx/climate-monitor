@@ -101,6 +101,15 @@ mod config_portal;
 #[cfg(feature = "wifi")]
 #[path = "main/wifi_runtime.rs"]
 mod wifi_runtime;
+#[cfg(feature = "wifi")]
+#[path = "../../../shared/espnow_packet.rs"]
+mod espnow_packet;
+#[cfg(feature = "wifi")]
+#[path = "main/espnow_node.rs"]
+mod espnow_node;
+#[cfg(feature = "wifi")]
+#[path = "main/usb_console.rs"]
+mod usb_console;
 
 #[cfg(feature = "wifi")]
 use app_config::{AppConfig, FlashConfigStorage, resolve_partition_range};
@@ -1203,7 +1212,8 @@ async fn main(spawner: Spawner) {
 
     // GPIO9 = BOOT button (active-low).
     let btn = Input::new(peripherals.GPIO9, InputConfig::default().with_pull(Pull::Up));
-    let boot_button_held = btn.level() == Level::Low;
+    // A button press in ESP-NOW mode restarts with this request to open the portal.
+    let boot_button_held = btn.level() == Level::Low || espnow_node::take_portal_request();
     spawner.spawn(gpio_poll_task(btn)).unwrap();
 
     #[cfg(feature = "supermini")]
@@ -1369,6 +1379,33 @@ async fn main(spawner: Spawner) {
         }
         if let Err(e) = display.set_brightness(Brightness::BRIGHTEST) {
             log_runtime_line(format!("OLED: brightness restore failed: {:?}", e).as_str());
+        }
+    }
+
+    // USB console for configuring from a computer, in both transports.
+    let usb_serial = esp_hal::usb_serial_jtag::UsbSerialJtag::new(peripherals.USB_DEVICE);
+    spawner
+        .spawn(usb_console::console_task(usb_serial, config_handle, config_storage))
+        .unwrap();
+
+    let espnow_config = {
+        let cfg = config_handle.lock().await;
+        if cfg.uses_espnow() { Some(cfg.clone()) } else { None }
+    };
+    if let Some(cfg) = espnow_config {
+        if boot_button_held {
+            log_runtime_line("Boot: transport is ESP-NOW, opening the AP portal as requested.");
+        } else {
+            let lpwr = lpwr_for_sleep.take().expect("LPWR available at boot");
+            espnow_node::run(
+                cfg,
+                peripherals.WIFI,
+                peripherals.GPIO5,
+                oled.as_mut(),
+                oled_is_portrait(initial_oled_orientation.as_str()),
+                lpwr,
+            )
+            .await;
         }
     }
 
@@ -1574,6 +1611,11 @@ async fn main(spawner: Spawner) {
                     deep_sleep_blocked_by_manual_mode = true;
                 }
                 ButtonEvent::ShortPress => {
+                    if portal_mode.is_open() && config_handle.lock().await.uses_espnow() {
+                        log_runtime_line("Button: portal closed, restarting in ESP-NOW mode.");
+                        Timer::after(Duration::from_millis(200)).await;
+                        esp_hal::system::software_reset();
+                    }
                     if portal_mode.is_open() {
                         set_portal_mode(
                             &wifi_sender,
@@ -1689,6 +1731,11 @@ async fn main(spawner: Spawner) {
         net_was_up = net_is_up_now;
 
         if let Some(changed) = config_save_changed {
+            if config_handle.lock().await.uses_espnow() {
+                log_runtime_line("Config saved: transport is ESP-NOW, restarting in 2 s...");
+                Timer::after(Duration::from_secs(SAVE_AP_CLOSE_DELAY_SECS)).await;
+                esp_hal::system::software_reset();
+            }
             let (has_config, pending_oled_orientation) = {
                 let cfg = config_handle.lock().await;
                 let pending_oled_orientation = cfg.oled_orientation.clone();
@@ -2038,9 +2085,14 @@ async fn main(spawner: Spawner) {
                     }
                 };
 
+                let usb_host = sleep_interval_secs > 0 && usb_console::usb_host_present();
+                if usb_host {
+                    log_runtime_line("Power-save: computer on USB, staying awake for the console.");
+                }
                 if sleep_interval_secs > 0
                     && !portal_mode.is_open()
                     && !deep_sleep_blocked_by_manual_mode
+                    && !usb_host
                 {
                     if use_power_bank_mode {
                         // Power bank mode: use timer wait instead of deep sleep so the WiFi modem
@@ -2187,8 +2239,10 @@ async fn post_readings(
 
     #[cfg(not(feature = "no-tls"))]
     let tls_seed = esp_hal::rng::Rng::new().random() as u64;
+    // Must hold a full TLS record (16 KiB + overhead): Let's Encrypt's chain
+    // alone is ~4.3 KB, so a 4 KiB buffer fails with Tls(InsufficientSpace).
     #[cfg(not(feature = "no-tls"))]
-    let mut tls_rx = [0u8; 4096];
+    let mut tls_rx = [0u8; 16640];
     #[cfg(not(feature = "no-tls"))]
     let mut tls_tx = [0u8; 4096];
     #[cfg(not(feature = "no-tls"))]

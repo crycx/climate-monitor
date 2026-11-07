@@ -19,7 +19,7 @@ use embassy_time::{Duration, Timer};
 use embedded_io_async::{ErrorType, Read, Write};
 use log::{error, info};
 
-use crate::app_config::{AppConfig, FlashConfigStorage};
+use crate::app_config::{self, AppConfig, FlashConfigStorage};
 use crate::wifi_runtime::{self, WifiCommand};
 
 const AP_IP_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
@@ -550,6 +550,23 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
     next.mqtt_password = mqtt_password;
     next.mqtt_base_topic = mqtt_base_topic.trim().into();
     next.mqtt_device_id = mqtt_device_id.trim().into();
+
+    next.transport = app_config::normalize_transport(
+        query_param(full_path, "transport")
+            .unwrap_or_else(|| current.transport.clone())
+            .as_str(),
+    )
+    .into();
+    // Empty (or too short) keeps the stored key, like the password fields.
+    let espnow_key = query_param(full_path, "espnow_key").unwrap_or_default();
+    let espnow_key = espnow_key.trim();
+    if espnow_key.len() >= app_config::ESPNOW_KEY_MIN_LEN && !espnow_key.contains(' ') {
+        next.espnow_key = espnow_key.into();
+    }
+    next.espnow_name = query_param(full_path, "espnow_name")
+        .unwrap_or_else(|| current.espnow_name.clone())
+        .trim()
+        .into();
     next
 }
 
@@ -747,7 +764,20 @@ where
             .await?;
     }
 
-    conn.write_all(b"</div><section class='card panel'><h3>Backend</h3><label>API URL<input name='api_url' value='").await?;
+    conn.write_all(b"</div><section class='card panel'><h3>Transport</h3><label>Send readings via<select name='transport'><option value='wifi'").await?;
+    if !cfg.uses_espnow() {
+        conn.write_all(b" selected").await?;
+    }
+    conn.write_all(b">WiFi (backend + MQTT)</option><option value='espnow'").await?;
+    if cfg.uses_espnow() {
+        conn.write_all(b" selected").await?;
+    }
+    let espnow_key_placeholder = if cfg.espnow_key.is_empty() { "min 8 characters" } else { "(unchanged)" };
+    conn.write_all(b">ESP-NOW (via gateway)</option></select></label><label>ESP-NOW key<input type='password' name='espnow_key' value='' autocomplete='off' placeholder='").await?;
+    conn.write_all(espnow_key_placeholder.as_bytes()).await?;
+    conn.write_all(b"'></label><label>ESP-NOW name (Home Assistant)<input name='espnow_name' maxlength='24' value='").await?;
+    conn.write_all(html_escape(&cfg.espnow_name).as_bytes()).await?;
+    conn.write_all(b"' placeholder='e.g. Elutuba'></label><small>ESP-NOW: no WiFi connection is made; readings go to the ESP-NOW gateway, which forwards them to Home Assistant over MQTT. The key must match the gateway's ESPNOW_KEY. WiFi slots, backend and MQTT settings below are only used in WiFi mode. Press the button to get back to this portal.</small></section><section class='card panel'><h3>Backend</h3><label>API URL<input name='api_url' value='").await?;
     conn.write_all(html_escape(&cfg.api_url).as_bytes()).await?;
     conn.write_all(b"'></label><label>API key<input name='api_key' value='").await?;
     conn.write_all(html_escape(&cfg.api_key).as_bytes()).await?;

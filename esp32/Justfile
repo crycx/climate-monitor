@@ -8,6 +8,9 @@ build-c3:
 build-c6:
     cd c6 && cargo build --release --target riscv32imac-unknown-none-elf
 
+build-sensor:
+    cd xiao-c6-sensor && cargo build --release --target riscv32imac-unknown-none-elf
+
 # Check commands (fast iteration)
 check-wroom:
     cd wroom && cargo check --target xtensa-esp32-none-elf
@@ -17,6 +20,9 @@ check-c3:
 
 check-c6:
     cd c6 && cargo check --target riscv32imac-unknown-none-elf
+
+check-sensor:
+    cd xiao-c6-sensor && cargo check --target riscv32imac-unknown-none-elf
 
 # Run/flash (runner is set in .cargo/config.toml)
 run-wroom:
@@ -28,6 +34,9 @@ run-c3:
 run-c6:
     cd c6 && cargo run --release --target riscv32imac-unknown-none-elf
 
+run-sensor:
+    cd xiao-c6-sensor && cargo run --release --target riscv32imac-unknown-none-elf
+
 # Clean
 clean-wroom:
     cd wroom && cargo clean
@@ -38,6 +47,9 @@ clean-c3:
 clean-c6:
     cd c6 && cargo clean
 
+clean-sensor:
+    cd xiao-c6-sensor && cargo clean
+
 # Combined
-check-all: check-wroom check-c3 check-c6
-build-all: build-wroom build-c3 build-c6
+check-all: check-wroom check-c3 check-c6 check-sensor
+build-all: build-wroom build-c3 build-c6 build-sensor
