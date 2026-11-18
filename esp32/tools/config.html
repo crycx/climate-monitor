@@ -221,6 +221,9 @@ function handleLine(line) {
     if (pending) { const p = pending; pending = null; p(line); }
     return;
   }
+  // A gateway reading logged after "show": add the sensor to the "heard" list live.
+  const heard = line.match(/^ESP-NOW ([0-9a-f]{12}) '([^']*)':/);
+  if (heard) { noteHeard(heard[1], heard[2].trim()); return; }
   // The XIAO battery sensor answers "show" with unprefixed lines like key_set=yes.
   if (/^key_set=(yes|no)$/.test(line)) xiao = true;
   const m = line.match(/^(cfg|secret|info)\.([a-z0-9_]+)=(.*)$/);
@@ -281,6 +284,18 @@ function renderSeen() {
     };
     box.appendChild(b);
   }
+}
+// Updates or adds a seen_N entry, without re-rendering (and losing) typed inputs.
+function noteHeard(mac, name) {
+  if (!Object.keys(cfg).length) return;
+  const keys = Object.keys(info).filter(k => k.startsWith("seen_"));
+  const existing = keys.find(k => info[k].split(",")[0] === mac);
+  let mode = existing ? info[existing].split(",")[3] : "mqtt-only";
+  for (let i = 1; i <= 8; i++) {
+    if (cfg["espnow_sensor_mac_" + i] === mac && secrets["espnow_sensor_api_key_" + i] === "yes") mode = "backend";
+  }
+  info[existing || "seen_" + (keys.length + 1)] = [mac, name, 0, mode].join(",");
+  renderSeen();
 }
 // Which device and mode is connected, from the fields its console reports:
 // the C3 has `transport`, the C6 gateway has sensor slots but no transport.

@@ -600,6 +600,19 @@ async fn publish(stack: Stack<'static>, s: &MqttSettings, item: &RemoteReading, 
             true,
         ))
         .await;
+        // No expire_after: "Last seen" should keep showing when it last reported.
+        let payload = crate::last_seen_discovery(
+            format!("{}_{}_last_seen", s.base_topic, device_id).as_str(),
+            topic("last_seen").as_str(),
+            device_block.as_str(),
+        );
+        let _ = with_io_timeout(crate::mqtt_publish(
+            &mut socket,
+            format!("{}/sensor/{}_last_seen/config", crate::HA_DISCOVERY_PREFIX, device_id).as_str(),
+            payload.as_bytes(),
+            true,
+        ))
+        .await;
     }
 
     let mut values: [(&str, Option<String>); 6] = [
@@ -630,6 +643,8 @@ async fn publish(stack: Stack<'static>, s: &MqttSettings, item: &RemoteReading, 
             .await;
         }
     }
+    // Not retained: HA stamps "Last seen" with the arrival time (see last_seen_discovery).
+    let _ = with_io_timeout(crate::mqtt_publish(&mut socket, topic("last_seen").as_str(), b"1", false)).await;
 
     let _ = with_io_timeout(crate::mqtt_disconnect(&mut socket)).await;
     socket.close();

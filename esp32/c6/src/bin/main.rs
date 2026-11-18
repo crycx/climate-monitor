@@ -2306,6 +2306,22 @@ async fn post_readings(
 #[cfg(feature = "wifi")]
 const HA_DISCOVERY_PREFIX: &str = "homeassistant";
 
+/// Discovery payload for a "Last seen" timestamp entity. HA does not record
+/// repeated identical values (last_reported stays at last_changed), so the
+/// state is rendered by HA from the arrival time of each message. Publish to
+/// `state_topic` on every report, NOT retained: a retained message would be
+/// replayed on HA restart and show the restart time.
+#[cfg(feature = "wifi")]
+fn last_seen_discovery(unique_id: &str, state_topic: &str, device_block: &str) -> String {
+    format!(
+        r#"{{"name":"Last seen","unique_id":"{}","state_topic":"{}","device_class":"timestamp","value_template":"{}","entity_category":"diagnostic","device":{}}}"#,
+        json_escape(unique_id),
+        json_escape(state_topic),
+        "{{ now().isoformat() }}",
+        device_block,
+    )
+}
+
 #[cfg(feature = "wifi")]
 const MQTT_DNS_TIMEOUT_SECS: u64 = 5;
 #[cfg(feature = "wifi")]
@@ -2539,6 +2555,22 @@ async fn mqtt_publish_with_discovery(
         ),
     )
     .await;
+    let last_seen_topic = format!("{}/{}/last_seen", base_topic, device_id);
+    let last_seen_payload = last_seen_discovery(
+        format!("{}_{}_last_seen", base_topic, device_id).as_str(),
+        last_seen_topic.as_str(),
+        device_block.as_str(),
+    );
+    let _ = embassy_time::with_timeout(
+        Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+        mqtt_publish(
+            &mut socket,
+            format!("{}/sensor/{}_last_seen/config", HA_DISCOVERY_PREFIX, device_id).as_str(),
+            last_seen_payload.as_bytes(),
+            true,
+        ),
+    )
+    .await;
 
     // Availability + readings (retain to keep last values)
     let _ = embassy_time::with_timeout(
@@ -2556,6 +2588,12 @@ async fn mqtt_publish_with_discovery(
     let _ = embassy_time::with_timeout(
         Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
         mqtt_publish(&mut socket, hum_topic.as_str(), hum_payload.as_bytes(), true),
+    )
+    .await;
+    // Not retained: HA stamps "Last seen" with the arrival time (see last_seen_discovery).
+    let _ = embassy_time::with_timeout(
+        Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+        mqtt_publish(&mut socket, last_seen_topic.as_str(), b"1", false),
     )
     .await;
 
