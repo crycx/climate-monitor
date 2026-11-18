@@ -24,6 +24,7 @@ XIAO ESP32C6 (battery)                     ESP32-C6 Super Mini (USB power)
 | D2 | GPIO2 | DHT22 **DATA** |
 | GND | — | DHT22 GND |
 | D0 / A0 | GPIO0 | Battery divider midpoint (optional, see below) |
+| D1 | GPIO1 | USB power sense for `usb_wake` (optional, see below) |
 | BAT+ / BAT− pads (bottom) | — | LiPo cell with protection circuit |
 
 - If you use a bare DHT22, put the 10 kΩ pull-up between DATA and **D3**
@@ -47,6 +48,7 @@ XIAO ESP32C6 (battery)                     ESP32-C6 Super Mini (USB power)
 | DHT22 warm-up | 1500 ms | Settle time after powering the DHT22 |
 | Battery / divider | on / 2.0 | Battery measurement on D0 |
 | Antenna | internal | `external` selects U.FL |
+| USB wake | off | Wake from deep sleep when USB is plugged in (needs the D1 divider) |
 
 Settings are stored in the `config` flash partition and survive reflashing
 the app. Build-time values from `.cargo/config.toml` (see
@@ -57,7 +59,8 @@ build; give each one its own name.
 
 ### Changing settings
 
-Setup modes start only after **power-on or RESET**: the yellow LED blinks fast
+Setup modes start only after **power-on or RESET** (or plugging in USB with
+`usb_wake on`, see below): the yellow LED blinks fast
 for 3 seconds.
 
 **Over USB (computer):** connect the sensor to a computer and press RESET. It
@@ -116,12 +119,30 @@ channel first.
 
 To reflash a sleeping board, hold **BOOT**, tap **RESET**, release BOOT.
 
+### Wake on USB (optional)
+
+In deep sleep the USB port is off, so plugging in a cable does nothing until
+RESET. To wake on USB, feed the 5V pin to D1 through a divider and turn on
+`usb_wake` (console `set usb_wake on`, config page or portal):
+
+```
+5V pin ──[47 kΩ]──┬──[68 kΩ]── GND
+                  D1 (GPIO1)
+```
+
+On USB D1 sits at ~3 V; on battery the 5V pin is unpowered, so the divider
+draws nothing. The wake is only armed when the sensor goes to sleep without
+USB power, so on a USB charger it keeps its normal cycle. Leave `usb_wake`
+off without the divider: a floating D1 would wake the board at random.
+
 ## Home Assistant entities
 
 Created through MQTT Discovery by the gateway, per sensor:
 
 - Temperature, Humidity
 - Battery (%), Battery voltage (V), Signal strength (dBm), as diagnostics
+- Battery low (binary sensor), on below 3.60 V (~10 %): time to charge.
+  Use it in an HA automation for a notification.
 
 Entities turn unavailable when a sensor misses ~3 reports (`expire_after`).
 

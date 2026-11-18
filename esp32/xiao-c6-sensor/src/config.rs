@@ -7,7 +7,7 @@
 //! ```text
 //! 0..4     magic "CMNC"
 //! 4        version
-//! 5        flags: bit0 external antenna, bit1 battery ADC
+//! 5        flags: bit0 external antenna, bit1 battery ADC, bit2 USB wake
 //! 8..12    interval_secs   u32
 //! 12..16   temp_offset     f32
 //! 16..20   hum_offset      f32
@@ -41,6 +41,7 @@ const RECORD_LEN: usize = 128;
 const CRC_OFFSET: usize = RECORD_LEN - 4;
 const FLAG_EXTERNAL_ANTENNA: u8 = 0x01;
 const FLAG_BATTERY_ADC: u8 = 0x02;
+const FLAG_USB_WAKE: u8 = 0x04;
 
 #[derive(Clone, PartialEq)]
 pub struct NodeConfig {
@@ -53,6 +54,8 @@ pub struct NodeConfig {
     pub dht_warmup_ms: u32,
     pub battery_adc: bool,
     pub battery_divider: f32,
+    /// Wake from deep sleep when USB power appears on D1 (needs the 5V divider).
+    pub usb_wake: bool,
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -79,8 +82,9 @@ impl NodeConfig {
             dht_warmup_ms: 1500,
             battery_adc: true,
             battery_divider: 2.0,
+            usb_wake: false,
         };
-        let env: [(&str, Option<&str>); 9] = [
+        let env: [(&str, Option<&str>); 10] = [
             ("name", option_env!("SENSOR_NAME")),
             ("interval", option_env!("SENSOR_INTERVAL_SECS")),
             ("temp_offset", option_env!("TEMP_OFFSET")),
@@ -90,6 +94,7 @@ impl NodeConfig {
             ("warmup", option_env!("DHT22_WARMUP_MS")),
             ("battery", option_env!("BATTERY_ADC")),
             ("divider", option_env!("BATTERY_DIVIDER")),
+            ("usb_wake", option_env!("USB_WAKE")),
         ];
         for (field, value) in env {
             if let Some(value) = value {
@@ -160,6 +165,9 @@ impl NodeConfig {
             "battery" => {
                 self.battery_adc = parse_bool(value).ok_or_else(|| String::from("battery: on|off"))?;
             }
+            "usb_wake" => {
+                self.usb_wake = parse_bool(value).ok_or_else(|| String::from("usb_wake: on|off"))?;
+            }
             "divider" => {
                 let v: f32 = value.parse().map_err(|_| String::from("divider: number"))?;
                 if !(1.0..=10.0).contains(&v) {
@@ -184,6 +192,7 @@ impl NodeConfig {
             ("warmup", format!("{}", self.dht_warmup_ms)),
             ("battery", String::from(if self.battery_adc { "on" } else { "off" })),
             ("divider", format!("{:.2}", self.battery_divider)),
+            ("usb_wake", String::from(if self.usb_wake { "on" } else { "off" })),
         ]
     }
 
@@ -197,6 +206,9 @@ impl NodeConfig {
         }
         if self.battery_adc {
             flags |= FLAG_BATTERY_ADC;
+        }
+        if self.usb_wake {
+            flags |= FLAG_USB_WAKE;
         }
         out[5] = flags;
         out[8..12].copy_from_slice(&self.interval_secs.to_le_bytes());
@@ -245,6 +257,7 @@ impl NodeConfig {
         }
         cfg.external_antenna = data[5] & FLAG_EXTERNAL_ANTENNA != 0;
         cfg.battery_adc = data[5] & FLAG_BATTERY_ADC != 0;
+        cfg.usb_wake = data[5] & FLAG_USB_WAKE != 0;
         Some(cfg)
     }
 }

@@ -160,6 +160,7 @@ small{{color:#6b7280}}.ok{{color:#15803d}}.err{{color:#b91c1c}}dl{{margin:0}}dt{
 <div class="row"><div><label>DHT22 warm-up (ms)</label><input name="warmup" type="number" min="0" max="5000" value="{warmup}"></div>
 <div><label>Divider ratio</label><input name="divider" type="number" step="0.01" min="1" max="10" value="{divider:.2}"></div></div>
 <label class="check"><input type="checkbox" name="battery" value="on"{battery_checked}> Measure battery on D0</label>
+<label class="check"><input type="checkbox" name="usb_wake" value="on"{usb_wake_checked}> Wake when USB is plugged in (5V divider on D1)</label>
 <button type="submit">Save and restart</button></form>
 <small>The portal closes after 5 minutes without activity.</small></main></body></html>"#,
         mac = mac,
@@ -178,6 +179,7 @@ small{{color:#6b7280}}.ok{{color:#15803d}}.err{{color:#b91c1c}}dl{{margin:0}}dt{
         warmup = cfg.dht_warmup_ms,
         divider = cfg.battery_divider,
         battery_checked = checked(cfg.battery_adc),
+        usb_wake_checked = checked(cfg.usb_wake),
     )
 }
 
@@ -220,6 +222,7 @@ fn apply_form(cfg: &mut NodeConfig, form: &[(String, String)]) -> Vec<String> {
     }
     // Unchecked checkboxes are simply absent from the form.
     cfg.battery_adc = form.iter().any(|(k, _)| k == "battery");
+    cfg.usb_wake = form.iter().any(|(k, _)| k == "usb_wake");
     errors
 }
 

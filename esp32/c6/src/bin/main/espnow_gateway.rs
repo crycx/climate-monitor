@@ -476,6 +476,10 @@ async fn with_io_timeout<F: core::future::Future>(fut: F) -> Option<F::Output> {
         .ok()
 }
 
+/// Below this the "Battery low" binary sensor turns on (about 10 % on the
+/// LiPo curve in `espnow_packet::lipo_percent`): time to charge.
+const LOW_BATTERY_MV: u16 = 3600;
+
 struct EntitySpec {
     key: &'static str,
     name: &'static str,
@@ -576,13 +580,34 @@ async fn publish(stack: Stack<'static>, s: &MqttSettings, item: &RemoteReading, 
             ))
             .await;
         }
+        // Binary "charge me" warning; on = battery low (device_class battery).
+        let config_topic = format!(
+            "{}/binary_sensor/{}_battery_low/config",
+            crate::HA_DISCOVERY_PREFIX, device_id
+        );
+        let payload = format!(
+            r#"{{"name":"Battery low","unique_id":"{}_{}_battery_low","state_topic":"{}","device_class":"battery","payload_on":"ON","payload_off":"OFF"{},"device":{}}}"#,
+            s.base_topic,
+            device_id,
+            crate::json_escape(topic("battery_low").as_str()),
+            expire,
+            device_block,
+        );
+        let _ = with_io_timeout(crate::mqtt_publish(
+            &mut socket,
+            config_topic.as_str(),
+            payload.as_bytes(),
+            true,
+        ))
+        .await;
     }
 
-    let mut values: [(&str, Option<String>); 5] = [
+    let mut values: [(&str, Option<String>); 6] = [
         ("temperature", None),
         ("humidity", None),
         ("battery", None),
         ("battery_voltage", None),
+        ("battery_low", None),
         ("rssi", Some(format!("{}", item.rssi))),
     ];
     if r.sensor_ok() {
@@ -592,6 +617,7 @@ async fn publish(stack: Stack<'static>, s: &MqttSettings, item: &RemoteReading, 
     if r.battery_mv > 0 {
         values[2].1 = Some(format!("{}", espnow_packet::lipo_percent(r.battery_mv)));
         values[3].1 = Some(format!("{:.2}", r.battery_mv as f32 / 1000.0));
+        values[4].1 = Some(String::from(if r.battery_mv < LOW_BATTERY_MV { "ON" } else { "OFF" }));
     }
     for (key, value) in values.iter() {
         if let Some(value) = value {

@@ -48,12 +48,14 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
       <label for="transport">Send readings via</label>
       <select id="transport" data-field="transport">
         <option value="wifi">WiFi (backend + MQTT)</option>
+        <option value="gateway">WiFi + ESP-NOW gateway</option>
         <option value="espnow">ESP-NOW (via gateway)</option>
       </select>
       <div id="espnow-fields">
         <label for="espnow_key">ESP-NOW key</label>
         <input id="espnow_key" data-secret="espnow_key" type="password" autocomplete="off">
         <small id="espnow_key_hint">Must match the gateway's ESPNOW_KEY.</small>
+        <small>Gateway: same key as on the sensors. Keep deep sleep off, the gateway must stay awake to receive.</small>
         <label for="espnow_name">Name in Home Assistant</label>
         <input id="espnow_name" data-field="espnow_name" maxlength="24" placeholder="empty = WiFi slot 1 location">
       </div>
@@ -103,7 +105,7 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
       <label for="api_key">API key</label><input id="api_key" data-secret="api_key" type="password" autocomplete="off">
     </section>
 
-    <section class="card" data-needs="espnow_sensor_mac_1" hidden>
+    <section class="card" id="espnow-sensors" data-needs="espnow_sensor_mac_1" hidden>
       <h2>ESP-NOW sensors &rarr; backend</h2>
       <small>Gateway only. Register each sensor as a device in the web app and paste its API key next to the sensor's MAC. Sensors without a key only go to MQTT.</small>
       <div id="seen"></div>
@@ -219,8 +221,11 @@ function renderSeen() {
 }
 function updateTransport() {
   const espnow = "transport" in cfg && $("transport").value === "espnow";
-  $("espnow-fields").classList.toggle("dim", !espnow);
+  const gateway = "transport" in cfg && $("transport").value === "gateway";
+  $("espnow-fields").classList.toggle("dim", !espnow && !gateway);
   document.querySelectorAll(".wifi-only").forEach(el => el.classList.toggle("dim", espnow));
+  // C6 is always a gateway (no transport field); on the C3 only in gateway mode.
+  $("espnow-sensors").classList.toggle("dim", "transport" in cfg && !gateway);
 }
 $("transport").onchange = updateTransport;
 

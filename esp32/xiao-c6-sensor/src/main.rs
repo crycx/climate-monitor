@@ -7,13 +7,14 @@
 //!    (unicast to the remembered gateway, or a channel search on failure)
 //! 4. deep sleep
 //!
-//! Setup, only on a cold boot (power-on / RESET), during a 3 s window with
-//! the yellow LED blinking:
+//! Setup, only on a cold boot (power-on / RESET) or a USB wake (`usb_wake`),
+//! during a 3 s window with the yellow LED blinking:
 //! - attached to a computer over USB → USB console (`console.rs`)
 //! - BOOT pressed → WiFi setup portal (`portal.rs`)
 //!
 //! Pins (XIAO label / GPIO):
 //! - D0 / GPIO0  battery divider (2 x 1 MOhm from BAT+, 100 nF to GND)
+//! - D1 / GPIO1  USB power sense for `usb_wake` (5V -> 47k -> D1 -> 68k -> GND)
 //! - D2 / GPIO2  DHT22 DATA
 //! - D3 / GPIO21 DHT22 VCC (switched)
 //! - GPIO3       RF switch enable (low = on), on-board
@@ -35,7 +36,8 @@ use esp_hal::{
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     interrupt::software::SoftwareInterruptControl,
     peripherals::{GPIO9, LPWR},
-    rtc_cntl::{Rtc, SocResetReason, sleep::TimerWakeupSource},
+    rtc_cntl::{Rtc, SocResetReason, sleep::TimerWakeupSource, wakeup_cause},
+    system::SleepSource,
     timer::timg::TimerGroup,
 };
 use esp_storage::FlashStorage;
@@ -138,8 +140,14 @@ async fn main(spawner: Spawner) {
     let mut sensors = hw::Sensors::new(peripherals.GPIO21, peripherals.GPIO2, peripherals.ADC1, peripherals.GPIO0);
     let rf = hw::rf_switch(peripherals.GPIO3, peripherals.GPIO14, cfg.external_antenna);
 
-    // Setup modes are only offered after power-on / RESET, never on a timer wake.
-    if esp_hal::system::reset_reason() != Some(SocResetReason::CoreDeepSleep) {
+    // Setup modes are offered after power-on / RESET and when plugging in USB
+    // woke the board (D1, `usb_wake`), never on a timer wake.
+    let cold_boot = esp_hal::system::reset_reason() != Some(SocResetReason::CoreDeepSleep);
+    let usb_wake = !cold_boot && matches!(wakeup_cause(), SleepSource::Ext1);
+    if cold_boot || usb_wake {
+        if usb_wake {
+            log_line!("Boot: woken by USB power on D1");
+        }
         let mut led = Output::new(peripherals.GPIO15, Level::High, OutputConfig::default());
         log_line!(
             "Boot: settings from {}; press BOOT within 3 s for the WiFi portal",
@@ -164,5 +172,5 @@ async fn main(spawner: Spawner) {
         awake_since.elapsed().as_millis(),
         cfg.interval_secs
     );
-    hw::deep_sleep(peripherals.LPWR, cfg.interval_secs as u64);
+    hw::deep_sleep(peripherals.LPWR, cfg.interval_secs as u64, cfg.usb_wake);
 }

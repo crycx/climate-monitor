@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::{string::String, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 use core::fmt;
 use core::ops::Range;
 
@@ -80,8 +80,32 @@ const ESPNOW_NAME_KEY: u64 = fnv1a_hash(b"espnow_name");
 /// `AppConfig::transport` values.
 pub const TRANSPORT_WIFI: &str = "wifi";
 pub const TRANSPORT_ESPNOW: &str = "espnow";
+/// WiFi mode plus receiving ESP-NOW sensors and forwarding them (MQTT/backend).
+pub const TRANSPORT_GATEWAY: &str = "gateway";
 /// Shorter keys are rejected; must match the gateway's ESPNOW_KEY.
 pub const ESPNOW_KEY_MIN_LEN: usize = 8;
+
+/// ESP-NOW sensors the gateway forwards to the backend, each with its own
+/// backend device API key (sensor MAC -> API key).
+pub const ESPNOW_SENSOR_SLOTS: usize = 8;
+
+fn espnow_sensor_mac_key(index: usize) -> u64 {
+    fnv1a_hash(format!("espnow_sensor_mac_{}", index + 1).as_bytes())
+}
+
+fn espnow_sensor_api_key_key(index: usize) -> u64 {
+    fnv1a_hash(format!("espnow_sensor_api_key_{}", index + 1).as_bytes())
+}
+
+/// Accepts "ac:a7:04:bb:5b:9c", "AC-A7-...", or "aca704bb5b9c"; returns 12 lowercase hex digits.
+pub fn normalize_mac(input: &str) -> Option<String> {
+    let hex: String = input
+        .chars()
+        .filter(|c| !matches!(c, ':' | '-' | ' '))
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    (hex.len() == 12 && hex.chars().all(|c| c.is_ascii_hexdigit())).then_some(hex)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -122,17 +146,35 @@ pub struct AppConfig {
     pub mqtt_enabled_3: bool,
     pub mqtt_enabled_4: bool,
     pub mqtt_enabled_5: bool,
-    /// "wifi" (backend + MQTT over WiFi) or "espnow" (send to the ESP-NOW gateway).
+    /// "wifi" (backend + MQTT over WiFi), "espnow" (send to the ESP-NOW gateway)
+    /// or "gateway" (WiFi mode that also receives and forwards ESP-NOW sensors).
     pub transport: String,
     /// Shared secret with the ESP-NOW gateway.
     pub espnow_key: String,
     /// Name shown in Home Assistant for ESP-NOW mode; falls back to WiFi slot 1 location.
     pub espnow_name: String,
+    /// Gateway: normalized sensor MACs (see `normalize_mac`), "" = unused slot.
+    pub espnow_sensor_mac: [String; ESPNOW_SENSOR_SLOTS],
+    /// Gateway: backend API key for the sensor in the same slot.
+    pub espnow_sensor_api_key: [String; ESPNOW_SENSOR_SLOTS],
 }
 
 impl AppConfig {
     pub fn uses_espnow(&self) -> bool {
         self.transport == TRANSPORT_ESPNOW
+    }
+
+    pub fn is_gateway(&self) -> bool {
+        self.transport == TRANSPORT_GATEWAY
+    }
+
+    /// Gateway: backend API key registered for this ESP-NOW sensor, if any.
+    pub fn espnow_backend_api_key(&self, mac_hex: &str) -> Option<&str> {
+        self.espnow_sensor_mac
+            .iter()
+            .zip(self.espnow_sensor_api_key.iter())
+            .find(|(mac, key)| mac.as_str() == mac_hex && !key.is_empty())
+            .map(|(_, key)| key.as_str())
     }
 
     pub fn espnow_display_name(&self) -> &str {
@@ -142,7 +184,14 @@ impl AppConfig {
 }
 
 pub fn normalize_transport(value: &str) -> &'static str {
-    if value.trim().eq_ignore_ascii_case(TRANSPORT_ESPNOW) { TRANSPORT_ESPNOW } else { TRANSPORT_WIFI }
+    let value = value.trim();
+    if value.eq_ignore_ascii_case(TRANSPORT_ESPNOW) {
+        TRANSPORT_ESPNOW
+    } else if value.eq_ignore_ascii_case(TRANSPORT_GATEWAY) {
+        TRANSPORT_GATEWAY
+    } else {
+        TRANSPORT_WIFI
+    }
 }
 
 impl Default for AppConfig {
@@ -217,6 +266,8 @@ impl Default for AppConfig {
             transport: normalize_transport(option_env!("TRANSPORT").unwrap_or(TRANSPORT_WIFI)).into(),
             espnow_key: option_env!("ESPNOW_KEY").unwrap_or("").trim().into(),
             espnow_name: option_env!("ESPNOW_NAME").unwrap_or("").into(),
+            espnow_sensor_mac: core::array::from_fn(|_| String::new()),
+            espnow_sensor_api_key: core::array::from_fn(|_| String::new()),
         }
     }
 }
@@ -390,6 +441,14 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(ESPNOW_NAME_KEY).await? {
             cfg.espnow_name = value;
         }
+        for i in 0..ESPNOW_SENSOR_SLOTS {
+            if let Some(value) = self.get_string(espnow_sensor_mac_key(i)).await? {
+                cfg.espnow_sensor_mac[i] = normalize_mac(&value).unwrap_or_default();
+            }
+            if let Some(value) = self.get_string(espnow_sensor_api_key_key(i)).await? {
+                cfg.espnow_sensor_api_key[i] = value;
+            }
+        }
 
         // Backwards compatible default:
         // - If per-slot flag is missing, fall back to legacy global flag.
@@ -497,6 +556,10 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_string(TRANSPORT_KEY, &cfg.transport).await?;
         self.set_string(ESPNOW_KEY_KEY, &cfg.espnow_key).await?;
         self.set_string(ESPNOW_NAME_KEY, &cfg.espnow_name).await?;
+        for i in 0..ESPNOW_SENSOR_SLOTS {
+            self.set_string(espnow_sensor_mac_key(i), &cfg.espnow_sensor_mac[i]).await?;
+            self.set_string(espnow_sensor_api_key_key(i), &cfg.espnow_sensor_api_key[i]).await?;
+        }
         self.set_u32(MQTT_ENABLED_1_KEY, if cfg.mqtt_enabled_1 { 1 } else { 0 })
             .await?;
         self.set_u32(MQTT_ENABLED_2_KEY, if cfg.mqtt_enabled_2 { 1 } else { 0 })

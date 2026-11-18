@@ -147,6 +147,9 @@ sensors find that channel automatically.
 
 The OLED rotates every 5 s between the gateway's own reading and one page per
 sensor heard recently (name, battery %, temperature/humidity, age and RSSI).
+
+Per sensor, Home Assistant also gets a **Battery low** binary sensor that turns
+on below 3.60 V (~10 %), for a "charge me" notification.
 A newly received reading jumps straight to that sensor's page for 10 s. A
 sensor's page disappears after it misses ~3 reports.
 

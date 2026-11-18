@@ -146,15 +146,33 @@ cargo run --release
 
 DHT22 readings are printed to the serial monitor every 2 seconds.
 
-## Transport: WiFi or ESP-NOW
+## Transport: WiFi, ESP-NOW or gateway
 
-The same firmware can send readings two ways, chosen with the **transport**
-setting (portal, USB console, or `TRANSPORT = "espnow"` as build default):
+The same firmware has three modes, chosen with the **transport** setting
+(portal, USB console, or `TRANSPORT = "espnow"` / `"gateway"` as build default):
 
 | Transport | Path | Notes |
 |---|---|---|
 | `wifi` (default) | WiFi → backend (HTTPS) + MQTT | as before |
-| `espnow` | ESP-NOW → gateway (`esp32/c6`) → MQTT → Home Assistant | no WiFi association; needs `espnow_key` equal to the gateway's `ESPNOW_KEY` |
+| `espnow` | ESP-NOW → gateway (`esp32/c6` or a C3 in `gateway` mode) → MQTT → Home Assistant | no WiFi association; needs `espnow_key` equal to the gateway's key |
+| `gateway` | like `wifi`, and also receives ESP-NOW sensors and forwards them to MQTT and, per sensor, to the backend | needs `espnow_key` (same as the sensors); keep `deep_sleep off` |
+
+### Gateway mode
+
+Works like the `esp32/c6` gateway (see its README), without the OLED sensor
+pages. Differences: the key is the runtime `espnow_key` setting, not a build
+variable, and the sensor → backend mapping (`espnow_sensor_mac_N`,
+`espnow_sensor_api_key_N`) is only shown in the portal in gateway mode.
+Changing transport or key restarts the board. Boot log shows
+`ESP-NOW: gateway listening, MAC ...`.
+
+```
+set transport gateway
+set espnow_key my-shared-secret
+set deep_sleep off
+set power_source power_bank
+save
+```
 
 In ESP-NOW mode the device shows up in Home Assistant as
 "Climate Sensor (<espnow_name>)" (falls back to WiFi slot 1 location). With

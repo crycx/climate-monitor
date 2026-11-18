@@ -20,7 +20,8 @@ use embassy_time::{Duration, Instant, Timer};
 use esp_hal::{Blocking, peripherals::USB_DEVICE, usb_serial_jtag::UsbSerialJtag};
 use esp_println::{print, println};
 
-use crate::app_config::{self, AppConfig, FlashConfigStorage};
+use crate::app_config::{self, AppConfig, ESPNOW_SENSOR_SLOTS, FlashConfigStorage};
+use crate::espnow_gateway;
 
 const MAX_LINE: usize = 200;
 const POLL_MS: u64 = 20;
@@ -35,14 +36,17 @@ Commands:
   discard                  drop unsaved changes
   reboot                   restart without saving
 Fields:
-  transport wifi|espnow    espnow_key <secret>   espnow_name <text>
+  transport wifi|espnow|gateway    espnow_key <secret>   espnow_name <text>
   interval <5..3600 s>     temp_offset <C>       hum_offset <%>
   deep_sleep on|off        power_source battery|power_bank
   oled_orientation landscape|portrait
   wifi_ssid[_2.._5] <ssid> wifi_password[_2.._5] <pw> wifi_location[_2.._5] <text>
   mqtt_enabled[_2.._5] on|off
   mqtt_host  mqtt_port  mqtt_username  mqtt_password  mqtt_base_topic  mqtt_device_id
-  api_url  api_key";
+  api_url  api_key
+Gateway only (transport gateway):
+  espnow_sensor_mac_<1..8> <mac>        ESP-NOW sensor to forward to the backend
+  espnow_sensor_api_key_<1..8> <key>    that sensor's backend device API key";
 
 /// Settable fields, in `show` order.
 const FIELDS: &[&str] = &[
@@ -65,6 +69,12 @@ enum Field<'a> {
 
 fn field<'a>(cfg: &'a mut AppConfig, name: &str) -> Option<Field<'a>> {
     use Field::*;
+    if let Some(slot) = espnow_slot(name, "espnow_sensor_mac_") {
+        return Some(Text(&mut cfg.espnow_sensor_mac[slot]));
+    }
+    if let Some(slot) = espnow_slot(name, "espnow_sensor_api_key_") {
+        return Some(Secret(&mut cfg.espnow_sensor_api_key[slot]));
+    }
     Some(match name {
         "transport" => Text(&mut cfg.transport),
         "espnow_key" => Secret(&mut cfg.espnow_key),
@@ -107,6 +117,12 @@ fn field<'a>(cfg: &'a mut AppConfig, name: &str) -> Option<Field<'a>> {
     })
 }
 
+/// "espnow_sensor_mac_3" -> Some(2) for prefix "espnow_sensor_mac_".
+fn espnow_slot(name: &str, prefix: &str) -> Option<usize> {
+    let n: usize = name.strip_prefix(prefix)?.parse().ok()?;
+    (1..=ESPNOW_SENSOR_SLOTS).contains(&n).then(|| n - 1)
+}
+
 fn parse_flag(value: &str) -> Result<bool, String> {
     match value.to_ascii_lowercase().as_str() {
         "on" | "1" | "yes" | "true" => Ok(true),
@@ -118,10 +134,21 @@ fn parse_flag(value: &str) -> Result<bool, String> {
 /// Field-specific checks, mirroring what the portal accepts.
 fn validate(name: &str, value: &str) -> Result<String, String> {
     let value = value.trim();
+    if name.starts_with("espnow_sensor_mac_") {
+        if value.is_empty() {
+            return Ok(String::new());
+        }
+        return app_config::normalize_mac(value).ok_or_else(|| "expected a MAC like ac:a7:04:bb:5b:9c".into());
+    }
+    if name.starts_with("espnow_sensor_api_key_") && !value.is_empty() && value.len() != 64 {
+        return Err("backend API keys are 64 characters".into());
+    }
     match name {
         "transport" => match value {
-            app_config::TRANSPORT_WIFI | app_config::TRANSPORT_ESPNOW => Ok(value.into()),
-            _ => Err("expected wifi or espnow".into()),
+            app_config::TRANSPORT_WIFI | app_config::TRANSPORT_ESPNOW | app_config::TRANSPORT_GATEWAY => {
+                Ok(value.into())
+            }
+            _ => Err("expected wifi, espnow or gateway".into()),
         },
         "espnow_key" => {
             if value.len() < app_config::ESPNOW_KEY_MIN_LEN || value.len() > 64 || value.contains(' ') {
@@ -171,7 +198,12 @@ fn set(cfg: &mut AppConfig, name: &str, value: &str) -> Result<(), String> {
 
 fn show(pending: &AppConfig, saved: &AppConfig) {
     let mut cfg = pending.clone();
-    for name in FIELDS {
+    let mut names: Vec<String> = FIELDS.iter().map(|n| String::from(*n)).collect();
+    for i in 1..=ESPNOW_SENSOR_SLOTS {
+        names.push(format!("espnow_sensor_mac_{}", i));
+        names.push(format!("espnow_sensor_api_key_{}", i));
+    }
+    for name in names.iter().map(String::as_str) {
         match field(&mut cfg, name) {
             Some(Field::Text(text)) => println!("cfg.{}={}", name, text),
             Some(Field::Flag(flag)) => println!("cfg.{}={}", name, if *flag { "on" } else { "off" }),
@@ -183,6 +215,12 @@ fn show(pending: &AppConfig, saved: &AppConfig) {
     }
     println!("info.unsaved={}", if pending != saved { "yes" } else { "no" });
     println!("info.running_transport={}", saved.transport);
+    // Gateway: sensors heard since boot, to copy MACs from: "mac,name,seconds ago".
+    for (i, (mac, name, age)) in espnow_gateway::seen_sensors().iter().enumerate() {
+        let mac = espnow_gateway::mac_hex(mac);
+        let mapped = saved.espnow_backend_api_key(&mac).is_some();
+        println!("info.seen_{}={},{},{},{}", i + 1, mac, name, age, if mapped { "backend" } else { "mqtt-only" });
+    }
 }
 
 /// True while a computer (not a charger) is attached: the USB host sends a

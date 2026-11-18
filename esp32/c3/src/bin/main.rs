@@ -108,6 +108,9 @@ mod espnow_packet;
 #[path = "main/espnow_node.rs"]
 mod espnow_node;
 #[cfg(feature = "wifi")]
+#[path = "main/espnow_gateway.rs"]
+mod espnow_gateway;
+#[cfg(feature = "wifi")]
 #[path = "main/usb_console.rs"]
 mod usb_console;
 
@@ -143,6 +146,9 @@ static WIFI_CONNECTING: AtomicBool = AtomicBool::new(false);
 static LAST_SENT_SECS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "wifi")]
 static BUTTON_EVENT: AtomicU8 = AtomicU8::new(BUTTON_EVENT_NONE);
+/// WiFi slot in use (1..5), read by the ESP-NOW gateway for per-slot MQTT.
+#[cfg(feature = "wifi")]
+static ACTIVE_WIFI_SLOT: AtomicUsize = AtomicUsize::new(1);
 
 // Retained across deep-sleep resets: remaining seconds until the next full measurement cycle.
 #[cfg(feature = "wifi")]
@@ -1422,6 +1428,33 @@ async fn main(spawner: Spawner) {
 
     let stack: &'static Stack<'static> = NET_STACK.init(wifi_stacks.sta);
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
+
+    // ESP-NOW gateway (transport = gateway). Changing transport or key in the
+    // portal restarts the board, see `gateway_key_at_boot` in the main loop.
+    let gateway_key_at_boot = {
+        let cfg = config_handle.lock().await;
+        if cfg.is_gateway() {
+            let key = espnow_gateway::key_from_config(&cfg);
+            if key.is_some() && cfg.deep_sleep_enabled {
+                log_runtime_line(
+                    "ESP-NOW: WARNING deep sleep is enabled; sensor packets are missed while the gateway sleeps.",
+                );
+            }
+            key
+        } else {
+            None
+        }
+    };
+    match gateway_key_at_boot.clone() {
+        Some(key) => {
+            spawner.spawn(espnow_gateway::rx_task(wifi_stacks.esp_now, wifi_stacks.sta_mac, key)).unwrap();
+            spawner.spawn(espnow_gateway::forward_task(stack, tcp_state, config_handle)).unwrap();
+        }
+        None if config_handle.lock().await.is_gateway() => {
+            log_runtime_line("ESP-NOW: gateway disabled, set an ESP-NOW key (min 8 chars) to enable.");
+        }
+        None => {}
+    }
     let mut portal_mode = PortalMode::Off;
     let mut deep_sleep_blocked_by_manual_mode = boot_button_held;
     let mut active_wifi_location = String::new();
@@ -1588,6 +1621,7 @@ async fn main(spawner: Spawner) {
     let mut next_oled_refresh_at = Instant::now();
     let mut last_oled_data_sent = false;
     loop {
+        ACTIVE_WIFI_SLOT.store(active_wifi_slot, Ordering::Relaxed);
         let config_save_changed = embassy_time::with_timeout(
             Duration::from_millis(MAIN_LOOP_TICK_MS),
             config_rx.receive(),
@@ -1733,6 +1767,15 @@ async fn main(spawner: Spawner) {
         if let Some(changed) = config_save_changed {
             if config_handle.lock().await.uses_espnow() {
                 log_runtime_line("Config saved: transport is ESP-NOW, restarting in 2 s...");
+                Timer::after(Duration::from_secs(SAVE_AP_CLOSE_DELAY_SECS)).await;
+                esp_hal::system::software_reset();
+            }
+            let gateway_key_now = {
+                let cfg = config_handle.lock().await;
+                cfg.is_gateway().then(|| espnow_gateway::key_from_config(&cfg)).flatten()
+            };
+            if gateway_key_now != gateway_key_at_boot {
+                log_runtime_line("Config saved: ESP-NOW gateway settings changed, restarting in 2 s...");
                 Timer::after(Duration::from_secs(SAVE_AP_CLOSE_DELAY_SECS)).await;
                 esp_hal::system::software_reset();
             }

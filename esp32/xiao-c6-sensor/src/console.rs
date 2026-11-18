@@ -32,6 +32,7 @@ Commands:
       warmup <ms>         DHT22 settle time, 0..5000
       battery on|off      battery measurement on D0
       divider <ratio>     battery divider ratio, default 2.0
+      usb_wake on|off     wake when USB is plugged in (needs 5V divider on D1)
   save                    store settings in flash
   defaults                erase saved settings (build defaults after reboot)
   test                    measure and send now
@@ -180,7 +181,7 @@ pub async fn run(
         } else if last_sof_change.elapsed() > Duration::from_millis(HOST_GONE_MS) {
             // On battery now: continue the normal cycle.
             console.state.store();
-            hw::deep_sleep(lpwr, console.cfg.interval_secs as u64);
+            hw::deep_sleep(lpwr, console.cfg.interval_secs as u64, console.cfg.usb_wake);
         }
 
         while let Ok(byte) = usb.read_byte() {

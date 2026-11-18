@@ -9,10 +9,13 @@ use esp_hal::{
     Blocking,
     analog::adc::{Adc, AdcCalCurve, AdcConfig, AdcPin, Attenuation},
     delay::Delay,
-    gpio::{DriveMode, Flex, Level, Output, OutputConfig, Pull},
-    peripherals::{ADC1, GPIO0, GPIO2, GPIO3, GPIO14, GPIO21, LPWR, USB_DEVICE, WIFI},
+    gpio::{DriveMode, Flex, Input, InputConfig, Level, Output, OutputConfig, Pull, RtcPinWithResistors},
+    peripherals::{ADC1, GPIO0, GPIO1, GPIO2, GPIO3, GPIO14, GPIO21, LPWR, USB_DEVICE, WIFI},
     rng::Rng,
-    rtc_cntl::{Rtc, sleep::TimerWakeupSource},
+    rtc_cntl::{
+        Rtc,
+        sleep::{Ext1WakeupSource, TimerWakeupSource, WakeupLevel},
+    },
 };
 use esp_radio::esp_now::{BROADCAST_ADDRESS, EspNow, EspNowWifiInterface, PeerInfo};
 use esp_radio::wifi::WifiController;
@@ -373,7 +376,26 @@ pub fn usb_sof_frame() -> u16 {
     USB_DEVICE::regs().fram_num().read().sof_frame_index().bits()
 }
 
-pub fn deep_sleep(lpwr: LPWR<'static>, secs: u64) -> ! {
+/// D1 / GPIO1 is high while USB power is present (5V -> 47k -> D1 -> 68k -> GND).
+/// No internal pull: it would shift the divider. Only meaningful with the
+/// divider fitted, which is why `usb_wake` is off by default.
+fn usb_power_on_d1(pin: GPIO1<'_>) -> bool {
+    Input::new(pin, InputConfig::default().with_pull(Pull::None)).is_high()
+}
+
+/// Sleeps `secs`, and with `usb_wake` also until USB power appears on D1.
+///
+/// The USB wake is only armed while USB power is absent: on a USB charger D1
+/// stays high, and a level wake would restart the board immediately.
+pub fn deep_sleep(lpwr: LPWR<'static>, secs: u64, usb_wake: bool) -> ! {
     let mut rtc = Rtc::new(lpwr);
-    rtc.sleep_deep(&[&TimerWakeupSource::new(CoreDuration::from_secs(secs))]);
+    let timer = TimerWakeupSource::new(CoreDuration::from_secs(secs));
+    // SAFETY: GPIO1 is used nowhere else; this runs right before deep sleep.
+    let mut vbus = unsafe { GPIO1::steal() };
+    if usb_wake && !usb_power_on_d1(vbus.reborrow()) {
+        let mut pins: [(&mut dyn RtcPinWithResistors, WakeupLevel); 1] = [(&mut vbus, WakeupLevel::High)];
+        let ext1 = Ext1WakeupSource::new(&mut pins);
+        rtc.sleep_deep(&[&timer, &ext1]);
+    }
+    rtc.sleep_deep(&[&timer]);
 }

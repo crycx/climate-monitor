@@ -64,6 +64,7 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
       <div><label for="divider">Divider ratio</label><input id="divider" type="number" step="0.01" min="1" max="10"></div>
     </div>
     <label class="check"><input id="battery" type="checkbox"> Measure battery on D0</label>
+    <label class="check"><input id="usb_wake" type="checkbox"> Wake when USB is plugged in (5V divider on D1)</label>
     <div class="actions">
       <button id="save" type="submit" disabled>Save</button>
       <button id="test" type="button" class="secondary" disabled>Measure &amp; send now</button>
@@ -78,6 +79,7 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
 <script>
 "use strict";
 const FIELDS = ["name", "interval", "temp_offset", "hum_offset", "antenna", "warmup", "divider"];
+const CHECKS = ["battery", "usb_wake"];
 const INFO_KEYS = {mac: "MAC", gateway: "Gateway", channel: "Channel", temperature: "Temperature",
   humidity: "Humidity", battery_mv: "Battery (mV)", delivered: "Last send", unsaved: "Unsaved", warning: "Warning"};
 const $ = id => document.getElementById(id);
@@ -102,13 +104,13 @@ function handleLine(line) {
   const eq = line.indexOf("=");
   if (eq <= 0) return;
   const key = line.slice(0, eq), value = line.slice(eq + 1);
-  if (FIELDS.includes(key) || key === "battery" || key === "key_set") current[key] = value;
+  if (FIELDS.includes(key) || CHECKS.includes(key) || key === "key_set") current[key] = value;
   else if (key in INFO_KEYS) info[key] = value;
 }
 
 function render() {
   for (const f of FIELDS) if (f in current) $(f).value = current[f];
-  if ("battery" in current) $("battery").checked = current.battery === "on";
+  for (const c of CHECKS) if (c in current) $(c).checked = current[c] === "on";
   $("keyhint").textContent = current.key_set === "yes"
     ? "A key is set. Leave empty to keep it."
     : "No key set: the sensor cannot send until you set one.";
@@ -186,8 +188,10 @@ $("form").onsubmit = async ev => {
     const v = $(f).value.trim();
     if (v !== (current[f] ?? "")) changes.push(["set", f, v]);
   }
-  const battery = $("battery").checked ? "on" : "off";
-  if (battery !== current.battery) changes.push(["set", "battery", battery]);
+  for (const c of CHECKS) {
+    const v = $(c).checked ? "on" : "off";
+    if (c in current && v !== current[c]) changes.push(["set", c, v]);
+  }
   if ($("key").value.trim()) changes.push(["set", "key", $("key").value.trim()]);
   let error = null;
   for (const [, f, v] of changes) {

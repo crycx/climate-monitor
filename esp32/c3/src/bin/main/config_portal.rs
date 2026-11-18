@@ -19,7 +19,8 @@ use embassy_time::{Duration, Timer};
 use embedded_io_async::{ErrorType, Read, Write};
 use log::{error, info};
 
-use crate::app_config::{self, AppConfig, FlashConfigStorage};
+use crate::app_config::{self, AppConfig, ESPNOW_SENSOR_SLOTS, FlashConfigStorage};
+use crate::espnow_gateway;
 use crate::wifi_runtime::{self, WifiCommand};
 
 const AP_IP_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
@@ -567,7 +568,64 @@ fn apply_query_to_config(current: &AppConfig, full_path: &str) -> AppConfig {
         .unwrap_or_else(|| current.espnow_name.clone())
         .trim()
         .into();
+    for i in 0..ESPNOW_SENSOR_SLOTS {
+        // The section is only rendered in gateway mode; keep the slot when absent.
+        let Some(mac) = query_param(full_path, format!("espnow_sensor_mac_{}", i + 1).as_str()) else {
+            continue;
+        };
+        let mac = app_config::normalize_mac(&mac).unwrap_or_default();
+        let key = query_param(full_path, format!("espnow_sensor_api_key_{}", i + 1).as_str()).unwrap_or_default();
+        let key = key.trim();
+        next.espnow_sensor_api_key[i] = if mac.is_empty() {
+            String::new()
+        } else if key.len() == 64 {
+            key.into()
+        } else if mac == current.espnow_sensor_mac[i] {
+            // Empty: keep the stored key for the same sensor.
+            current.espnow_sensor_api_key[i].clone()
+        } else {
+            String::new()
+        };
+        next.espnow_sensor_mac[i] = mac;
+    }
     next
+}
+
+/// Table of ESP-NOW sensor -> backend API key slots, plus sensors heard since boot.
+fn render_espnow_sensors(cfg: &AppConfig) -> String {
+    let mut out = String::from(
+        "<section class='card panel'><h3>ESP-NOW sensors &rarr; backend</h3><small>Gateway only. Register each sensor as a device in the web app and paste its API key here. Sensors without a key are only sent to MQTT.</small>",
+    );
+    let seen = espnow_gateway::seen_sensors();
+    if !seen.is_empty() {
+        out.push_str("<p><small>Heard since boot: ");
+        for (n, (mac, name, age)) in seen.iter().enumerate() {
+            if n > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(
+                format!("<b>{}</b> {} ({} s ago)", espnow_gateway::mac_hex(mac), html_escape(name), age).as_str(),
+            );
+        }
+        out.push_str("</small></p>");
+    }
+    for i in 0..ESPNOW_SENSOR_SLOTS {
+        let mac = cfg.espnow_sensor_mac[i].as_str();
+        let placeholder = if cfg.espnow_sensor_api_key[i].is_empty() { "64 characters" } else { "(unchanged)" };
+        out.push_str(
+            format!(
+                "<div class='grid'><label>Sensor {} MAC<input name='espnow_sensor_mac_{}' value='{}' placeholder='aca704bb5b9c'></label><label>API key<input type='password' name='espnow_sensor_api_key_{}' value='' placeholder='{}' autocomplete='off'></label></div>",
+                i + 1,
+                i + 1,
+                html_escape(mac),
+                i + 1,
+                placeholder
+            )
+            .as_str(),
+        );
+    }
+    out.push_str("</section>");
+    out
 }
 
 fn sanitize_deep_sleep_keep_alive_pulse_ms(value: Option<String>, current: &str) -> String {
@@ -765,10 +823,14 @@ where
     }
 
     conn.write_all(b"</div><section class='card panel'><h3>Transport</h3><label>Send readings via<select name='transport'><option value='wifi'").await?;
-    if !cfg.uses_espnow() {
+    if !cfg.uses_espnow() && !cfg.is_gateway() {
         conn.write_all(b" selected").await?;
     }
-    conn.write_all(b">WiFi (backend + MQTT)</option><option value='espnow'").await?;
+    conn.write_all(b">WiFi (backend + MQTT)</option><option value='gateway'").await?;
+    if cfg.is_gateway() {
+        conn.write_all(b" selected").await?;
+    }
+    conn.write_all(b">WiFi + ESP-NOW gateway</option><option value='espnow'").await?;
     if cfg.uses_espnow() {
         conn.write_all(b" selected").await?;
     }
@@ -777,7 +839,11 @@ where
     conn.write_all(espnow_key_placeholder.as_bytes()).await?;
     conn.write_all(b"'></label><label>ESP-NOW name (Home Assistant)<input name='espnow_name' maxlength='24' value='").await?;
     conn.write_all(html_escape(&cfg.espnow_name).as_bytes()).await?;
-    conn.write_all(b"' placeholder='e.g. Elutuba'></label><small>ESP-NOW: no WiFi connection is made; readings go to the ESP-NOW gateway, which forwards them to Home Assistant over MQTT. The key must match the gateway's ESPNOW_KEY. WiFi slots, backend and MQTT settings below are only used in WiFi mode. Press the button to get back to this portal.</small></section><section class='card panel'><h3>Backend</h3><label>API URL<input name='api_url' value='").await?;
+    conn.write_all(b"' placeholder='e.g. Elutuba'></label><small>ESP-NOW: no WiFi connection is made; readings go to the ESP-NOW gateway, which forwards them to Home Assistant over MQTT. The key must match the gateway's ESPNOW_KEY. WiFi slots, backend and MQTT settings below are only used in WiFi mode. Press the button to get back to this portal. Gateway: works like WiFi mode and also receives ESP-NOW sensors (same key) and forwards them to MQTT and, per sensor, to the backend. Keep deep sleep off on a gateway.</small></section>").await?;
+    if cfg.is_gateway() {
+        conn.write_all(render_espnow_sensors(cfg).as_bytes()).await?;
+    }
+    conn.write_all(b"<section class='card panel'><h3>Backend</h3><label>API URL<input name='api_url' value='").await?;
     conn.write_all(html_escape(&cfg.api_url).as_bytes()).await?;
     conn.write_all(b"'></label><label>API key<input name='api_key' value='").await?;
     conn.write_all(html_escape(&cfg.api_key).as_bytes()).await?;
