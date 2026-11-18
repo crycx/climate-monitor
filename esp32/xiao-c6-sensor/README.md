@@ -66,8 +66,9 @@ for 3 seconds.
 **Over USB (computer):** connect the sensor to a computer and press RESET. It
 detects the computer, stays awake and opens a console on the USB serial port.
 
-- Easiest: open `tools/config.html` in Chrome or Edge, click **Connect**, edit,
-  **Save**. **Measure & send now** checks the whole path to the gateway.
+- Easiest: open `esp32/tools/config.html` (the setup page shared with the C3
+  and C6 boards; it detects the sensor) in Chrome or Edge, click **Connect**,
+  edit, **Save**. **Measure & send now** checks the whole path to the gateway.
 - Or any serial terminal (e.g. `espflash monitor`): type `help`. Example:
 
   ```

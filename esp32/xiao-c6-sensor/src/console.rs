@@ -1,7 +1,7 @@
 //! USB console: active while the sensor is attached to a computer.
 //!
 //! Line-based commands over the USB serial port (any terminal, `espflash
-//! monitor`, or `tools/config.html` in Chrome/Edge via Web Serial). The sensor
+//! monitor`, or `esp32/tools/config.html` in Chrome/Edge via Web Serial). The sensor
 //! keeps measuring and sending every interval meanwhile. When the computer
 //! disconnects it returns to battery mode.
 
