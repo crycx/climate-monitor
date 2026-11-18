@@ -24,14 +24,14 @@ button:disabled{opacity:.45;cursor:default}
 small{color:var(--muted)}
 #status{font-weight:600}.ok{color:var(--ok)}.err{color:var(--err)}
 details summary{cursor:pointer;font-weight:600}
-.dim{opacity:.55}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;background:var(--accent);color:#fff;font-size:.85em;font-weight:600}
 pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;height:180px;overflow:auto;font-size:12px;margin:0;white-space:pre-wrap}
 </style>
 </head>
 <body>
 <main>
   <h1>Climate Monitor Setup</h1>
-  <small>ESP32-C3 sensor or ESP32-C6 gateway over USB (for the XIAO battery sensor use <code>xiao-c6-sensor/tools/config.html</code>). Use Chrome or Edge on a desktop. Close <code>espflash monitor</code> first, since only one program can open the port.</small>
+  <small>ESP32-C3 (WiFi sensor, ESP-NOW sensor or gateway) or ESP32-C6 gateway over USB; the page shows the fields for the connected device. For the XIAO battery sensor use <code>xiao-c6-sensor/tools/config.html</code>. Use Chrome or Edge on a desktop. Close <code>espflash monitor</code> first, since only one program can open the port.</small>
 
   <div class="card">
     <div class="actions" style="margin-top:0">
@@ -39,10 +39,16 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
       <button id="refresh" class="secondary" disabled>Refresh</button>
     </div>
     <p id="status">Not connected</p>
+    <p id="device" hidden></p>
     <small>The device does not deep-sleep while a computer is attached. If it was asleep, press RESET.</small>
   </div>
 
-  <form id="form">
+  <div class="card" id="xiao-note" hidden>
+    <h2>XIAO battery sensor</h2>
+    <small>This device runs the battery sensor firmware, which has its own setup page: open <code>esp32/xiao-c6-sensor/tools/config.html</code> instead.</small>
+  </div>
+
+  <form id="form" hidden>
     <section class="card" data-needs="transport" hidden>
       <h2>Transport</h2>
       <label for="transport">Send readings via</label>
@@ -51,11 +57,15 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
         <option value="gateway">WiFi + ESP-NOW gateway</option>
         <option value="espnow">ESP-NOW (via gateway)</option>
       </select>
-      <div id="espnow-fields">
+      <small data-modes="wifi">Readings go over WiFi to the backend and MQTT.</small>
+      <small data-modes="espnow">No WiFi connection: readings go to the ESP-NOW gateway, which forwards them to Home Assistant.</small>
+      <small data-modes="gateway">WiFi mode, and also receives ESP-NOW sensors and forwards them to MQTT and the backend.</small>
+      <div data-modes="espnow gateway">
         <label for="espnow_key">ESP-NOW key</label>
         <input id="espnow_key" data-secret="espnow_key" type="password" autocomplete="off">
-        <small id="espnow_key_hint">Must match the gateway's ESPNOW_KEY.</small>
-        <small>Gateway: same key as on the sensors. Keep deep sleep off, the gateway must stay awake to receive.</small>
+        <small id="espnow_key_hint"></small>
+      </div>
+      <div data-modes="espnow">
         <label for="espnow_name">Name in Home Assistant</label>
         <input id="espnow_name" data-field="espnow_name" maxlength="24" placeholder="empty = WiFi slot 1 location">
       </div>
@@ -68,22 +78,25 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
         <div><label for="temp_offset">Temp offset (°C)</label><input id="temp_offset" data-field="temp_offset" type="number" step="0.1"></div>
         <div><label for="hum_offset">Humidity offset (%)</label><input id="hum_offset" data-field="hum_offset" type="number" step="0.1"></div>
       </div>
-      <label class="check"><input id="deep_sleep" data-field="deep_sleep" type="checkbox"> Deep sleep between measurements</label>
+      <div id="deep-sleep-row">
+        <label class="check"><input id="deep_sleep" data-field="deep_sleep" type="checkbox"> Deep sleep between measurements</label>
+        <small id="deep_sleep_warn" class="err" hidden>A gateway must stay awake to receive sensors: turn deep sleep off.</small>
+      </div>
       <div class="row">
-        <div><label for="power_source">Power source</label>
+        <div data-needs="power_source" data-modes="wifi espnow"><label for="power_source">Power source</label>
           <select id="power_source" data-field="power_source"><option value="battery">Battery (deep sleep)</option><option value="power_bank">Power bank (stay awake)</option></select></div>
-        <div><label for="oled_orientation">OLED</label>
+        <div data-needs="oled_orientation"><label for="oled_orientation">OLED</label>
           <select id="oled_orientation" data-field="oled_orientation"><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></div>
       </div>
     </section>
 
-    <section class="card wifi-only">
+    <section class="card" data-modes="wifi gateway">
       <h2>WiFi</h2>
-      <small>Only used with transport WiFi. Up to 5 networks, tried in order.</small>
+      <small>Up to 5 networks, tried in order.</small>
       <div id="wifi-slots"></div>
     </section>
 
-    <section class="card wifi-only">
+    <section class="card" data-modes="wifi gateway">
       <h2>MQTT (Home Assistant)</h2>
       <div class="row">
         <div><label for="mqtt_host">Broker host</label><input id="mqtt_host" data-field="mqtt_host"></div>
@@ -99,15 +112,15 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
       </div>
     </section>
 
-    <section class="card wifi-only">
+    <section class="card" data-modes="wifi gateway">
       <h2>Backend</h2>
       <label for="api_url">API URL (ends with /)</label><input id="api_url" data-field="api_url">
       <label for="api_key">API key</label><input id="api_key" data-secret="api_key" type="password" autocomplete="off">
     </section>
 
-    <section class="card" id="espnow-sensors" data-needs="espnow_sensor_mac_1" hidden>
+    <section class="card" data-needs="espnow_sensor_mac_1" data-modes="gateway">
       <h2>ESP-NOW sensors &rarr; backend</h2>
-      <small>Gateway only. Register each sensor as a device in the web app and paste its API key next to the sensor's MAC. Sensors without a key only go to MQTT.</small>
+      <small>Register each sensor as a device in the web app and paste its API key next to the sensor's MAC. Sensors without a key only go to MQTT.</small>
       <div id="seen"></div>
       <div id="espnow-slots"></div>
     </section>
@@ -152,7 +165,7 @@ for (let i = 1; i <= 8; i++) {
 }
 
 let port = null, writer = null, pending = null, busy = false, reconnecting = false;
-let cfg = {}, secrets = {}, info = {};
+let cfg = {}, secrets = {}, info = {}, xiao = false;
 
 function log(line) {
   const el = $("log");
@@ -172,6 +185,8 @@ function handleLine(line) {
     if (pending) { const p = pending; pending = null; p(line); }
     return;
   }
+  // The XIAO battery sensor answers "show" with unprefixed lines like key_set=yes.
+  if (/^key_set=(yes|no)$/.test(line)) xiao = true;
   const m = line.match(/^(cfg|secret|info)\.([a-z0-9_]+)=(.*)$/);
   if (!m) return;
   ({cfg, secret: secrets, info})[m[1]][m[2]] = m[3];
@@ -187,19 +202,12 @@ function render() {
     el.value = "";
     el.placeholder = secrets[el.dataset.secret] === "yes" ? "(set, leave empty to keep)" : "(not set)";
   }
-  const keySet = secrets.espnow_key === "yes";
-  $("espnow_key_hint").textContent = keySet ? "A key is set. Leave empty to keep it." : "No key set: ESP-NOW cannot send until you set one.";
-  $("espnow_key_hint").className = keySet ? "" : "err";
   for (let i = 1; i <= 5; i++) {
     const s = i === 1 ? "" : "_" + i;
     $("wifi_sum" + s).textContent = cfg["wifi_ssid" + s] ? "— " + cfg["wifi_ssid" + s] : "";
   }
-  document.querySelectorAll("[data-needs]").forEach(el => {
-    const f = el.dataset.needs;
-    el.hidden = !(f in cfg || f in secrets);
-  });
   renderSeen();
-  updateTransport();
+  updateVisibility();
 }
 // "info.seen_N=mac,name,age,backend|mqtt-only" from the gateway.
 function renderSeen() {
@@ -219,15 +227,47 @@ function renderSeen() {
     box.appendChild(b);
   }
 }
-function updateTransport() {
-  const espnow = "transport" in cfg && $("transport").value === "espnow";
-  const gateway = "transport" in cfg && $("transport").value === "gateway";
-  $("espnow-fields").classList.toggle("dim", !espnow && !gateway);
-  document.querySelectorAll(".wifi-only").forEach(el => el.classList.toggle("dim", espnow));
-  // C6 is always a gateway (no transport field); on the C3 only in gateway mode.
-  $("espnow-sensors").classList.toggle("dim", "transport" in cfg && !gateway);
+// Which device and mode is connected, from the fields its console reports:
+// the C3 has `transport`, the C6 gateway has sensor slots but no transport.
+function device() {
+  if (xiao && !Object.keys(cfg).length) return { kind: "xiao" };
+  if ("transport" in cfg) return { kind: "c3", mode: $("transport").value || cfg.transport };
+  if ("espnow_sensor_mac_1" in cfg) return { kind: "c6", mode: "gateway" };
+  return { kind: "unknown", mode: "wifi" };
 }
-$("transport").onchange = updateTransport;
+
+const DEVICE_LABEL = { c3: "ESP32-C3", c6: "ESP32-C6", xiao: "XIAO ESP32C6 battery sensor", unknown: "Unknown device" };
+const MODE_LABEL = { wifi: "WiFi sensor", espnow: "ESP-NOW sensor", gateway: "Gateway" };
+
+// Shows only the fields that apply: `data-needs` = the device reports that
+// field, `data-modes` = the modes the element applies to.
+function updateVisibility() {
+  const d = device();
+  const connected = Object.keys(cfg).length > 0 || d.kind === "xiao";
+  $("xiao-note").hidden = d.kind !== "xiao";
+  $("form").hidden = !connected || d.kind === "xiao";
+  $("device").hidden = !connected;
+  $("device").innerHTML = `<span class="badge">${DEVICE_LABEL[d.kind]}${d.mode ? " · " + MODE_LABEL[d.mode] : ""}</span>`;
+  if (d.kind === "xiao") return;
+  document.querySelectorAll("[data-needs], [data-modes]").forEach(el => {
+    const needs = el.dataset.needs, modes = el.dataset.modes;
+    const hasField = !needs || needs in cfg || needs in secrets;
+    const inMode = !modes || modes.split(" ").includes(d.mode);
+    el.hidden = !(hasField && inMode);
+  });
+  // A gateway must not deep-sleep; keep the switch visible only to turn it off.
+  const gateway = d.mode === "gateway";
+  const sleeping = $("deep_sleep").checked;
+  $("deep-sleep-row").hidden = !("deep_sleep" in cfg) || (gateway && !sleeping);
+  $("deep_sleep_warn").hidden = !(gateway && sleeping);
+  const keySet = secrets.espnow_key === "yes";
+  $("espnow_key_hint").textContent = !keySet
+    ? (gateway ? "No key set: the gateway ignores sensors until you set one." : "No key set: ESP-NOW cannot send until you set one.")
+    : (gateway ? "A key is set; sensors must use the same one. Leave empty to keep it." : "A key is set; it must match the gateway. Leave empty to keep it.");
+  $("espnow_key_hint").className = keySet ? "" : "err";
+}
+$("transport").onchange = updateVisibility;
+$("deep_sleep").onchange = updateVisibility;
 
 function command(text, timeoutMs = 5000) {
   return new Promise(async resolve => {
@@ -239,7 +279,7 @@ function command(text, timeoutMs = 5000) {
 }
 
 async function refresh() {
-  cfg = {}; secrets = {}; info = {};
+  cfg = {}; secrets = {}; info = {}; xiao = false;
   const r = await command("show");
   if (r === "OK") render();
   return r;
