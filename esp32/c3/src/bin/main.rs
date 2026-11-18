@@ -2260,6 +2260,22 @@ async fn post_readings_with_retry(
     false
 }
 
+/// TLS record buffers, shared by every backend POST (own readings and the
+/// ESP-NOW gateway). Must hold a full TLS record (16 KiB + overhead): Let's
+/// Encrypt's chain alone is ~4.3 KB, so a 4 KiB buffer fails with
+/// Tls(InsufficientSpace). Kept static instead of inside each POST future:
+/// two ~35 KB futures (main loop + gateway) do not fit in the C3's DRAM, and
+/// a heap-boxed one ran out of heap. The mutex also serializes the POSTs.
+#[cfg(all(feature = "wifi", not(feature = "no-tls")))]
+struct TlsBuffers {
+    rx: [u8; 16640],
+    tx: [u8; 4096],
+}
+
+#[cfg(all(feature = "wifi", not(feature = "no-tls")))]
+static TLS_BUFFERS: Mutex<CriticalSectionRawMutex, TlsBuffers> =
+    Mutex::new(TlsBuffers { rx: [0; 16640], tx: [0; 4096] });
+
 /// Send temperature + humidity as HTTPS JSON POST to the backend API.
 /// Returns true on success.
 #[cfg(feature = "wifi")]
@@ -2282,14 +2298,13 @@ async fn post_readings(
 
     #[cfg(not(feature = "no-tls"))]
     let tls_seed = esp_hal::rng::Rng::new().random() as u64;
-    // Must hold a full TLS record (16 KiB + overhead): Let's Encrypt's chain
-    // alone is ~4.3 KB, so a 4 KiB buffer fails with Tls(InsufficientSpace).
+    // Held until the request is done; see `TlsBuffers`.
     #[cfg(not(feature = "no-tls"))]
-    let mut tls_rx = [0u8; 16640];
+    let mut tls_buffers = TLS_BUFFERS.lock().await;
     #[cfg(not(feature = "no-tls"))]
-    let mut tls_tx = [0u8; 4096];
+    let TlsBuffers { rx: tls_rx, tx: tls_tx } = &mut *tls_buffers;
     #[cfg(not(feature = "no-tls"))]
-    let tls = TlsConfig::new(tls_seed, &mut tls_rx, &mut tls_tx, TlsVerify::None);
+    let tls = TlsConfig::new(tls_seed, tls_rx, tls_tx, TlsVerify::None);
 
     #[cfg(not(feature = "no-tls"))]
     let mut http = HttpClient::new_with_tls(&tcp_client, &dns, tls);

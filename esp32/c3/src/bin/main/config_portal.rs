@@ -27,7 +27,9 @@ const AP_IP_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
 const AP_DNS_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
 const AP_POOL_START: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 100);
 const AP_POOL_END: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 200);
-const HANDLER_TASKS: usize = 4;
+// 3, not 4: each handler costs ~19 KB of static RAM, and the C3 needs that
+// room for the stack since the ESP-NOW gateway task was added.
+const HANDLER_TASKS: usize = 3;
 const TCP_BUF_SIZE: usize = 2048;
 const HTTP_BUF_SIZE: usize = 8192;
 const KEEPALIVE_TIMEOUT_MS: u32 = 10000;

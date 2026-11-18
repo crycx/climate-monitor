@@ -16,7 +16,7 @@
 //! Ported from `esp32/c6/src/bin/main/espnow_gateway.rs`, without the OLED
 //! pages and with the key taken from the runtime config.
 
-use alloc::{boxed::Box, format, string::String, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 use core::cell::RefCell;
 use core::sync::atomic::Ordering;
 
@@ -368,10 +368,9 @@ pub async fn forward_task(
         if r.sensor_ok() {
             if let Some((api_url, api_key)) = backend_target(config, mac.as_str()).await {
                 // One attempt: retries would hold up the queue; the next
-                // reading follows within one sensor interval anyway.
-                // Boxed: the POST future carries ~21 KB of TLS buffers, which
-                // would not fit in the C3's DRAM as part of this static task.
-                let ok = Box::pin(crate::post_readings(
+                // reading follows within one sensor interval anyway. The TLS
+                // buffers are shared and static (`crate::TlsBuffers`).
+                let ok = crate::post_readings(
                     stack,
                     tcp_state,
                     api_url.as_str(),
@@ -379,7 +378,7 @@ pub async fn forward_task(
                     r.name(),
                     r.temperature_c(),
                     r.humidity_pct(),
-                ))
+                )
                 .await;
                 log_runtime_line(
                     format!("ESP-NOW {} -> backend: {}", mac, if ok { "ok" } else { "failed" }).as_str(),
