@@ -107,6 +107,47 @@ pub fn seen_sensors() -> Vec<([u8; 6], String, u64)> {
     })
 }
 
+/// One sensor for a table view (Nextion): every sensor heard since boot.
+pub struct SensorRow {
+    pub name: String,
+    pub temp: Option<f32>,
+    pub hum: Option<f32>,
+    pub battery_pct: Option<u8>,
+    pub age_secs: u64,
+    /// Missed about three reports.
+    pub stale: bool,
+}
+
+/// Sensors heard since boot, in stable slot order.
+pub fn sensor_rows() -> Vec<SensorRow> {
+    let now = Instant::now();
+    critical_section::with(|cs| {
+        DISPLAY
+            .borrow_ref(cs)
+            .iter()
+            .flatten()
+            .map(|s| {
+                let r = &s.item.reading;
+                let name = r.name().trim();
+                let ok = r.sensor_ok();
+                let age_secs = now.duration_since(s.received_at).as_secs();
+                SensorRow {
+                    name: if name.is_empty() {
+                        format!("Sensor {}", &mac_hex(&s.item.mac)[6..])
+                    } else {
+                        name.into()
+                    },
+                    temp: ok.then(|| r.temperature_c()),
+                    hum: ok.then(|| r.humidity_pct()),
+                    battery_pct: (r.battery_mv > 0).then(|| espnow_packet::lipo_percent(r.battery_mv)),
+                    age_secs,
+                    stale: age_secs > stale_after_secs(r),
+                }
+            })
+            .collect()
+    })
+}
+
 pub fn display_generation() -> u32 {
     DISPLAY_GENERATION.load(Ordering::Relaxed)
 }

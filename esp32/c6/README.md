@@ -10,6 +10,7 @@ HTTPS to the Climate Monitor backend API.
 | Board | ESP32-C6 (RISC-V, e.g. ESP32-C6-DevKitC-1) |
 | Sensor | DHT22 data connected to **GPIO5** (open-drain, pull-up) |
 | Display | 0.91" OLED SSD1306 (I2C): **SDA GPIO6**, **SCL/SCK GPIO7** |
+| Display (alternative) | Nextion NX4024T032 (3.2", 400x240, UART) on the OLED pins: **GPIO6 -> display RX** |
 
 ### Wiring
 
@@ -26,6 +27,36 @@ HTTPS to the Climate Monitor backend API.
 - VCC -> 3V3
 - SDA -> GPIO6
 - SCK (same as SCL on I2C modules) -> GPIO7
+
+#### Nextion NX4024T032 (optional, UART)
+
+Replaces the OLED and uses its pins. Build with `NEXTION_ENABLED = "1"` in
+`.cargo/config.toml`; the OLED is then off. The ESP only transmits, so one
+data wire is enough.
+
+- 5V -> **5V** (not 3V3 like the OLED; the display draws 100-250 mA,
+  power the board from USB)
+- GND -> GND
+- RX (yellow) -> GPIO6 (was OLED SDA)
+- TX (blue) -> not needed (GPIO7, was OLED SCK, is left free for touch later)
+
+The display needs a minimal project loaded once (the firmware draws all
+content with `xstr`, so the layout lives in `src/bin/main/nextion.rs`):
+
+1. Nextion Editor -> New project, device **NX4024T032** (Basic),
+   **horizontal (90)**, character encoding **iso-8859-15**.
+2. Tools -> Font Generator: height **24**, encoding **iso-8859-15**, any
+   clear font (e.g. Arial, bold), save and add it: it must be font id **0**.
+3. Leave page0 empty, File -> TFT file output, copy the `.tft` to the root
+   of a FAT32 microSD card, power the display with the card in, wait for
+   "Update successed", remove the card and power-cycle.
+
+Screen: header with the gateway IP (or AP / no WiFi), then one row per
+sensor (own DHT22 first, then each ESP-NOW sensor): temperature, humidity,
+battery, time since last report. Rows turn grey when a sensor misses about
+three reports. The firmware switches the display to 115200 baud at start
+(it boots at 9600). Without `NEXTION_ENABLED` the firmware drives the OLED
+as before.
 
 ### Electrical safety note
 

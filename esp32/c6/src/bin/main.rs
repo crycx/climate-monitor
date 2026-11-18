@@ -98,6 +98,9 @@ mod espnow_gateway;
 #[cfg(feature = "wifi")]
 #[path = "main/usb_console.rs"]
 mod usb_console;
+#[cfg(feature = "wifi")]
+#[path = "main/nextion.rs"]
+mod nextion;
 
 #[cfg(feature = "wifi")]
 use app_config::{AppConfig, FlashConfigStorage, resolve_partition_range};
@@ -195,6 +198,16 @@ fn oled_enabled() -> bool {
         None => !cfg!(feature = "supermini"),
         _ => !cfg!(feature = "supermini"),
     }
+}
+
+/// NEXTION_ENABLED=1: a Nextion display replaces the OLED on its pins
+/// (GPIO6 = UART TX to the display's RX); the OLED is then off.
+#[cfg(feature = "wifi")]
+fn nextion_enabled() -> bool {
+    matches!(
+        option_env!("NEXTION_ENABLED"),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
 }
 
 #[cfg(feature = "wifi")]
@@ -1215,13 +1228,19 @@ async fn main(spawner: Spawner) {
     let mut flash = FlashStorage::new(peripherals.FLASH);
 
     let oled_addr = oled_i2c_address();
-    let mut oled = if oled_enabled() {
-        match I2c::new(
+    // GPIO6/GPIO7 carry either the OLED (I2C) or the Nextion (GPIO6 = UART TX).
+    let (oled_pins, nextion_tx_pin) = if nextion_enabled() {
+        (None, Some(peripherals.GPIO6))
+    } else {
+        (Some((peripherals.GPIO6, peripherals.GPIO7)), None)
+    };
+    let mut oled = match oled_pins {
+        Some((sda, scl)) if oled_enabled() => match I2c::new(
             peripherals.I2C0,
             I2cConfig::default().with_frequency(Rate::from_khz(400)),
         ) {
             Ok(i2c) => {
-                let mut i2c = i2c.with_sda(peripherals.GPIO6).with_scl(peripherals.GPIO7);
+                let mut i2c = i2c.with_sda(sda).with_scl(scl);
                 if oled_boot_scan_enabled() {
                     let mut found_any = false;
                     log_runtime_line("I2C scan start (GPIO6 SDA, GPIO7 SCL)...");
@@ -1250,10 +1269,15 @@ async fn main(spawner: Spawner) {
                 log_runtime_line(format!("OLED: I2C bus init failed: {:?}", e).as_str());
                 None
             }
+        },
+        Some(_) => {
+            log_runtime_line("OLED disabled (set OLED_ENABLED=1 to force-enable).");
+            None
         }
-    } else {
-        log_runtime_line("OLED disabled (set OLED_ENABLED=1 to force-enable).");
-        None
+        None => {
+            log_runtime_line("OLED off: GPIO6/GPIO7 are used by the Nextion display.");
+            None
+        }
     };
 
     if let Some(display) = oled.as_mut() {
@@ -1378,6 +1402,13 @@ async fn main(spawner: Spawner) {
 
     let stack: &'static Stack<'static> = NET_STACK.init(wifi_stacks.sta);
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
+
+    // Nextion display: UART1 TX on GPIO6 (the OLED's SDA pin).
+    if let Some(pin) = nextion_tx_pin {
+        if let Some(tx) = nextion::uart(peripherals.UART1, pin) {
+            spawner.spawn(nextion::nextion_task(tx, stack, config_handle).unwrap());
+        }
+    }
 
     if espnow_gateway::key().is_some() {
         spawner.spawn(espnow_gateway::rx_task(wifi_stacks.esp_now, wifi_stacks.sta_mac).unwrap());
@@ -1953,6 +1984,7 @@ async fn main(spawner: Spawner) {
                 // Cache readings for WiFi display
                 last_temp = Some(temp);
                 last_hum = Some(hum);
+                nextion::set_local(temp, hum);
                 
                 log_runtime_line(
                     format!(
