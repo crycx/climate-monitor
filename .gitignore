@@ -22,7 +22,10 @@ instance/
 
 # IDE
 .idea/
-.vscode/
+# .vscode is local, except the shared SFTP deploy config (no secrets: auth
+# comes from each computer's ~/.ssh/config host "sinpal").
+.vscode/*
+!.vscode/sftp.json
 *.swp
 *.swo
 
