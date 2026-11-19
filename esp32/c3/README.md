@@ -9,7 +9,7 @@ HTTPS to the Climate Monitor backend API.
 |-----------|--------|
 | Board | ESP32-C3 (RISC-V, e.g. ESP32-C3-DevKitM-1) |
 | Sensor | DHT22 data connected to **GPIO5** (open-drain, pull-up) |
-| Display | 0.91" OLED SSD1306 (I2C): **SDA GPIO6**, **SCL/SCK GPIO7** |
+| Display | optional 0.91" OLED SSD1306 (I2C): **SDA GPIO6**, **SCL/SCK GPIO7**. Off by default; build with `OLED_ENABLED=1` (`[env]` in `.cargo/config.toml`) to use it |
 
 ### Wiring
 

@@ -40,7 +40,7 @@ use esp_hal::{
     clock::CpuClock,
     delay::Delay,
     gpio::{DriveMode, Flex, OutputConfig, Pull},
-    i2c::master::{Config as I2cConfig, I2c},
+    i2c::master::{BusTimeout, Config as I2cConfig, I2c, SoftwareTimeout},
     time::Rate,
 };
 #[cfg(all(feature = "wifi", feature = "supermini"))]
@@ -323,9 +323,9 @@ fn oled_enabled() -> bool {
     match option_env!("OLED_ENABLED") {
         Some("0" | "false" | "FALSE" | "no" | "NO" | "off" | "OFF") => false,
         Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") => true,
-        // Super Mini boards are often used without SSD1306 attached.
-        None => !cfg!(feature = "supermini"),
-        _ => !cfg!(feature = "supermini"),
+        // The C3 boards run without an SSD1306 (only the C6 gateway has a
+        // display); set OLED_ENABLED=1 at build time to use one.
+        _ => false,
     }
 }
 
@@ -992,7 +992,7 @@ fn main() -> ! {
     let oled_addr = oled_i2c_address();
     let mut oled = match I2c::new(
         peripherals.I2C0,
-        I2cConfig::default().with_frequency(Rate::from_khz(400)),
+        oled_i2c_config(),
     ) {
         Ok(i2c) => {
             let mut i2c = i2c.with_sda(peripherals.GPIO6).with_scl(peripherals.GPIO7);
@@ -1191,6 +1191,16 @@ fn find_best_ssid(cfg: &AppConfig) -> Option<(usize, String, String, String)> {
 }
 
 #[cfg(feature = "wifi")]
+/// OLED I2C settings. The esp-hal defaults have no bus or software timeout,
+/// so without an OLED (or with a stuck bus) a blocking write could wait
+/// forever in `wait_for_completion_blocking` and hang the whole board.
+fn oled_i2c_config() -> I2cConfig {
+    I2cConfig::default()
+        .with_frequency(Rate::from_khz(400))
+        .with_timeout(BusTimeout::Maximum)
+        .with_software_timeout(SoftwareTimeout::Transaction(esp_hal::time::Duration::from_millis(200)))
+}
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -1244,7 +1254,7 @@ async fn main(spawner: Spawner) {
     let mut oled = if oled_enabled() {
         match I2c::new(
             peripherals.I2C0,
-            I2cConfig::default().with_frequency(Rate::from_khz(400)),
+            oled_i2c_config(),
         ) {
             Ok(i2c) => {
                 let mut i2c = i2c.with_sda(peripherals.GPIO6).with_scl(peripherals.GPIO7);
