@@ -538,14 +538,17 @@ struct EntitySpec {
     unit: &'static str,
     device_class: &'static str,
     diagnostic: bool,
+    /// HA `suggested_display_precision` (decimals shown); HA would otherwise
+    /// show volts as a whole number ("4 V").
+    precision: u8,
 }
 
 const ENTITIES: [EntitySpec; 5] = [
-    EntitySpec { key: "temperature", name: "Temperature", unit: "°C", device_class: "temperature", diagnostic: false },
-    EntitySpec { key: "humidity", name: "Humidity", unit: "%", device_class: "humidity", diagnostic: false },
-    EntitySpec { key: "battery", name: "Battery", unit: "%", device_class: "battery", diagnostic: true },
-    EntitySpec { key: "battery_voltage", name: "Battery voltage", unit: "V", device_class: "voltage", diagnostic: true },
-    EntitySpec { key: "rssi", name: "Signal strength", unit: "dBm", device_class: "signal_strength", diagnostic: true },
+    EntitySpec { key: "temperature", name: "Temperature", unit: "°C", device_class: "temperature", diagnostic: false, precision: 1 },
+    EntitySpec { key: "humidity", name: "Humidity", unit: "%", device_class: "humidity", diagnostic: false, precision: 0 },
+    EntitySpec { key: "battery", name: "Battery", unit: "%", device_class: "battery", diagnostic: true, precision: 0 },
+    EntitySpec { key: "battery_voltage", name: "Battery voltage", unit: "V", device_class: "voltage", diagnostic: true, precision: 2 },
+    EntitySpec { key: "rssi", name: "Signal strength", unit: "dBm", device_class: "signal_strength", diagnostic: true, precision: 0 },
 ];
 
 /// Publishes one reading; returns true if the broker accepted the session.
@@ -618,7 +621,7 @@ async fn publish(
                 crate::HA_DISCOVERY_PREFIX, device_id, e.key
             );
             let payload = format!(
-                r#"{{"name":"{}","unique_id":"{}_{}_{}","state_topic":"{}","unit_of_measurement":"{}","device_class":"{}","state_class":"measurement"{}{},"device":{}}}"#,
+                r#"{{"name":"{}","unique_id":"{}_{}_{}","state_topic":"{}","unit_of_measurement":"{}","device_class":"{}","state_class":"measurement","suggested_display_precision":{}{}{},"device":{}}}"#,
                 e.name,
                 s.base_topic,
                 device_id,
@@ -626,6 +629,7 @@ async fn publish(
                 crate::json_escape(topic(e.key).as_str()),
                 e.unit,
                 e.device_class,
+                e.precision,
                 if e.diagnostic { r#","entity_category":"diagnostic""# } else { "" },
                 expire,
                 device_block,
