@@ -74,16 +74,26 @@ impl Sensors {
         }
     }
 
-    fn battery_mv(&mut self, cfg: &NodeConfig) -> u16 {
+    /// Battery voltage from the D0 divider: 32 samples spread over ~64 ms
+    /// (runs during the DHT22 warm-up, so it costs no awake time), averaged
+    /// over the middle half after sorting so spikes and outliers drop out.
+    async fn battery_mv(&mut self, cfg: &NodeConfig) -> u16 {
         if !cfg.battery_adc {
             return 0;
         }
-        const SAMPLES: u32 = 8;
-        let mut sum = 0u32;
-        for _ in 0..SAMPLES {
-            sum += nb::block!(self.adc.read_oneshot(&mut self.bat_pin)).unwrap_or(0) as u32;
+        const SAMPLES: usize = 32;
+        const GAP: Duration = Duration::from_millis(2);
+        // First conversion after enabling the ADC tends to be off: discard it.
+        let _ = nb::block!(self.adc.read_oneshot(&mut self.bat_pin));
+        let mut samples = [0u16; SAMPLES];
+        for sample in samples.iter_mut() {
+            Timer::after(GAP).await;
+            *sample = nb::block!(self.adc.read_oneshot(&mut self.bat_pin)).unwrap_or(0);
         }
-        let battery_mv = ((sum / SAMPLES) as f32 * cfg.battery_divider) as u32;
+        samples.sort_unstable();
+        let middle = &samples[SAMPLES / 4..SAMPLES - SAMPLES / 4];
+        let mean = middle.iter().map(|&v| v as u32).sum::<u32>() as f32 / middle.len() as f32;
+        let battery_mv = (mean * cfg.battery_divider) as u32;
         if BATTERY_MV_RANGE.contains(&battery_mv) {
             battery_mv as u16
         } else {
@@ -112,7 +122,7 @@ impl Sensors {
     pub async fn measure(&mut self, cfg: &NodeConfig) -> Measurement {
         self.dht_power.set_high();
         let warmup_started = Instant::now();
-        let battery_mv = self.battery_mv(cfg);
+        let battery_mv = self.battery_mv(cfg).await;
         let warmup = Duration::from_millis(cfg.dht_warmup_ms as u64);
         let elapsed = warmup_started.elapsed();
         if elapsed < warmup {
@@ -344,10 +354,24 @@ pub async fn deliver(radio: &mut Radio, key: &[u8], state: &mut NodeState, readi
     false
 }
 
-/// Measure, send, persist state. Returns (measurement, delivered).
+/// Measures and works out whether USB power is present.
 ///
 /// `usb_host`: a computer is attached (USB console), so USB power is present.
 /// Otherwise USB power is only known with the D1 divider (`usb_wake`).
+///
+/// On battery, call this before [`Radio::start`]: with the radio receiving
+/// (~80-100 mA) a small cell sags ~0.2 V and the battery reads low.
+pub async fn measure(cfg: &NodeConfig, sensors: &mut Sensors, usb_host: bool) -> Measurement {
+    let mut measurement = sensors.measure(cfg).await;
+    measurement.usb_power = usb_host || (cfg.usb_wake && usb_power_present());
+    if measurement.usb_power && measurement.battery_mv > 0 {
+        log_line!("Battery: on USB power, charging");
+    }
+    measurement
+}
+
+/// Measure, send, persist state. Returns (measurement, delivered).
+/// Used where the radio already runs (USB console: USB powers the board).
 pub async fn measure_and_send(
     cfg: &NodeConfig,
     sensors: &mut Sensors,
@@ -355,16 +379,18 @@ pub async fn measure_and_send(
     state: &mut NodeState,
     usb_host: bool,
 ) -> (Measurement, bool) {
-    let mut measurement = sensors.measure(cfg).await;
-    measurement.usb_power = usb_host || (cfg.usb_wake && usb_power_present());
-    if measurement.usb_power && measurement.battery_mv > 0 {
-        log_line!("Battery: on USB power, charging");
-    }
+    let measurement = measure(cfg, sensors, usb_host).await;
+    let delivered = send(cfg, &measurement, radio, state).await;
+    (measurement, delivered)
+}
+
+/// Sends a measurement and persists state. Returns whether it was delivered.
+pub async fn send(cfg: &NodeConfig, measurement: &Measurement, radio: &mut Radio, state: &mut NodeState) -> bool {
     if !cfg.has_key() {
         log_line!("ESP-NOW: no key configured, not sending (set key via USB console or portal)");
-        return (measurement, false);
+        return false;
     }
-    let mut reading = build_reading(cfg, state, &measurement);
+    let mut reading = build_reading(cfg, state, measurement);
     let delivered = deliver(radio, cfg.key.as_bytes(), state, &mut reading).await;
     state.store();
     log_line!(
@@ -372,7 +398,7 @@ pub async fn measure_and_send(
         if delivered { "delivered" } else { "gateway not found" },
         reading.seq
     );
-    (measurement, delivered)
+    delivered
 }
 
 // ── Misc ────────────────────────────────────────────────────────────────────

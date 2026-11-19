@@ -164,9 +164,12 @@ async fn main(spawner: Spawner) {
     }
 
     // Normal battery cycle.
+    // Battery first, radio after: under the radio's receive current a small
+    // cell sags ~0.2 V, which would read as a much emptier battery.
     let mut state = hw::NodeState::load_or_init();
+    let measurement = hw::measure(&cfg, &mut sensors, false).await;
     let mut radio = hw::Radio::start(peripherals.WIFI, rf);
-    hw::measure_and_send(&cfg, &mut sensors, &mut radio, &mut state, false).await;
+    hw::send(&cfg, &measurement, &mut radio, &mut state).await;
     log_line!(
         "Awake {} ms, sleeping {} s",
         awake_since.elapsed().as_millis(),
