@@ -453,10 +453,13 @@ pub async fn forward_task(
     config: &'static Mutex<CriticalSectionRawMutex, AppConfig>,
 ) {
     let mut announced = AnnouncedTable::new();
+    let mut battery_full = espnow_packet::BatteryFullTracker::<MAX_TRACKED_SENSORS>::new();
     loop {
         let item = READINGS.receive().await;
         let r = &item.reading;
         let mac = mac_hex(&item.mac);
+        // Tracked even while MQTT is down, so the hour keeps counting.
+        let full = battery_full.update(&item.mac, r, Instant::now().as_secs());
         if r.sensor_ok() {
             log_runtime_line(
                 format!(
@@ -492,7 +495,7 @@ pub async fn forward_task(
         if let Some(settings) = mqtt_settings(config).await {
             let name_hash = fnv1a(r.name());
             let needs_discovery = !announced.contains(&item.mac, name_hash);
-            if publish(*stack, &settings, &item, needs_discovery).await && needs_discovery {
+            if publish(*stack, &settings, &item, needs_discovery, full).await && needs_discovery {
                 announced.insert(&item.mac, name_hash);
             }
         }
@@ -546,7 +549,13 @@ const ENTITIES: [EntitySpec; 5] = [
 ];
 
 /// Publishes one reading; returns true if the broker accepted the session.
-async fn publish(stack: Stack<'static>, s: &MqttSettings, item: &RemoteReading, discovery: bool) -> bool {
+async fn publish(
+    stack: Stack<'static>,
+    s: &MqttSettings,
+    item: &RemoteReading,
+    discovery: bool,
+    battery_full: bool,
+) -> bool {
     let Some(ip) = crate::resolve_host_to_ip(stack, s.host.as_str()).await else {
         log_runtime_line("ESP-NOW MQTT: DNS/host resolution failed");
         return false;
@@ -682,15 +691,36 @@ async fn publish(stack: Stack<'static>, s: &MqttSettings, item: &RemoteReading, 
             true,
         ))
         .await;
+        // On = charged: on USB at ~4.2 V for an hour (`espnow_packet::BatteryFullTracker`).
+        let config_topic = format!(
+            "{}/binary_sensor/{}_battery_full/config",
+            crate::HA_DISCOVERY_PREFIX, device_id
+        );
+        let payload = format!(
+            r#"{{"name":"Battery full","unique_id":"{}_{}_battery_full","state_topic":"{}","icon":"mdi:battery-check","payload_on":"ON","payload_off":"OFF"{},"device":{}}}"#,
+            s.base_topic,
+            device_id,
+            crate::json_escape(topic("battery_full").as_str()),
+            expire,
+            device_block,
+        );
+        let _ = with_io_timeout(crate::mqtt_publish(
+            &mut socket,
+            config_topic.as_str(),
+            payload.as_bytes(),
+            true,
+        ))
+        .await;
     }
 
-    let mut values: [(&str, Option<String>); 7] = [
+    let mut values: [(&str, Option<String>); 8] = [
         ("temperature", None),
         ("humidity", None),
         ("battery", None),
         ("battery_voltage", None),
         ("battery_low", None),
         ("charging", Some(String::from(if r.usb_power() { "ON" } else { "OFF" }))),
+        ("battery_full", Some(String::from(if battery_full { "ON" } else { "OFF" }))),
         ("rssi", Some(format!("{}", item.rssi))),
     ];
     if r.sensor_ok() {

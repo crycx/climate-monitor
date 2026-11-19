@@ -307,3 +307,66 @@ pub fn lipo_percent(battery_mv: u16) -> u8 {
     }
     0
 }
+
+// ── Battery full (gateway side) ─────────────────────────────────────────────
+
+/// On USB the charger holds the cell at ~4.2 V from the start of the
+/// constant-voltage phase (~85 %) until it terminates, and the charge LED is
+/// not wired to a GPIO. So "full" is taken as: on USB power and at least
+/// [`FULL_MV`] for [`FULL_AFTER_SECS`]. Once full, it stays full down to
+/// [`FULL_HOLD_MV`], since a terminated cell relaxes a little below 4.2 V.
+pub const FULL_MV: u16 = 4150;
+pub const FULL_HOLD_MV: u16 = 4100;
+pub const FULL_AFTER_SECS: u64 = 3600;
+
+#[derive(Clone, Copy, Default)]
+struct ChargeState {
+    high_since: Option<u64>,
+    full: bool,
+}
+
+impl ChargeState {
+    fn update(&mut self, usb_power: bool, battery_mv: u16, now_secs: u64) -> bool {
+        if !usb_power || battery_mv == 0 {
+            *self = Self::default();
+            return false;
+        }
+        let threshold = if self.full { FULL_HOLD_MV } else { FULL_MV };
+        if battery_mv >= threshold {
+            let since = *self.high_since.get_or_insert(now_secs);
+            self.full = now_secs.saturating_sub(since) >= FULL_AFTER_SECS;
+        } else {
+            *self = Self::default();
+        }
+        self.full
+    }
+}
+
+/// Per-sensor battery-full tracking by MAC, for a fixed number of sensors
+/// (the oldest slot is reused). State lives only in RAM: after a gateway
+/// restart the hour starts again.
+pub struct BatteryFullTracker<const N: usize> {
+    entries: [Option<([u8; 6], ChargeState)>; N],
+    next_slot: usize,
+}
+
+impl<const N: usize> BatteryFullTracker<N> {
+    pub const fn new() -> Self {
+        Self { entries: [None; N], next_slot: 0 }
+    }
+
+    /// Feeds one reading; returns whether that sensor's battery is full.
+    pub fn update(&mut self, mac: &[u8; 6], reading: &Reading, now_secs: u64) -> bool {
+        let slot = match self.entries.iter().position(|e| matches!(e, Some((m, _)) if m == mac)) {
+            Some(i) => i,
+            None => {
+                let i = self.next_slot;
+                self.entries[i] = Some((*mac, ChargeState::default()));
+                self.next_slot = (i + 1) % N;
+                i
+            }
+        };
+        let (_, state) = self.entries[slot].as_mut().unwrap();
+        state.update(reading.usb_power(), reading.battery_mv, now_secs)
+    }
+}

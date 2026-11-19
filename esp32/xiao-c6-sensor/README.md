@@ -149,6 +149,11 @@ Created through MQTT Discovery by the gateway, per sensor:
   until USB is unplugged. Detected when a computer is attached (USB console)
   or, on a plain USB charger, with the D1 divider and `usb_wake on`. Needs a
   gateway built after this change; older gateways ignore the flag.
+- Battery full (binary sensor), on after the sensor has been on USB at
+  ≥ 4.15 V for an hour (the charger's constant-voltage phase is then over;
+  the charge LED itself is not readable). Stays on down to 4.10 V, off when
+  USB is unplugged. Tracked by the gateway in RAM, so a gateway restart
+  starts the hour again.
 
 Entities turn unavailable when a sensor misses ~3 reports (`expire_after`).
 
