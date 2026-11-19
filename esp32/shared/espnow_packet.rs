@@ -278,9 +278,12 @@ pub fn decode(key: &[u8], src_mac: &[u8; 6], data: &[u8]) -> Result<Packet, Deco
 }
 
 /// Rough LiPo state of charge from cell voltage under light load.
+///
+/// 100 % starts at 4.15 V, not 4.20 V: the charger stops at 4.20 V, but a
+/// full cell rests at ~4.15-4.19 V once it is off the charger.
 pub fn lipo_percent(battery_mv: u16) -> u8 {
     const CURVE: [(u16, u8); 11] = [
-        (4200, 100),
+        (4150, 100),
         (4100, 90),
         (4000, 80),
         (3920, 70),
