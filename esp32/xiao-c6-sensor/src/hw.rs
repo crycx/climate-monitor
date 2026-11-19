@@ -43,6 +43,8 @@ pub struct Measurement {
     pub climate: Option<(f32, f32)>,
     /// 0 = unknown / disabled.
     pub battery_mv: u16,
+    /// On USB power: the cell is charging, `battery_mv` is the charge voltage.
+    pub usb_power: bool,
 }
 
 pub struct Sensors {
@@ -136,7 +138,7 @@ impl Sensors {
             Some((t, h)) => log_line!("DHT22: {:.1} C {:.1} %, battery {} mV", t, h, battery_mv),
             None => log_line!("DHT22: no reading, battery {} mV", battery_mv),
         }
-        Measurement { climate, battery_mv }
+        Measurement { climate, battery_mv, usb_power: false }
     }
 }
 
@@ -273,6 +275,9 @@ pub fn build_reading(cfg: &NodeConfig, state: &NodeState, m: &Measurement) -> Re
     let mut reading = Reading::empty();
     reading.boot_id = state.boot_id;
     reading.battery_mv = m.battery_mv;
+    if m.usb_power {
+        reading.flags |= espnow_packet::FLAG_USB_POWER;
+    }
     reading.interval_s = cfg.interval_secs.min(u16::MAX as u32) as u16;
     reading.set_name(cfg.name.as_str());
     match m.climate {
@@ -340,13 +345,21 @@ pub async fn deliver(radio: &mut Radio, key: &[u8], state: &mut NodeState, readi
 }
 
 /// Measure, send, persist state. Returns (measurement, delivered).
+///
+/// `usb_host`: a computer is attached (USB console), so USB power is present.
+/// Otherwise USB power is only known with the D1 divider (`usb_wake`).
 pub async fn measure_and_send(
     cfg: &NodeConfig,
     sensors: &mut Sensors,
     radio: &mut Radio,
     state: &mut NodeState,
+    usb_host: bool,
 ) -> (Measurement, bool) {
-    let measurement = sensors.measure(cfg).await;
+    let mut measurement = sensors.measure(cfg).await;
+    measurement.usb_power = usb_host || (cfg.usb_wake && usb_power_present());
+    if measurement.usb_power && measurement.battery_mv > 0 {
+        log_line!("Battery: on USB power, charging");
+    }
     if !cfg.has_key() {
         log_line!("ESP-NOW: no key configured, not sending (set key via USB console or portal)");
         return (measurement, false);
@@ -381,6 +394,12 @@ pub fn usb_sof_frame() -> u16 {
 /// divider fitted, which is why `usb_wake` is off by default.
 fn usb_power_on_d1(pin: GPIO1<'_>) -> bool {
     Input::new(pin, InputConfig::default().with_pull(Pull::None)).is_high()
+}
+
+/// USB power present according to the D1 divider.
+pub fn usb_power_present() -> bool {
+    // SAFETY: GPIO1 is used nowhere else; the Input is dropped right away.
+    usb_power_on_d1(unsafe { GPIO1::steal() })
 }
 
 /// Sleeps `secs`, and with `usb_wake` also until USB power appears on D1.

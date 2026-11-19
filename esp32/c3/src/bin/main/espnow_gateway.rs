@@ -329,12 +329,13 @@ pub async fn forward_task(
         if r.sensor_ok() {
             log_runtime_line(
                 format!(
-                    "ESP-NOW {} '{}': {:.1} C {:.1} % bat {} mV rssi {} seq {}",
+                    "ESP-NOW {} '{}': {:.1} C {:.1} % bat {} mV{} rssi {} seq {}",
                     mac,
                     r.name(),
                     r.temperature_c(),
                     r.humidity_pct(),
                     r.battery_mv,
+                    if r.usb_power() { " (USB, charging)" } else { "" },
                     item.rssi,
                     r.seq
                 )
@@ -531,14 +532,35 @@ async fn publish(stack: Stack<'static>, s: &MqttSettings, item: &RemoteReading, 
             true,
         ))
         .await;
+        // On = sensor on USB power, cell charging (battery % is then not the charge level).
+        let config_topic = format!(
+            "{}/binary_sensor/{}_charging/config",
+            crate::HA_DISCOVERY_PREFIX, device_id
+        );
+        let payload = format!(
+            r#"{{"name":"Charging","unique_id":"{}_{}_charging","state_topic":"{}","device_class":"battery_charging","payload_on":"ON","payload_off":"OFF"{},"device":{}}}"#,
+            s.base_topic,
+            device_id,
+            crate::json_escape(topic("charging").as_str()),
+            expire,
+            device_block,
+        );
+        let _ = with_io_timeout(crate::mqtt_publish(
+            &mut socket,
+            config_topic.as_str(),
+            payload.as_bytes(),
+            true,
+        ))
+        .await;
     }
 
-    let mut values: [(&str, Option<String>); 6] = [
+    let mut values: [(&str, Option<String>); 7] = [
         ("temperature", None),
         ("humidity", None),
         ("battery", None),
         ("battery_voltage", None),
         ("battery_low", None),
+        ("charging", Some(String::from(if r.usb_power() { "ON" } else { "OFF" }))),
         ("rssi", Some(format!("{}", item.rssi))),
     ];
     if r.sensor_ok() {
@@ -548,7 +570,9 @@ async fn publish(stack: Stack<'static>, s: &MqttSettings, item: &RemoteReading, 
     if r.battery_mv > 0 {
         values[2].1 = Some(format!("{}", espnow_packet::lipo_percent(r.battery_mv)));
         values[3].1 = Some(format!("{:.2}", r.battery_mv as f32 / 1000.0));
-        values[4].1 = Some(String::from(if r.battery_mv < LOW_BATTERY_MV { "ON" } else { "OFF" }));
+        // While charging the cell reads ~4.2 V anyway; never warn then.
+        let low = r.battery_mv < LOW_BATTERY_MV && !r.usb_power();
+        values[4].1 = Some(String::from(if low { "ON" } else { "OFF" }));
     }
     for (key, value) in values.iter() {
         if let Some(value) = value {

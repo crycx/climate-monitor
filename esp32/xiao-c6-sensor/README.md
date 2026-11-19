@@ -144,6 +144,11 @@ Created through MQTT Discovery by the gateway, per sensor:
 - Battery (%), Battery voltage (V), Signal strength (dBm), as diagnostics
 - Battery low (binary sensor), on below 3.60 V (~10 %): time to charge.
   Use it in an HA automation for a notification.
+- Charging (binary sensor), on while the sensor runs on USB power. The
+  charger then holds the cell at ~4.2 V, so Battery % is not the real level
+  until USB is unplugged. Detected when a computer is attached (USB console)
+  or, on a plain USB charger, with the D1 divider and `usb_wake on`. Needs a
+  gateway built after this change; older gateways ignore the flag.
 
 Entities turn unavailable when a sensor misses ~3 reports (`expire_after`).
 

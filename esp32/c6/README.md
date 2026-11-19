@@ -180,7 +180,11 @@ The OLED rotates every 5 s between the gateway's own reading and one page per
 sensor heard recently (name, battery %, temperature/humidity, age and RSSI).
 
 Per sensor, Home Assistant also gets a **Battery low** binary sensor that turns
-on below 3.60 V (~10 %), for a "charge me" notification.
+on below 3.60 V (~10 %), for a "charge me" notification, and a **Charging**
+binary sensor that is on while the sensor runs on USB power. While charging the
+charger holds the cell at ~4.2 V, so Battery % then reads ~100 % regardless of
+the real level; Battery low stays off and the OLED and Nextion show `USB`
+instead of the battery %.
 A newly received reading jumps straight to that sensor's page for 10 s. A
 sensor's page disappears after it misses ~3 reports.
 

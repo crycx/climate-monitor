@@ -166,7 +166,7 @@ async fn main(spawner: Spawner) {
     // Normal battery cycle.
     let mut state = hw::NodeState::load_or_init();
     let mut radio = hw::Radio::start(peripherals.WIFI, rf);
-    hw::measure_and_send(&cfg, &mut sensors, &mut radio, &mut state).await;
+    hw::measure_and_send(&cfg, &mut sensors, &mut radio, &mut state, false).await;
     log_line!(
         "Awake {} ms, sleeping {} s",
         awake_since.elapsed().as_millis(),

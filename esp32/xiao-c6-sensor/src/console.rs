@@ -71,6 +71,7 @@ impl Console {
                 None => println!("temperature=error"),
             }
             println!("battery_mv={}", m.battery_mv);
+            println!("usb_power={}", if m.usb_power { "yes" } else { "no" });
             println!("delivered={}", if *delivered { "yes" } else { "no" });
         }
         if !self.store.available() {
@@ -80,7 +81,7 @@ impl Console {
 
     async fn send_now(&mut self) {
         let result =
-            hw::measure_and_send(&self.cfg, &mut self.sensors, &mut self.radio, &mut self.state).await;
+            hw::measure_and_send(&self.cfg, &mut self.sensors, &mut self.radio, &mut self.state, true).await;
         self.last = Some(result);
         self.next_send_at = Instant::now() + Duration::from_secs(self.cfg.interval_secs as u64);
     }

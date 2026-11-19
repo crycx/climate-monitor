@@ -102,6 +102,7 @@ fn row_cells(
     temp: Option<f32>,
     hum: Option<f32>,
     battery_pct: Option<u8>,
+    charging: bool,
     age_secs: u64,
     stale: bool,
 ) -> [Cell; 5] {
@@ -114,7 +115,10 @@ fn row_cells(
         cell(name.into(), text_c),
         cell(temp.map(|t| format!("{:.1}\u{b0}C", t)).unwrap_or_else(|| "--".into()), temp_c),
         cell(hum.map(|h| format!("{:.0}%", h)).unwrap_or_else(|| "--".into()), hum_c),
-        cell(battery_pct.map(|p| format!("{}%", p)).unwrap_or_default(), battery_c),
+        cell(
+            if charging { "USB".into() } else { battery_pct.map(|p| format!("{}%", p)).unwrap_or_default() },
+            battery_c,
+        ),
         cell(format_age(age_secs), text_c),
     ]
 }
@@ -128,10 +132,10 @@ async fn rows(config: &'static Mutex<CriticalSectionRawMutex, AppConfig>) -> Vec
             String::from(if id.is_empty() { "This device" } else { id })
         };
         let age = Instant::now().duration_since(at).as_secs();
-        out.push(row_cells(name.as_str(), Some(temp), Some(hum), None, age, age > LOCAL_STALE_SECS));
+        out.push(row_cells(name.as_str(), Some(temp), Some(hum), None, false, age, age > LOCAL_STALE_SECS));
     }
     for s in espnow_gateway::sensor_rows() {
-        out.push(row_cells(s.name.as_str(), s.temp, s.hum, s.battery_pct, s.age_secs, s.stale));
+        out.push(row_cells(s.name.as_str(), s.temp, s.hum, s.battery_pct, s.charging, s.age_secs, s.stale));
     }
     out.truncate(MAX_ROWS);
     out

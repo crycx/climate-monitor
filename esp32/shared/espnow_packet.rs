@@ -19,7 +19,8 @@
 //!   14..16  hum_centi    u16  relative humidity * 100 (%)
 //!   16..18  battery_mv   u16  0 = unknown
 //!   18..20  interval_s   u16  sensor's sleep interval
-//!   20      flags        u8   bit0 = sensor read failed
+//!   20      flags        u8   bit0 = sensor read failed,
+//!                               bit1 = on USB power (battery charging)
 //!   21      name_len     u8   0..=MAX_NAME_LEN
 //!   22..    name         UTF-8, name_len bytes
 //!   ..+8    tag
@@ -48,6 +49,10 @@ const ACK_BODY_LEN: usize = 13;
 pub const MAX_PACKET_LEN: usize = READING_HEADER_LEN + MAX_NAME_LEN + TAG_LEN;
 
 pub const FLAG_SENSOR_ERROR: u8 = 0x01;
+/// Sensor runs on USB power: the charger holds the cell at ~4.2 V, so
+/// `battery_mv` is the charge voltage, not the state of charge. Gateways that
+/// predate this flag ignore it.
+pub const FLAG_USB_POWER: u8 = 0x02;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -105,6 +110,10 @@ impl Reading {
 
     pub fn sensor_ok(&self) -> bool {
         self.flags & FLAG_SENSOR_ERROR == 0
+    }
+
+    pub fn usb_power(&self) -> bool {
+        self.flags & FLAG_USB_POWER != 0
     }
 
     pub fn temperature_c(&self) -> f32 {
