@@ -118,12 +118,24 @@ impl Sensors {
         None
     }
 
-    /// Powers the DHT22, reads battery while it settles, reads, powers off.
+    /// Powers the DHT22, reads battery at the end of its warm-up, reads,
+    /// powers off.
     pub async fn measure(&mut self, cfg: &NodeConfig) -> Measurement {
         self.dht_power.set_high();
         let warmup_started = Instant::now();
-        let battery_mv = self.battery_mv(cfg).await;
         let warmup = Duration::from_millis(cfg.dht_warmup_ms as u64);
+        // The 100 nF on D0 is partly discharged after a deep-sleep wake and
+        // recharges through the 1 MOhm divider (tau ~50 ms): reading right
+        // after wake gave ~0.1 V low. Sample late in the warm-up instead
+        // (the sampling itself takes ~70 ms), at least BATTERY_SETTLE in.
+        const BATTERY_SETTLE: Duration = Duration::from_millis(500);
+        const SAMPLING: Duration = Duration::from_millis(80);
+        let battery_at = if warmup > BATTERY_SETTLE + SAMPLING { warmup - SAMPLING } else { BATTERY_SETTLE };
+        let elapsed = warmup_started.elapsed();
+        if elapsed < battery_at {
+            Timer::after(battery_at - elapsed).await;
+        }
+        let battery_mv = self.battery_mv(cfg).await;
         let elapsed = warmup_started.elapsed();
         if elapsed < warmup {
             Timer::after(warmup - elapsed).await;
