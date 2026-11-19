@@ -18,6 +18,8 @@ const MAX_LINE: usize = 160;
 /// No SOF frames for this long = cable unplugged / host gone.
 const HOST_GONE_MS: u64 = 2000;
 const POLL_MS: u64 = 20;
+/// Shortest deep sleep after unplugging.
+const MIN_SLEEP_SECS: u64 = 5;
 
 const HELP: &str = "\
 Commands:
@@ -36,6 +38,7 @@ Commands:
   save                    store settings in flash
   defaults                erase saved settings (build defaults after reboot)
   test                    measure and send now
+  adc                     battery ADC diagnostics (D0 per calibration scheme)
   reboot                  restart";
 
 struct Console {
@@ -131,6 +134,11 @@ impl Console {
                 self.send_now().await;
                 self.show();
             }
+            "adc" => {
+                for line in self.sensors.adc_diag(&self.cfg) {
+                    println!("{}", line);
+                }
+            }
             "reboot" => {
                 println!("OK");
                 Timer::after(Duration::from_millis(100)).await;
@@ -180,9 +188,15 @@ pub async fn run(
             last_sof = sof;
             last_sof_change = Instant::now();
         } else if last_sof_change.elapsed() > Duration::from_millis(HOST_GONE_MS) {
-            // On battery now: continue the normal cycle.
+            // On battery now: continue the normal cycle. Sleep only until the
+            // send that was due anyway; a full interval from unplugging left
+            // a gap of up to two intervals in the readings.
             console.state.store();
-            hw::deep_sleep(lpwr, console.cfg.interval_secs as u64, console.cfg.usb_wake);
+            let until_next = console
+                .next_send_at
+                .checked_duration_since(Instant::now())
+                .map_or(0, |d| d.as_secs());
+            hw::deep_sleep(lpwr, until_next.max(MIN_SLEEP_SECS), console.cfg.usb_wake);
         }
 
         while let Ok(byte) = usb.read_byte() {

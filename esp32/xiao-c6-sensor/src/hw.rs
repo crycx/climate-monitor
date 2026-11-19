@@ -7,7 +7,9 @@ use embassy_time::{Duration, Instant, Timer, with_timeout};
 use embedded_dht_rs::dht22::Dht22;
 use esp_hal::{
     Blocking,
-    analog::adc::{Adc, AdcCalCurve, AdcConfig, AdcPin, Attenuation},
+    analog::adc::{
+        Adc, AdcCalBasic, AdcCalCurve, AdcCalLine, AdcCalScheme, AdcCalSource, AdcConfig, AdcPin, Attenuation,
+    },
     delay::Delay,
     gpio::{DriveMode, Flex, Input, InputConfig, Level, Output, OutputConfig, Pull, RtcPinWithResistors},
     peripherals::{ADC1, GPIO0, GPIO1, GPIO2, GPIO3, GPIO14, GPIO21, LPWR, USB_DEVICE, WIFI},
@@ -100,6 +102,65 @@ impl Sensors {
             log_line!("Battery: {} mV out of range, reporting unknown", battery_mv);
             0
         }
+    }
+
+    /// Console `adc`: D0 read through each calibration scheme plus the raw
+    /// code, and the calibration points (eFuse and measured now), to compare
+    /// against a multimeter on D0. Returns `key=value` lines.
+    pub fn adc_diag(&mut self, cfg: &NodeConfig) -> alloc::vec::Vec<alloc::string::String> {
+        use alloc::format;
+        use esp_hal::efuse::{self, AdcCalibUnit};
+
+        const ATTEN: Attenuation = Attenuation::_11dB;
+        const SAMPLES: u32 = 64;
+
+        fn average<CS: AdcCalScheme<ADC1<'static>>>(
+            adc: &mut Adc<'static, ADC1<'static>, Blocking>,
+            pin: &mut AdcPin<GPIO0<'static>, ADC1<'static>, CS>,
+        ) -> u32 {
+            let _ = nb::block!(adc.read_oneshot(pin));
+            let sum: u32 = (0..SAMPLES)
+                .map(|_| nb::block!(adc.read_oneshot(pin)).unwrap_or(0) as u32)
+                .sum();
+            sum / SAMPLES
+        }
+
+        // Extra handles to D0 that read it through other schemes. SAFETY:
+        // `bat_pin` already owns D0 in analog mode on the same channel and
+        // attenuation; these only change how one conversion is calibrated.
+        let mut probe = AdcConfig::<ADC1<'static>>::new();
+        let mut raw = probe.enable_pin(unsafe { GPIO0::steal() }, ATTEN);
+        let mut basic = probe.enable_pin_with_cal::<_, AdcCalBasic<ADC1<'static>>>(unsafe { GPIO0::steal() }, ATTEN);
+        let mut line = probe.enable_pin_with_cal::<_, AdcCalLine<ADC1<'static>>>(unsafe { GPIO0::steal() }, ATTEN);
+
+        let raw_code = average(&mut self.adc, &mut raw);
+        let basic_mv = average(&mut self.adc, &mut basic);
+        let line_mv = average(&mut self.adc, &mut line);
+        let curve_mv = average(&mut self.adc, &mut self.bat_pin);
+        // Calibration points measured now (internal GND / reference), to
+        // compare a cold and a warm chip against the eFuse values.
+        let gnd_now = AdcConfig::<ADC1<'static>>::adc_calibrate(ATTEN, AdcCalSource::Gnd);
+        let ref_now = AdcConfig::<ADC1<'static>>::adc_calibrate(ATTEN, AdcCalSource::Ref);
+
+        let unit = || AdcCalibUnit::ADC1;
+        let opt = |v: Option<u16>| v.map_or(alloc::string::String::from("none"), |v| format!("{}", v));
+        let bat = |mv: u32| (mv as f32 * cfg.battery_divider) as u32;
+        alloc::vec![
+            format!("efuse_cal_version={}", efuse::rtc_calib_version()),
+            format!("efuse_init_code={}", opt(efuse::rtc_calib_init_code(unit(), ATTEN))),
+            format!("efuse_ref_code={}", opt(efuse::rtc_calib_cal_code(unit(), ATTEN))),
+            format!("efuse_ref_mv={}", efuse::rtc_calib_cal_mv(unit(), ATTEN)),
+            format!("init_code_used={}", self.bat_pin.cal_scheme.adc_cal()),
+            format!("gnd_code_now={}", gnd_now),
+            format!("ref_code_now={}", ref_now),
+            format!("d0_raw_code={}", raw_code),
+            format!("d0_basic_mv={}", basic_mv),
+            format!("d0_line_mv={}", line_mv),
+            format!("d0_curve_mv={}", curve_mv),
+            format!("divider={}", cfg.battery_divider),
+            format!("battery_line_mv={}", bat(line_mv)),
+            format!("battery_curve_mv={}", bat(curve_mv)),
+        ]
     }
 
     async fn read_dht22(&mut self) -> Option<(f32, f32)> {
