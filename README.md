@@ -4,6 +4,7 @@ Smart home system for monitoring temperature and humidity using ESP32 + DHT22 se
 ## ESP32 firmware docs
 
 - See `esp32/README.md` for detailed firmware documentation, including shared components and board-specific setup for ESP32-C3 and ESP32-WROOM.
+- New XIAO ESP32C6 battery sensor: first flash over USB, then settings, see [esp32/xiao-c6-sensor/README.md](esp32/xiao-c6-sensor/README.md#new-sensor-first-flash-over-usb). Later firmware updates: GitHub Actions → **Publish XIAO Firmware** → **Run workflow**, then **Install** on the sensor's Firmware entity in Home Assistant.
 - For ESP32-C3 Super Mini boards, the built-in LED may be active-high. In that case use `LED_ACTIVE_HIGH = "1"` in `.cargo/config.toml` or run the firmware with `cargo run --release --features supermini`.
 
 ## Local development

@@ -1,0 +1,89 @@
+name: Publish XIAO Firmware
+
+# Builds esp32/xiao-c6-sensor and publishes it for over-the-air updates
+# (esp32/tools/publish_ota.py). Afterwards each sensor's Firmware entity in
+# Home Assistant shows the new version; press Install there.
+#
+# Needs repository secrets MQTT_HOST, MQTT_USER and MQTT_PASSWORD (the
+# gateways' broker settings). Optional repository variables: MQTT_PORT
+# (default 1883) and MQTT_BASE_TOPIC (default climate_monitor).
+#
+# The build uses only defaults from the code: settings such as the ESP-NOW
+# key and name must be saved on each sensor (config page / console `save`).
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to the MQTT broker (off: build and check only)"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish-xiao-firmware
+  cancel-in-progress: false
+
+env:
+  # Same nightly as the local builds (rustc 2026-04-03); bump deliberately.
+  RUSTUP_TOOLCHAIN: nightly-2026-04-04
+  ESPFLASH_VERSION: 4.3.0
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: esp32/xiao-c6-sensor
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rust-src
+          rustc -V
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: esp32/xiao-c6-sensor -> target
+
+      - name: Install espflash
+        uses: cargo-bins/cargo-binstall@main
+
+      - run: cargo binstall --no-confirm --locked "espflash@$ESPFLASH_VERSION"
+
+      - name: Build
+        run: |
+          # Target and build-std come from the example config (all [env]
+          # defaults there are commented out).
+          cp .cargo/config.toml.example .cargo/config.toml
+          cargo build --release --locked
+
+      - name: Check and publish
+        env:
+          MQTT_HOST: ${{ secrets.MQTT_HOST }}
+          MQTT_USER: ${{ secrets.MQTT_USER }}
+          MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
+          MQTT_PORT: ${{ vars.MQTT_PORT || '1883' }}
+          MQTT_BASE_TOPIC: ${{ vars.MQTT_BASE_TOPIC || 'climate_monitor' }}
+        run: |
+          if [ "${{ inputs.publish }}" = "true" ]; then
+            if [ -z "$MQTT_HOST" ] || [ -z "$MQTT_PASSWORD" ]; then
+              echo "::error::Add the MQTT_HOST, MQTT_USER and MQTT_PASSWORD repository secrets"
+              exit 1
+            fi
+            python3 ../tools/publish_ota.py --host "$MQTT_HOST" --port "$MQTT_PORT" \
+              --user "$MQTT_USER" --base "$MQTT_BASE_TOPIC" --out xiao-c6-sensor.bin
+          else
+            python3 ../tools/publish_ota.py --dry-run --out xiao-c6-sensor.bin
+          fi
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiao-c6-sensor-${{ github.sha }}
+          path: esp32/xiao-c6-sensor/xiao-c6-sensor.bin
+          if-no-files-found: error

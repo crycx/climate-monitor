@@ -120,17 +120,21 @@ def mqtt_publish(sock: socket.socket, topic: str, payload: bytes) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--elf", default=DEFAULT_ELF, help="built firmware (default: the release build)")
-    ap.add_argument("--host", required=True, help="MQTT broker (the gateways' mqtt_host)")
+    ap.add_argument("--host", help="MQTT broker (the gateways' mqtt_host)")
     ap.add_argument("--port", type=int, default=1883)
     ap.add_argument("--user", default="", help="MQTT username")
     ap.add_argument("--base", default="climate_monitor", help="the gateways' mqtt_base_topic")
     ap.add_argument("--allow-dirty", action="store_true",
                     help="publish a '-dirty' build (its version does not identify the code)")
     ap.add_argument("--clear", action="store_true", help="remove the published image")
+    ap.add_argument("--out", help="also write the app image to this file")
+    ap.add_argument("--dry-run", action="store_true", help="build and check only, do not publish")
     args = ap.parse_args()
+    if not args.host and not args.dry_run:
+        ap.error("--host is required (or use --dry-run)")
 
     password = os.environ.get("MQTT_PASSWORD")
-    if password is None and args.user:
+    if password is None and args.user and not args.dry_run:
         password = getpass.getpass(f"MQTT password for {args.user}@{args.host}: ")
 
     image_topic = f"{args.base}/ota/{PROJECT}/image"
@@ -148,6 +152,13 @@ def main() -> None:
         meta = json.dumps({"version": version, "size": len(image), "sha256": sha256},
                           separators=(",", ":")).encode()
         print(f"{PROJECT} {version}: {len(image)} bytes, sha256 {sha256}")
+        if args.out:
+            with open(args.out, "wb") as f:
+                f.write(image)
+            print(f"Image written to {args.out}")
+        if args.dry_run:
+            print("Dry run: not published")
+            return
 
     with socket.create_connection((args.host, args.port), timeout=30) as sock:
         mqtt_connect(sock, f"{args.base}-publish-ota-{os.getpid()}", args.user, password or "")

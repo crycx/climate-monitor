@@ -16,6 +16,49 @@ XIAO ESP32C6 (battery)                     ESP32-C6 Super Mini (USB power)
                                             └─ MQTT → Home Assistant
 ```
 
+## New sensor: first flash over USB
+
+Every new XIAO is flashed once over USB; after that, updates can come over
+the air from Home Assistant (see [Firmware update over the air](#firmware-update-over-the-air)).
+
+1. **Tools (once per computer):** Rust nightly with `rust-src` and the
+   `riscv32imac-unknown-none-elf` target, and `espflash`, as in
+   `esp32/c6/README.md` (sections 1 and 2).
+2. **Build config (once per computer):**
+
+   ```bash
+   cd esp32/xiao-c6-sensor
+   cp .cargo/config.toml.example .cargo/config.toml
+   ```
+
+   The runner line in it must flash the OTA layout:
+   `--partition-table partitions.csv --target-app-partition ota_0 --erase-parts otadata`.
+3. **Flash:** connect the XIAO by USB-C and run `cargo run --release`
+   (add `--port COMx` to the runner if espflash picks the wrong port). The
+   log should start with `Boot: firmware <commit>`. If the board does not
+   show up, hold BOOT while plugging it in.
+4. **Settings, saved on the sensor:** open `esp32/tools/config.html` in
+   Chrome or Edge, **Connect**, set at least the **ESP-NOW key** (same as the
+   gateway's) and the **Name**, then **Save**. Or in a serial terminal:
+
+   ```
+   set key <the gateway's ESPNOW_KEY>
+   set name Elutuba
+   save
+   ```
+
+   They must be saved like this: firmware installed over the air is built
+   without your `config.toml` values, so a key that only exists as a build
+   default would be gone after the first update.
+5. **Check:** `show` lists `key_set=yes` and `firmware=<commit>`; `test`
+   (or **Measure & send now**) ends with `delivered=yes`. In Home
+   Assistant the device "Climate Sensor (<name>)" appears with a
+   **Firmware** entity.
+6. Unplug, connect the battery (and the D0 divider, see Wiring), done.
+
+The gateway (`esp32/c6` or a C3 in gateway mode) needs the OTA
+`partitions.csv` too, flashed the same way once (see its README).
+
 ## Wiring
 
 | XIAO pin | GPIO | Connect to |
@@ -159,8 +202,19 @@ off without the divider: a floating D1 would wake the board at random.
 
 ## Firmware update over the air
 
-Once a sensor runs firmware with OTA support (flashed over USB once with the
-OTA `partitions.csv`), later versions can be installed from Home Assistant:
+Once a sensor runs firmware with OTA support (flashed over USB once, see
+[New sensor](#new-sensor-first-flash-over-usb)), later versions can be
+installed from Home Assistant.
+
+**From GitHub (button):** Actions → **Publish XIAO Firmware** → **Run
+workflow** (pick the branch, normally `main`). It builds the sensor
+firmware from that commit and publishes it to the broker; the image is also
+kept as a workflow artifact. Needs repository secrets `MQTT_HOST`,
+`MQTT_USER` and `MQTT_PASSWORD` (Settings → Secrets and variables →
+Actions), and optionally the variables `MQTT_PORT` and `MQTT_BASE_TOPIC`.
+Untick **publish** to only build and check. Then continue with step 3.
+
+**From your computer:**
 
 1. Commit, then build: `cargo build --release` (the version is the git
    commit; a `-dirty` build is refused, since its version does not identify
