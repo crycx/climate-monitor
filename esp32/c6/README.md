@@ -195,6 +195,13 @@ reading. Once the sensor reports the new value, the gateway clears the
 retained command. The gateway answers every reading with a (possibly empty)
 Config packet; a sensor only adds its offsets to readings after its gateway
 has answered, so older gateways keep working with newer sensors.
+
+The gateway's own DHT22 gets the same three entities on its own HA device
+(`<base>/<device_id>/set/<field>`, interval 10–3600 s). The gateway applies
+them on its next MQTT publish, saves them to flash (same settings as the
+portal's Calibration section) and clears the command; they take effect from
+the next measurement.
+
 A newly received reading jumps straight to that sensor's page for 10 s. A
 sensor's page disappears after it misses ~3 reports.
 

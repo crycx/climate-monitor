@@ -417,16 +417,19 @@ pub async fn rx_task(mut esp_now: EspNow<'static>, own_mac: [u8; 6]) {
 
 /// Remote config HA wants for a sensor (retained `<base>/<device>/set/<field>`
 /// commands), loaded on each MQTT session and sent in the Config reply to the
-/// sensor's next reading.
+/// sensor's next reading. The gateway's own sensor uses it too (main.rs).
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct Desired {
-    temp: Option<i16>,
-    hum: Option<i16>,
-    interval: Option<u16>,
+pub(crate) struct Desired {
+    /// degC * 100
+    pub(crate) temp: Option<i16>,
+    /// % * 100
+    pub(crate) hum: Option<i16>,
+    /// seconds
+    pub(crate) interval: Option<u16>,
 }
 
 impl Desired {
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.temp.is_none() && self.hum.is_none() && self.interval.is_none()
     }
 }
@@ -461,7 +464,7 @@ fn set_desired(mac: &[u8; 6], d: Desired) {
 }
 
 /// HA `number` entities for remote config: (key, name, unit, min, max, step, extra JSON).
-const CONFIG_NUMBERS: [(&str, &str, &str, &str, &str, &str, &str); 3] = [
+pub(crate) const CONFIG_NUMBERS: [(&str, &str, &str, &str, &str, &str, &str); 3] = [
     ("temp_offset", "Temperature offset", "°C", "-20", "20", "0.1", r#","icon":"mdi:thermometer-plus""#),
     ("hum_offset", "Humidity offset", "%", "-20", "20", "0.1", r#","icon":"mdi:water-plus""#),
     ("interval", "Interval", "s", "10", "21600", "10", r#","device_class":"duration""#),
@@ -523,7 +526,7 @@ async fn mqtt_read_packet(
 
 /// Subscribes to `<base>/<device>/set/+` and collects the retained commands
 /// HA left there. None if the broker did not answer the subscribe.
-async fn read_desired(socket: &mut TcpSocket<'_>, filter: &str) -> Option<Desired> {
+pub(crate) async fn read_desired(socket: &mut TcpSocket<'_>, filter: &str) -> Option<Desired> {
     let filter = filter.as_bytes();
     let mut packet: Vec<u8> = Vec::with_capacity(filter.len() + 8);
     packet.push(0x82); // SUBSCRIBE

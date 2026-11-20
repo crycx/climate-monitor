@@ -2045,6 +2045,8 @@ async fn main(spawner: Spawner) {
                             active_wifi_location.as_str(),
                             temp,
                             hum,
+                            config_handle,
+                            config_storage,
                         )
                         .await;
                     }
@@ -2492,6 +2494,8 @@ async fn mqtt_publish_with_discovery(
     wifi_location: &str,
     temp: f32,
     hum: f32,
+    config: &'static Mutex<CriticalSectionRawMutex, AppConfig>,
+    storage: &'static Mutex<CriticalSectionRawMutex, FlashConfigStorage<'static>>,
 ) {
     let host = host.trim();
     if host.is_empty() {
@@ -2637,6 +2641,72 @@ async fn mqtt_publish_with_discovery(
     )
     .await;
 
+    // Remote config for this gateway's own sensor, as HA numbers (same
+    // entities as for ESP-NOW sensors): HA leaves retained commands on
+    // set/<key>; they are applied and saved here, the state is the value in use.
+    let own_topic = |key: &str| format!("{}/{}/{}", base_topic, device_id, key);
+    for (key, name, unit, min, max, step, extra) in espnow_gateway::CONFIG_NUMBERS.iter() {
+        let (min, max, step) = if *key == "interval" {
+            ("10", "3600", "5")
+        } else {
+            (*min, *max, *step)
+        };
+        let payload = format!(
+            r#"{{"name":"{}","unique_id":"{}_{}_{}","command_topic":"{}","state_topic":"{}","min":{},"max":{},"step":{},"mode":"box","unit_of_measurement":"{}","retain":true,"entity_category":"config"{},"device":{}}}"#,
+            name,
+            base_topic,
+            device_id,
+            key,
+            json_escape(own_topic(format!("set/{}", key).as_str()).as_str()),
+            json_escape(own_topic(key).as_str()),
+            min,
+            max,
+            step,
+            unit,
+            extra,
+            device_block,
+        );
+        let _ = embassy_time::with_timeout(
+            Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+            mqtt_publish(
+                &mut socket,
+                format!("{}/number/{}_{}/config", HA_DISCOVERY_PREFIX, device_id, key).as_str(),
+                payload.as_bytes(),
+                true,
+            ),
+        )
+        .await;
+    }
+    let commands = espnow_gateway::read_desired(&mut socket, own_topic("set/+").as_str()).await;
+    let in_use = match commands {
+        Some(d) if !d.is_empty() => apply_own_remote_config(config, storage, &d).await,
+        _ => config.lock().await.clone(),
+    };
+    let states = [
+        ("temp_offset", format!("{:.2}", in_use.temp_offset.trim().parse::<f32>().unwrap_or(-1.7))),
+        ("hum_offset", format!("{:.2}", in_use.hum_offset.trim().parse::<f32>().unwrap_or(-7.0))),
+        ("interval", format!("{}", sensor_interval_secs(&in_use))),
+    ];
+    for (key, value) in states.iter() {
+        let _ = embassy_time::with_timeout(
+            Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+            mqtt_publish(&mut socket, own_topic(key).as_str(), value.as_bytes(), true),
+        )
+        .await;
+    }
+    // Commands are applied (or rejected) now: clear them so they are not
+    // applied again after a later change from the portal or console.
+    if let Some(d) = commands {
+        let pending = [("temp_offset", d.temp.is_some()), ("hum_offset", d.hum.is_some()), ("interval", d.interval.is_some())];
+        for (key, _) in pending.iter().filter(|(_, set)| *set) {
+            let _ = embassy_time::with_timeout(
+                Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+                mqtt_publish(&mut socket, own_topic(format!("set/{}", key).as_str()).as_str(), b"", true),
+            )
+            .await;
+        }
+    }
+
     // Availability + readings (retain to keep last values)
     let _ = embassy_time::with_timeout(
         Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
@@ -2670,6 +2740,57 @@ async fn mqtt_publish_with_discovery(
     socket.close();
     let _ = embassy_time::with_timeout(Duration::from_secs(MQTT_IO_TIMEOUT_SECS), socket.flush()).await;
     log_runtime_line("MQTT: publish cycle done");
+}
+
+/// Applies HA remote config to this gateway's own sensor settings and saves
+/// them to flash. Takes effect from the next measurement. Returns the
+/// settings in use afterwards.
+#[cfg(feature = "wifi")]
+async fn apply_own_remote_config(
+    config: &'static Mutex<CriticalSectionRawMutex, AppConfig>,
+    storage: &'static Mutex<CriticalSectionRawMutex, FlashConfigStorage<'static>>,
+    d: &espnow_gateway::Desired,
+) -> AppConfig {
+    let mut cfg = config.lock().await;
+    let mut next = cfg.clone();
+    let differs = |current: &str, centi: i16| {
+        current
+            .trim()
+            .parse::<f32>()
+            .map_or(true, |v| (v - centi as f32 / 100.0).abs() >= 0.005)
+    };
+    if let Some(v) = d.temp.filter(|v| differs(next.temp_offset.as_str(), *v)) {
+        next.temp_offset = format!("{}", v as f32 / 100.0);
+        log_runtime_line(format!("Remote config: temp_offset = {}", next.temp_offset).as_str());
+    }
+    if let Some(v) = d.hum.filter(|v| differs(next.hum_offset.as_str(), *v)) {
+        next.hum_offset = format!("{}", v as f32 / 100.0);
+        log_runtime_line(format!("Remote config: hum_offset = {}", next.hum_offset).as_str());
+    }
+    if let Some(secs) = d.interval.map(u64::from) {
+        if !(MIN_SENSOR_INTERVAL_SECS..=MAX_SENSOR_INTERVAL_SECS).contains(&secs) {
+            log_runtime_line(
+                format!(
+                    "Remote config: interval {} s rejected ({}-{} s)",
+                    secs, MIN_SENSOR_INTERVAL_SECS, MAX_SENSOR_INTERVAL_SECS
+                )
+                .as_str(),
+            );
+        } else if secs != sensor_interval_secs(&next) {
+            next.sensor_interval_secs = format!("{}", secs);
+            log_runtime_line(format!("Remote config: interval = {} s", secs).as_str());
+        }
+    }
+    if next == *cfg {
+        return next;
+    }
+    *cfg = next.clone();
+    drop(cfg);
+    match storage.lock().await.store_config(&next).await {
+        Ok(()) => log_runtime_line("Remote config: saved"),
+        Err(e) => log_runtime_line(format!("Remote config: not saved: {}", e).as_str()),
+    }
+    next
 }
 
 #[cfg(feature = "wifi")]

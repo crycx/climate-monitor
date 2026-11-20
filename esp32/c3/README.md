@@ -157,6 +157,11 @@ The same firmware has three modes, chosen with the **transport** setting
 | `espnow` | ESP-NOW → gateway (`esp32/c6` or a C3 in `gateway` mode) → MQTT → Home Assistant | no WiFi association; needs `espnow_key` equal to the gateway's key |
 | `gateway` | like `wifi`, and also receives ESP-NOW sensors and forwards them to MQTT and, per sensor, to the backend | needs `espnow_key` (same as the sensors); keep `deep_sleep off` |
 
+With MQTT on (`wifi` and `gateway`), the board's own HA device also has
+**Temperature offset**, **Humidity offset** and **Interval** numbers for its
+own DHT22: a change in HA is applied on the next publish and saved to flash,
+like the portal's Calibration section (see `esp32/c6/README.md`).
+
 ### Gateway mode
 
 Works like the `esp32/c6` gateway (see its README), without the OLED sensor
