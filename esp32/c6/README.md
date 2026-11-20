@@ -186,6 +186,15 @@ charger holds the cell at ~4.2 V, so Battery % then reads ~100 % regardless of
 the real level; Battery low stays off and the OLED and Nextion show `USB`
 instead of the battery %. **Battery full** turns on after an hour on USB at
 ≥ 4.15 V (see `BatteryFullTracker` in `shared/espnow_packet.rs`).
+
+**Remote config:** sensors that support it get **Temperature offset**,
+**Humidity offset** and **Interval** as HA `number` entities. HA publishes a
+change retained to `<base>/espnow_<mac>/set/<field>`; the gateway reads these
+on each MQTT session and sends them in the Config reply to the sensor's next
+reading. Once the sensor reports the new value, the gateway clears the
+retained command. The gateway answers every reading with a (possibly empty)
+Config packet; a sensor only adds its offsets to readings after its gateway
+has answered, so older gateways keep working with newer sensors.
 A newly received reading jumps straight to that sensor's page for 10 s. A
 sensor's page disappears after it misses ~3 reports.
 

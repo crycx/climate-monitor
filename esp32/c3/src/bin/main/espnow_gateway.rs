@@ -26,7 +26,7 @@ use embassy_time::{Duration, Instant};
 use esp_radio::esp_now::{EspNow, EspNowWifiInterface, PeerInfo};
 
 use crate::app_config::{AppConfig, ESPNOW_KEY_MIN_LEN};
-use crate::espnow_packet::{self, Ack, DecodeError, Packet, Reading};
+use crate::espnow_packet::{self, Ack, ConfigMsg, DecodeError, Packet, Reading};
 use crate::log_runtime_line;
 
 const QUEUE_DEPTH: usize = 8;
@@ -180,6 +180,62 @@ async fn send_ack(esp_now: &mut EspNow<'static>, key: &[u8], own_mac: &[u8; 6], 
     }
 }
 
+/// Answers every reading with the pending remote config (`set = 0` if none),
+/// which also tells the sensor this gateway supports remote config.
+async fn send_config(esp_now: &mut EspNow<'static>, key: &[u8], own_mac: &[u8; 6], dst: &[u8; 6], r: &Reading) {
+    let d = desired_for(dst);
+    let mut msg = ConfigMsg {
+        boot_id: r.boot_id,
+        seq: r.seq,
+        ..ConfigMsg::default()
+    };
+    if let Some(v) = d.temp {
+        msg.set |= espnow_packet::SET_TEMP_OFFSET;
+        msg.temp_offset_centi = v;
+    }
+    if let Some(v) = d.hum {
+        msg.set |= espnow_packet::SET_HUM_OFFSET;
+        msg.hum_offset_centi = v;
+    }
+    if let Some(v) = d.interval {
+        msg.set |= espnow_packet::SET_INTERVAL;
+        msg.interval_s = v;
+    }
+    if msg.set != 0 {
+        log_runtime_line(format!("ESP-NOW {}: sending remote config (set 0x{:02x})", mac_hex(dst), msg.set).as_str());
+    }
+    let mut buf = [0u8; espnow_packet::MAX_PACKET_LEN];
+    let len = espnow_packet::encode_config(key, own_mac, &msg, &mut buf);
+
+    // Unicast needs a peer entry. Remove it afterwards so the 20-entry peer
+    // table never fills up with sensors that only talk to us once.
+    let added = if esp_now.peer_exists(dst) {
+        false
+    } else {
+        match esp_now.add_peer(PeerInfo {
+            interface: EspNowWifiInterface::Sta,
+            peer_address: *dst,
+            lmk: None,
+            channel: None,
+            encrypt: false,
+        }) {
+            Ok(()) => true,
+            Err(e) => {
+                log_runtime_line(format!("ESP-NOW: add_peer for config failed: {:?}", e).as_str());
+                return;
+            }
+        }
+    };
+
+    if let Err(e) = esp_now.send_async(dst, &buf[..len]).await {
+        log_runtime_line(format!("ESP-NOW: config to {} failed: {:?}", mac_hex(dst), e).as_str());
+    }
+
+    if added {
+        let _ = esp_now.remove_peer(dst);
+    }
+}
+
 #[embassy_executor::task]
 pub async fn rx_task(mut esp_now: EspNow<'static>, own_mac: [u8; 6], key: String) {
     let key = key.as_bytes();
@@ -196,6 +252,7 @@ pub async fn rx_task(mut esp_now: EspNow<'static>, own_mac: [u8; 6], key: String
                 if wants_ack {
                     send_ack(&mut esp_now, key, &own_mac, &src, &reading).await;
                 }
+                send_config(&mut esp_now, key, &own_mac, &src, &reading).await;
                 if !seen.accept(&src, reading.boot_id, reading.seq) {
                     continue;
                 }
@@ -211,7 +268,7 @@ pub async fn rx_task(mut esp_now: EspNow<'static>, own_mac: [u8; 6], key: String
                     log_runtime_line("ESP-NOW: queue full, dropping reading");
                 }
             }
-            Ok(Packet::Ack(_)) => {}
+            Ok(Packet::Ack(_) | Packet::Config(_)) => {}
             Err(DecodeError::BadTag) => {
                 log_runtime_line(
                     format!(
@@ -225,6 +282,167 @@ pub async fn rx_task(mut esp_now: EspNow<'static>, own_mac: [u8; 6], key: String
             Err(_) => {}
         }
     }
+}
+
+/// Remote config HA wants for a sensor (retained `<base>/<device>/set/<field>`
+/// commands), loaded on each MQTT session and sent in the Config reply to the
+/// sensor's next reading.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Desired {
+    temp: Option<i16>,
+    hum: Option<i16>,
+    interval: Option<u16>,
+}
+
+impl Desired {
+    fn is_empty(&self) -> bool {
+        self.temp.is_none() && self.hum.is_none() && self.interval.is_none()
+    }
+}
+
+static DESIRED: critical_section::Mutex<RefCell<[Option<([u8; 6], Desired)>; MAX_TRACKED_SENSORS]>> =
+    critical_section::Mutex::new(RefCell::new([None; MAX_TRACKED_SENSORS]));
+
+fn desired_for(mac: &[u8; 6]) -> Desired {
+    critical_section::with(|cs| {
+        DESIRED
+            .borrow_ref(cs)
+            .iter()
+            .flatten()
+            .find(|(m, _)| m == mac)
+            .map(|(_, d)| *d)
+            .unwrap_or_default()
+    })
+}
+
+fn set_desired(mac: &[u8; 6], d: Desired) {
+    critical_section::with(|cs| {
+        let mut table = DESIRED.borrow_ref_mut(cs);
+        if let Some(slot) = table.iter_mut().find(|e| matches!(e, Some((m, _)) if m == mac)) {
+            *slot = if d.is_empty() { None } else { Some((*mac, d)) };
+        } else if !d.is_empty() {
+            match table.iter_mut().find(|e| e.is_none()) {
+                Some(slot) => *slot = Some((*mac, d)),
+                None => table[0] = Some((*mac, d)),
+            }
+        }
+    });
+}
+
+/// HA `number` entities for remote config: (key, name, unit, min, max, step, extra JSON).
+const CONFIG_NUMBERS: [(&str, &str, &str, &str, &str, &str, &str); 3] = [
+    ("temp_offset", "Temperature offset", "°C", "-20", "20", "0.1", r#","icon":"mdi:thermometer-plus""#),
+    ("hum_offset", "Humidity offset", "%", "-20", "20", "0.1", r#","icon":"mdi:water-plus""#),
+    ("interval", "Interval", "s", "10", "21600", "10", r#","device_class":"duration""#),
+];
+
+/// Centi-units from an HA number command ("-0.5", "300", "300.0").
+fn parse_centi(payload: &[u8], limit: f32) -> Option<i32> {
+    let v: f32 = core::str::from_utf8(payload).ok()?.trim().parse().ok()?;
+    if !v.is_finite() || v.abs() > limit {
+        return None;
+    }
+    let scaled = v * 100.0;
+    Some((if scaled >= 0.0 { scaled + 0.5 } else { scaled - 0.5 }) as i32)
+}
+
+async fn read_exact_within(socket: &mut TcpSocket<'_>, buf: &mut [u8], timeout: Duration) -> Option<()> {
+    let mut off = 0;
+    while off < buf.len() {
+        let n = embassy_time::with_timeout(timeout, socket.read(&mut buf[off..])).await.ok()?.ok()?;
+        if n == 0 {
+            return None;
+        }
+        off += n;
+    }
+    Some(())
+}
+
+/// Reads one MQTT packet: (fixed header byte, body length in `body`).
+/// `first_byte_wait` bounds the idle wait; None on timeout, close or a body
+/// larger than `body` (we only expect tiny packets here).
+async fn mqtt_read_packet(
+    socket: &mut TcpSocket<'_>,
+    body: &mut [u8],
+    first_byte_wait: Duration,
+) -> Option<(u8, usize)> {
+    let io = Duration::from_secs(crate::MQTT_IO_TIMEOUT_SECS);
+    let mut b = [0u8; 1];
+    read_exact_within(socket, &mut b, first_byte_wait).await?;
+    let kind = b[0];
+    let mut len = 0usize;
+    let mut shift = 0;
+    loop {
+        read_exact_within(socket, &mut b, io).await?;
+        len |= ((b[0] & 0x7f) as usize) << shift;
+        if b[0] & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+        if shift > 21 {
+            return None;
+        }
+    }
+    if len > body.len() {
+        return None;
+    }
+    read_exact_within(socket, &mut body[..len], io).await?;
+    Some((kind, len))
+}
+
+/// Subscribes to `<base>/<device>/set/+` and collects the retained commands
+/// HA left there. None if the broker did not answer the subscribe.
+async fn read_desired(socket: &mut TcpSocket<'_>, filter: &str) -> Option<Desired> {
+    let filter = filter.as_bytes();
+    let mut packet: Vec<u8> = Vec::with_capacity(filter.len() + 8);
+    packet.push(0x82); // SUBSCRIBE
+    crate::encode_remaining_length(&mut packet, 2 + 2 + filter.len() + 1);
+    packet.extend_from_slice(&[0x00, 0x01]); // packet id 1
+    packet.push((filter.len() >> 8) as u8);
+    packet.push(filter.len() as u8);
+    packet.extend_from_slice(filter);
+    packet.push(0x00); // QoS 0
+    crate::socket_write_all(socket, &packet).await.ok()?;
+
+    let mut desired = Desired::default();
+    let mut subscribed = false;
+    let mut body = [0u8; 160];
+    // Retained messages arrive right around the SUBACK: stop after a short idle.
+    loop {
+        let wait = if subscribed {
+            Duration::from_millis(300)
+        } else {
+            Duration::from_secs(crate::MQTT_IO_TIMEOUT_SECS)
+        };
+        let Some((kind, len)) = mqtt_read_packet(socket, &mut body, wait).await else {
+            break;
+        };
+        match kind >> 4 {
+            9 => subscribed = true,
+            3 if len >= 2 => {
+                let topic_len = ((body[0] as usize) << 8) | body[1] as usize;
+                // QoS 0 delivery: no packet id between topic and payload.
+                if 2 + topic_len > len || kind & 0x06 != 0 {
+                    continue;
+                }
+                let topic = core::str::from_utf8(&body[2..2 + topic_len]).unwrap_or("");
+                let payload = &body[2 + topic_len..len];
+                match topic.rsplit('/').next().unwrap_or("") {
+                    "temp_offset" => desired.temp = parse_centi(payload, 20.0).map(|v| v as i16),
+                    "hum_offset" => desired.hum = parse_centi(payload, 20.0).map(|v| v as i16),
+                    "interval" => {
+                        desired.interval = parse_centi(payload, 21600.0)
+                            .map(|v| (v + 50) / 100)
+                            .filter(|s| (10..=21600).contains(s))
+                            .map(|s| s as u16)
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    subscribed.then_some(desired)
 }
 
 struct MqttSettings {
@@ -362,7 +580,8 @@ pub async fn forward_task(
             continue;
         }
         if let Some(settings) = mqtt_settings(config).await {
-            let name_hash = fnv1a(r.name());
+            // Re-announce once the sensor starts reporting config (adds the numbers).
+            let name_hash = fnv1a(r.name()) ^ if r.has_config() { 0x9E37_79B9 } else { 0 };
             let needs_discovery = !announced.contains(&item.mac, name_hash);
             if publish(*stack, &settings, &item, needs_discovery, full).await && needs_discovery {
                 announced.insert(&item.mac, name_hash);
@@ -465,6 +684,12 @@ async fn publish(
 
     let topic = |key: &str| format!("{}/{}/{}", s.base_topic, device_id, key);
     let r = &item.reading;
+
+    // Remote config: pick up HA's retained commands for this sensor; the
+    // Config reply to its next reading carries them.
+    if let Some(d) = read_desired(&mut socket, topic("set/+").as_str()).await {
+        set_desired(&item.mac, d);
+    }
 
     if discovery {
         let name = r.name().trim();
@@ -585,6 +810,38 @@ async fn publish(
             true,
         ))
         .await;
+        if r.has_config() {
+            // Remote config as HA numbers: HA publishes changes retained to
+            // set/<key>; the state is what the sensor reports it uses.
+            for (key, name, unit, min, max, step, extra) in CONFIG_NUMBERS.iter() {
+                let config_topic = format!(
+                    "{}/number/{}_{}/config",
+                    crate::HA_DISCOVERY_PREFIX, device_id, key
+                );
+                let payload = format!(
+                    r#"{{"name":"{}","unique_id":"{}_{}_{}","command_topic":"{}","state_topic":"{}","min":{},"max":{},"step":{},"mode":"box","unit_of_measurement":"{}","retain":true,"entity_category":"config"{},"device":{}}}"#,
+                    name,
+                    s.base_topic,
+                    device_id,
+                    key,
+                    crate::json_escape(topic(format!("set/{}", key).as_str()).as_str()),
+                    crate::json_escape(topic(key).as_str()),
+                    min,
+                    max,
+                    step,
+                    unit,
+                    extra,
+                    device_block,
+                );
+                let _ = with_io_timeout(crate::mqtt_publish(
+                    &mut socket,
+                    config_topic.as_str(),
+                    payload.as_bytes(),
+                    true,
+                ))
+                .await;
+            }
+        }
     }
 
     let mut values: [(&str, Option<String>); 8] = [
@@ -618,6 +875,44 @@ async fn publish(
             ))
             .await;
         }
+    }
+    if r.has_config() {
+        let states = [
+            ("temp_offset", format!("{:.1}", r.temp_offset_centi as f32 / 100.0)),
+            ("hum_offset", format!("{:.1}", r.hum_offset_centi as f32 / 100.0)),
+            ("interval", format!("{}", r.interval_s)),
+        ];
+        for (key, value) in states.iter() {
+            let _ = with_io_timeout(crate::mqtt_publish(&mut socket, topic(key).as_str(), value.as_bytes(), true)).await;
+        }
+        // A command the sensor now reports as applied is done: clear the
+        // retained command, so a later change made on the sensor itself
+        // (console, portal) is not overwritten again.
+        let mut d = desired_for(&item.mac);
+        let mut done: [Option<&str>; 3] = [None; 3];
+        if d.temp == Some(r.temp_offset_centi) {
+            d.temp = None;
+            done[0] = Some("temp_offset");
+        }
+        if d.hum == Some(r.hum_offset_centi) {
+            d.hum = None;
+            done[1] = Some("hum_offset");
+        }
+        if d.interval == Some(r.interval_s) {
+            d.interval = None;
+            done[2] = Some("interval");
+        }
+        for key in done.iter().flatten() {
+            let _ = with_io_timeout(crate::mqtt_publish(
+                &mut socket,
+                topic(format!("set/{}", key).as_str()).as_str(),
+                b"",
+                true,
+            ))
+            .await;
+            log_runtime_line(format!("ESP-NOW {}: remote {} applied", mac_hex(&item.mac), key).as_str());
+        }
+        set_desired(&item.mac, d);
     }
     // Not retained: HA stamps "Last seen" with the arrival time (see last_seen_discovery).
     let _ = with_io_timeout(crate::mqtt_publish(&mut socket, topic("last_seen").as_str(), b"1", false)).await;

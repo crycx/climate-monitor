@@ -20,9 +20,12 @@
 //!   16..18  battery_mv   u16  0 = unknown
 //!   18..20  interval_s   u16  sensor's sleep interval
 //!   20      flags        u8   bit0 = sensor read failed,
-//!                               bit1 = on USB power (battery charging)
+//!                               bit1 = on USB power (battery charging),
+//!                               bit2 = config trailer present (FLAG_CONFIG)
 //!   21      name_len     u8   0..=MAX_NAME_LEN
 //!   22..    name         UTF-8, name_len bytes
+//!   ..+2    temp_offset  i16  degC * 100 } only with FLAG_CONFIG: the
+//!   ..+2    hum_offset   i16  % * 100    } sensor's current offsets
 //!   ..+8    tag
 //!
 //! Ack
@@ -31,7 +34,23 @@
 //!   8..12   seq          echoed from the reading
 //!   12      channel      gateway WiFi channel
 //!   13..21  tag
+//!
+//! Config (gateway -> sensor, reply to every reading)
+//!   0..4    magic, version, kind = 4
+//!   4..8    boot_id      echoed from the reading
+//!   8..12   seq          echoed from the reading
+//!   12      set          u8   bit0 temp_offset, bit1 hum_offset, bit2 interval
+//!   13..15  temp_offset  i16  degC * 100
+//!   15..17  hum_offset   i16  % * 100
+//!   17..19  interval_s   u16
+//!   19..27  tag
 //! ```
+//!
+//! Remote config: the gateway answers each reading with a Config packet,
+//! with `set = 0` when nothing is pending. A sensor sets FLAG_CONFIG (and
+//! appends its offsets) only after its current gateway has answered, so
+//! gateways that predate Config, whose decoder checks the exact length,
+//! keep accepting its readings.
 
 #![allow(dead_code)]
 
@@ -45,14 +64,24 @@ pub const VERSION: u8 = 1;
 pub const TAG_LEN: usize = 8;
 pub const MAX_NAME_LEN: usize = 24;
 const READING_HEADER_LEN: usize = 22;
+const CONFIG_TRAILER_LEN: usize = 4;
 const ACK_BODY_LEN: usize = 13;
-pub const MAX_PACKET_LEN: usize = READING_HEADER_LEN + MAX_NAME_LEN + TAG_LEN;
+const CONFIG_BODY_LEN: usize = 19;
+pub const MAX_PACKET_LEN: usize = READING_HEADER_LEN + MAX_NAME_LEN + CONFIG_TRAILER_LEN + TAG_LEN;
 
 pub const FLAG_SENSOR_ERROR: u8 = 0x01;
 /// Sensor runs on USB power: the charger holds the cell at ~4.2 V, so
 /// `battery_mv` is the charge voltage, not the state of charge. Gateways that
 /// predate this flag ignore it.
 pub const FLAG_USB_POWER: u8 = 0x02;
+/// The reading carries the sensor's offsets (config trailer) and the sensor
+/// applies [`ConfigMsg`] replies.
+pub const FLAG_CONFIG: u8 = 0x04;
+
+/// [`ConfigMsg::set`] bits.
+pub const SET_TEMP_OFFSET: u8 = 0x01;
+pub const SET_HUM_OFFSET: u8 = 0x02;
+pub const SET_INTERVAL: u8 = 0x04;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -63,6 +92,8 @@ pub enum Kind {
     Discover = 2,
     /// Gateway reply to a [`Kind::Discover`] packet.
     Ack = 3,
+    /// Gateway reply to every reading: pending remote config (may be empty).
+    Config = 4,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -74,6 +105,10 @@ pub struct Reading {
     pub battery_mv: u16,
     pub interval_s: u16,
     pub flags: u8,
+    /// Only meaningful with [`FLAG_CONFIG`].
+    pub temp_offset_centi: i16,
+    /// Only meaningful with [`FLAG_CONFIG`].
+    pub hum_offset_centi: i16,
     name: [u8; MAX_NAME_LEN],
     name_len: u8,
 }
@@ -88,6 +123,8 @@ impl Reading {
             battery_mv: 0,
             interval_s: 0,
             flags: 0,
+            temp_offset_centi: 0,
+            hum_offset_centi: 0,
             name: [0; MAX_NAME_LEN],
             name_len: 0,
         }
@@ -112,6 +149,10 @@ impl Reading {
         self.flags & FLAG_SENSOR_ERROR == 0
     }
 
+    pub fn has_config(&self) -> bool {
+        self.flags & FLAG_CONFIG != 0
+    }
+
     pub fn usb_power(&self) -> bool {
         self.flags & FLAG_USB_POWER != 0
     }
@@ -132,10 +173,23 @@ pub struct Ack {
     pub channel: u8,
 }
 
+/// Remote config for one sensor, sent by the gateway as the reply to a
+/// reading. Only fields whose bit is set in `set` are meant to be applied.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConfigMsg {
+    pub boot_id: u32,
+    pub seq: u32,
+    pub set: u8,
+    pub temp_offset_centi: i16,
+    pub hum_offset_centi: i16,
+    pub interval_s: u16,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Packet {
     Reading { reading: Reading, wants_ack: bool },
     Ack(Ack),
+    Config(ConfigMsg),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,7 +240,7 @@ pub fn encode_reading(
     r: &Reading,
     out: &mut [u8; MAX_PACKET_LEN],
 ) -> usize {
-    debug_assert!(kind != Kind::Ack);
+    debug_assert!(kind == Kind::Reading || kind == Kind::Discover);
     write_header(out, kind);
     out[4..8].copy_from_slice(&r.boot_id.to_le_bytes());
     out[8..12].copy_from_slice(&r.seq.to_le_bytes());
@@ -198,7 +252,30 @@ pub fn encode_reading(
     let name_len = r.name_len as usize;
     out[21] = r.name_len;
     out[READING_HEADER_LEN..READING_HEADER_LEN + name_len].copy_from_slice(&r.name[..name_len]);
-    append_tag(key, src_mac, out, READING_HEADER_LEN + name_len)
+    let mut body_len = READING_HEADER_LEN + name_len;
+    if r.has_config() {
+        out[body_len..body_len + 2].copy_from_slice(&r.temp_offset_centi.to_le_bytes());
+        out[body_len + 2..body_len + 4].copy_from_slice(&r.hum_offset_centi.to_le_bytes());
+        body_len += CONFIG_TRAILER_LEN;
+    }
+    append_tag(key, src_mac, out, body_len)
+}
+
+/// Encodes a remote-config reply. Returns the number of bytes written to `out`.
+pub fn encode_config(
+    key: &[u8],
+    src_mac: &[u8; 6],
+    msg: &ConfigMsg,
+    out: &mut [u8; MAX_PACKET_LEN],
+) -> usize {
+    write_header(out, Kind::Config);
+    out[4..8].copy_from_slice(&msg.boot_id.to_le_bytes());
+    out[8..12].copy_from_slice(&msg.seq.to_le_bytes());
+    out[12] = msg.set;
+    out[13..15].copy_from_slice(&msg.temp_offset_centi.to_le_bytes());
+    out[15..17].copy_from_slice(&msg.hum_offset_centi.to_le_bytes());
+    out[17..19].copy_from_slice(&msg.interval_s.to_le_bytes());
+    append_tag(key, src_mac, out, CONFIG_BODY_LEN)
 }
 
 /// Encodes an acknowledgement. Returns the number of bytes written to `out`.
@@ -236,7 +313,9 @@ pub fn decode(key: &[u8], src_mac: &[u8; 6], data: &[u8]) -> Result<Packet, Deco
                 return Err(DecodeError::TooShort);
             }
             let name_len = data[21] as usize;
-            if name_len > MAX_NAME_LEN || data.len() != READING_HEADER_LEN + name_len + TAG_LEN {
+            let flags = data[20];
+            let trailer = if flags & FLAG_CONFIG != 0 { CONFIG_TRAILER_LEN } else { 0 };
+            if name_len > MAX_NAME_LEN || data.len() != READING_HEADER_LEN + name_len + trailer + TAG_LEN {
                 return Err(DecodeError::BadLength);
             }
             verify_tag(key, src_mac, data)?;
@@ -248,10 +327,17 @@ pub fn decode(key: &[u8], src_mac: &[u8; 6], data: &[u8]) -> Result<Packet, Deco
                 hum_centi: u16_at(14),
                 battery_mv: u16_at(16),
                 interval_s: u16_at(18),
-                flags: data[20],
+                flags,
+                temp_offset_centi: 0,
+                hum_offset_centi: 0,
                 name: [0; MAX_NAME_LEN],
                 name_len: 0,
             };
+            if trailer != 0 {
+                let at = READING_HEADER_LEN + name_len;
+                reading.temp_offset_centi = u16_at(at) as i16;
+                reading.hum_offset_centi = u16_at(at + 2) as i16;
+            }
             let name = &data[READING_HEADER_LEN..READING_HEADER_LEN + name_len];
             // Invalid UTF-8 names are dropped rather than rejecting the reading.
             if let Ok(name) = core::str::from_utf8(name) {
@@ -271,6 +357,20 @@ pub fn decode(key: &[u8], src_mac: &[u8; 6], data: &[u8]) -> Result<Packet, Deco
                 boot_id: u32_at(4),
                 seq: u32_at(8),
                 channel: data[12],
+            }))
+        }
+        4 => {
+            if data.len() != CONFIG_BODY_LEN + TAG_LEN {
+                return Err(DecodeError::BadLength);
+            }
+            verify_tag(key, src_mac, data)?;
+            Ok(Packet::Config(ConfigMsg {
+                boot_id: u32_at(4),
+                seq: u32_at(8),
+                set: data[12],
+                temp_offset_centi: u16_at(13) as i16,
+                hum_offset_centi: u16_at(15) as i16,
+                interval_s: u16_at(17),
             }))
         }
         _ => Err(DecodeError::UnknownKind),

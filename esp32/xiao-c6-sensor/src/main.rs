@@ -169,7 +169,17 @@ async fn main(spawner: Spawner) {
     let mut state = hw::NodeState::load_or_init();
     let measurement = hw::measure(&cfg, &mut sensors, false).await;
     let mut radio = hw::Radio::start(peripherals.WIFI, rf);
-    hw::send(&cfg, &measurement, &mut radio, &mut state).await;
+    let sent = hw::send(&cfg, &measurement, &mut radio, &mut state).await;
+    // Remote config from Home Assistant (via the gateway): applies from the
+    // next cycle on; a new interval already applies to this sleep.
+    let mut cfg = cfg;
+    if let Some(msg) = sent.config {
+        if hw::apply_remote_config(&mut cfg, &msg) {
+            if let Err(e) = store.save(&cfg) {
+                log_line!("Remote config: not saved: {}", e);
+            }
+        }
+    }
     log_line!(
         "Awake {} ms, sleeping {} s",
         awake_since.elapsed().as_millis(),

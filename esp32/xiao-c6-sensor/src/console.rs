@@ -83,9 +83,20 @@ impl Console {
     }
 
     async fn send_now(&mut self) {
-        let result =
+        let (measurement, sent) =
             hw::measure_and_send(&self.cfg, &mut self.sensors, &mut self.radio, &mut self.state, true).await;
-        self.last = Some(result);
+        if let Some(msg) = sent.config {
+            // Applied to the saved settings (and the working copy), so
+            // unsaved console edits are not written by a remote change.
+            if hw::apply_remote_config(&mut self.saved, &msg) {
+                hw::apply_remote_config(&mut self.cfg, &msg);
+                match self.store.save(&self.saved) {
+                    Ok(()) => println!("note=remote config applied and saved"),
+                    Err(e) => println!("warning=remote config not saved: {}", e),
+                }
+            }
+        }
+        self.last = Some((measurement, sent.delivered));
         self.next_send_at = Instant::now() + Duration::from_secs(self.cfg.interval_secs as u64);
     }
 

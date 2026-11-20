@@ -89,6 +89,15 @@ closes after 5 minutes without activity so it cannot drain the battery.
 
 On a USB charger (no computer) the sensor just runs normally.
 
+**From Home Assistant (no cable):** the sensor's device page has
+**Temperature offset**, **Humidity offset** and **Interval** (config
+entities). A change is picked up by the gateway and sent with its reply to
+the sensor's next reading; the sensor validates and saves it, and the HA
+value updates once the sensor reports it back, so allow up to two intervals.
+It follows the sensor between gateways (the command is retained in MQTT per
+sensor). Needs gateways built with remote config; with an older gateway the
+sensor just keeps its settings.
+
 ## Build & flash
 
 Same toolchain as the other boards (nightly + `riscv32imac-unknown-none-elf`,

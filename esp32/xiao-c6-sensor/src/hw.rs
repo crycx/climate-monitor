@@ -23,7 +23,7 @@ use esp_radio::esp_now::{BROADCAST_ADDRESS, EspNow, EspNowWifiInterface, PeerInf
 use esp_radio::wifi::WifiController;
 
 use crate::config::NodeConfig;
-use crate::espnow_packet::{self, Kind, MAX_PACKET_LEN, Packet, Reading};
+use crate::espnow_packet::{self, ConfigMsg, Kind, MAX_PACKET_LEN, Packet, Reading};
 use crate::log_line;
 
 /// DHT22 needs >= 2 s between conversions.
@@ -33,6 +33,10 @@ const UNICAST_ATTEMPTS: u8 = 3;
 /// Generous because the gateway answers from the same executor that runs its
 /// HTTPS/TLS work, which can delay the ack. Only paid while searching.
 const ACK_WAIT_MS: u64 = 150;
+/// Wait for the gateway's Config reply after a delivered reading. A current
+/// gateway answers within a few ms (the wait ends then); only gateways that
+/// predate remote config cost the full wait.
+const CONFIG_WAIT_MS: u64 = 30;
 const MAX_CHANNEL: u8 = 13;
 /// Valid LiPo range; anything else means no divider / floating pin.
 const BATTERY_MV_RANGE: core::ops::RangeInclusive<u32> = 2500..=4500;
@@ -261,7 +265,7 @@ impl Radio {
 // ── State kept in RTC fast memory across deep sleep ─────────────────────────
 // `persistent` statics are zeroed on power-on only, not on deep-sleep wake.
 
-const STATE_MAGIC: u32 = 0x434D_4E31; // "CMN1"
+const STATE_MAGIC: u32 = 0x434D_4E32; // "CMN2"
 
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
 static mut RTC_MAGIC: u32 = 0;
@@ -273,6 +277,8 @@ static mut RTC_SEQ: u32 = 0;
 static mut RTC_CHANNEL: u8 = 0;
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
 static mut RTC_GATEWAY: [u8; 6] = [0; 6];
+#[esp_hal::ram(unstable(rtc_fast, persistent))]
+static mut RTC_GATEWAY_CONFIG: u8 = 0;
 
 pub struct NodeState {
     pub boot_id: u32,
@@ -280,6 +286,9 @@ pub struct NodeState {
     /// 0 = gateway unknown, search on next send.
     pub channel: u8,
     pub gateway: [u8; 6],
+    /// The current gateway answers with Config packets, so readings may carry
+    /// the config trailer (older gateways reject it).
+    pub gateway_config: bool,
 }
 
 impl NodeState {
@@ -292,6 +301,7 @@ impl NodeState {
                     seq: RTC_SEQ,
                     channel: RTC_CHANNEL,
                     gateway: RTC_GATEWAY,
+                    gateway_config: RTC_GATEWAY_CONFIG != 0,
                 };
             }
         }
@@ -301,6 +311,7 @@ impl NodeState {
             seq: 0,
             channel: 0,
             gateway: [0; 6],
+            gateway_config: false,
         }
     }
 
@@ -311,6 +322,7 @@ impl NodeState {
             RTC_SEQ = self.seq;
             RTC_CHANNEL = self.channel;
             RTC_GATEWAY = self.gateway;
+            RTC_GATEWAY_CONFIG = self.gateway_config as u8;
             RTC_MAGIC = STATE_MAGIC;
         }
     }
@@ -350,6 +362,66 @@ async fn wait_for_ack(esp_now: &mut EspNow<'static>, key: &[u8], reading: &Readi
     }
 }
 
+/// The gateway's Config reply to `reading`, if it answers in time.
+async fn wait_for_config(
+    esp_now: &mut EspNow<'static>,
+    key: &[u8],
+    gateway: &[u8; 6],
+    reading: &Reading,
+) -> Option<ConfigMsg> {
+    let deadline = Instant::now() + Duration::from_millis(CONFIG_WAIT_MS);
+    loop {
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        let rx = with_timeout(remaining, esp_now.receive_async()).await.ok()?;
+        let src = rx.info.src_address;
+        if &src != gateway {
+            continue;
+        }
+        if let Ok(Packet::Config(msg)) = espnow_packet::decode(key, &src, rx.data()) {
+            if msg.boot_id == reading.boot_id && msg.seq == reading.seq {
+                return Some(msg);
+            }
+        }
+    }
+}
+
+/// Applies the fields set in a gateway Config to `cfg`, with the same
+/// validation as the console. Returns true if anything changed.
+pub fn apply_remote_config(cfg: &mut NodeConfig, msg: &ConfigMsg) -> bool {
+    fn apply(cfg: &mut NodeConfig, field: &str, value: alloc::string::String) -> bool {
+        match cfg.set(field, &value) {
+            Ok(()) => {
+                log_line!("Remote config: {} = {}", field, value);
+                true
+            }
+            Err(e) => {
+                log_line!("Remote config: {} rejected: {}", field, e);
+                false
+            }
+        }
+    }
+    let mut changed = false;
+    if msg.set & espnow_packet::SET_TEMP_OFFSET != 0 {
+        let v = msg.temp_offset_centi as f32 / 100.0;
+        if (v - cfg.temp_offset).abs() >= 0.005 {
+            changed |= apply(cfg, "temp_offset", alloc::format!("{:.2}", v));
+        }
+    }
+    if msg.set & espnow_packet::SET_HUM_OFFSET != 0 {
+        let v = msg.hum_offset_centi as f32 / 100.0;
+        if (v - cfg.hum_offset).abs() >= 0.005 {
+            changed |= apply(cfg, "hum_offset", alloc::format!("{:.2}", v));
+        }
+    }
+    if msg.set & espnow_packet::SET_INTERVAL != 0 {
+        let v = msg.interval_s as u32;
+        if v != cfg.interval_secs {
+            changed |= apply(cfg, "interval", alloc::format!("{}", v));
+        }
+    }
+    changed
+}
+
 pub fn build_reading(cfg: &NodeConfig, state: &NodeState, m: &Measurement) -> Reading {
     fn to_centi(value: f32) -> i32 {
         let scaled = value * 100.0;
@@ -358,6 +430,11 @@ pub fn build_reading(cfg: &NodeConfig, state: &NodeState, m: &Measurement) -> Re
     let mut reading = Reading::empty();
     reading.boot_id = state.boot_id;
     reading.battery_mv = m.battery_mv;
+    if state.gateway_config {
+        reading.flags |= espnow_packet::FLAG_CONFIG;
+        reading.temp_offset_centi = to_centi(cfg.temp_offset) as i16;
+        reading.hum_offset_centi = to_centi(cfg.hum_offset) as i16;
+    }
     if m.usb_power {
         reading.flags |= espnow_packet::FLAG_USB_POWER;
     }
@@ -418,6 +495,10 @@ pub async fn deliver(radio: &mut Radio, key: &[u8], state: &mut NodeState, readi
                 channel
             );
             state.channel = channel;
+            if state.gateway != gateway {
+                // Another gateway (roaming): learn again whether it does config.
+                state.gateway_config = false;
+            }
             state.gateway = gateway;
             return true;
         }
@@ -443,7 +524,13 @@ pub async fn measure(cfg: &NodeConfig, sensors: &mut Sensors, usb_host: bool) ->
     measurement
 }
 
-/// Measure, send, persist state. Returns (measurement, delivered).
+/// Result of one send: delivery and the gateway's Config reply, if any.
+pub struct Sent {
+    pub delivered: bool,
+    pub config: Option<ConfigMsg>,
+}
+
+/// Measure, send, persist state. Returns the measurement and send result.
 /// Used where the radio already runs (USB console: USB powers the board).
 pub async fn measure_and_send(
     cfg: &NodeConfig,
@@ -451,27 +538,48 @@ pub async fn measure_and_send(
     radio: &mut Radio,
     state: &mut NodeState,
     usb_host: bool,
-) -> (Measurement, bool) {
+) -> (Measurement, Sent) {
     let measurement = measure(cfg, sensors, usb_host).await;
-    let delivered = send(cfg, &measurement, radio, state).await;
-    (measurement, delivered)
+    let sent = send(cfg, &measurement, radio, state).await;
+    (measurement, sent)
 }
 
-/// Sends a measurement and persists state. Returns whether it was delivered.
-pub async fn send(cfg: &NodeConfig, measurement: &Measurement, radio: &mut Radio, state: &mut NodeState) -> bool {
+/// Sends a measurement, waits briefly for the gateway's Config reply and
+/// persists state. The caller applies and saves the config.
+pub async fn send(cfg: &NodeConfig, measurement: &Measurement, radio: &mut Radio, state: &mut NodeState) -> Sent {
     if !cfg.has_key() {
         log_line!("ESP-NOW: no key configured, not sending (set key via USB console or portal)");
-        return false;
+        return Sent { delivered: false, config: None };
     }
+    let key = cfg.key.as_bytes();
     let mut reading = build_reading(cfg, state, measurement);
-    let delivered = deliver(radio, cfg.key.as_bytes(), state, &mut reading).await;
+    let delivered = deliver(radio, key, state, &mut reading).await;
+    let mut config = None;
+    if delivered {
+        let waited = Instant::now();
+        config = wait_for_config(&mut radio.esp_now, key, &state.gateway, &reading).await;
+        match &config {
+            Some(msg) => {
+                if !state.gateway_config {
+                    log_line!("ESP-NOW: gateway supports remote config");
+                    state.gateway_config = true;
+                }
+                log_line!(
+                    "ESP-NOW: config reply after {} ms (set 0x{:02x})",
+                    waited.elapsed().as_millis(),
+                    msg.set
+                );
+            }
+            None => state.gateway_config = false,
+        }
+    }
     state.store();
     log_line!(
         "ESP-NOW: {} (seq {})",
         if delivered { "delivered" } else { "gateway not found" },
         reading.seq
     );
-    delivered
+    Sent { delivered, config }
 }
 
 // ── Misc ────────────────────────────────────────────────────────────────────
