@@ -106,11 +106,14 @@ konsoolis `set warmup 1500`, `save`), muidu kulub aku kiiremini.
   lahtiühendamisest. Parandatud: magab ainult järgmise ette nähtud saatmiseni
   (kontrollitud 21:25:58).
 - Kalibreerimist kontrollida ka ~3,7 V juures.
-- Seadete muutmine HA-st (remote config, commit 329e6df): kodune C6 gateway
-  ja kodune XIAO ("Poiste tuba") vajavad selleks uuesti flashi. Kontori C3 on
-  flashitud ja testitud. `warmup` on juba 1500 (tehtud 20:47).
-  Sama flashiga saab kodu-C6 enda DHT22 nihkeid ja intervalli HA-st muuta
-  (seade "Climate Monitor (Kodu 4)"); C3 peal võltsnäiduga testitud 2026-11-20.
+- Seadete muutmine HA-st (remote config, commit 329e6df): kodune XIAO
+  ("Poiste tuba") vajab selleks uuesti flashi. Kontori C3 on flashitud ja
+  testitud. `warmup` on juba 1500 (tehtud 20:47).
+  ~~Kodune C6 gateway vajab flashi~~: tehtud 2026-11-20 12:00 (ff88f17,
+  MAC 8c:fd:49:10:b7:c4). Boot OK, nihked alles, MQTT ja POST 201 töötavad.
+  Nüüd saab kodu-C6 enda DHT22 nihkeid ja intervalli HA-st muuta
+  (seade "Climate Monitor (Kodu 4)"); C3 peal võltsnäiduga testitud 2026-11-20,
+  kodu-C6 peal HA-st veel proovimata.
   HA seade "Climate Monitor (Kontor3)" jäi testist alles (võltsnäidud), kustuta.
 - Kontoris on testiks teine XIAO ESP32-C6 (MAC 9c:cc:01:18:ae:b0, nimi "Test",
   ilma DHT22-ta, interval 30 s). HA-s "Climate Sensor (Test)"; kustuta pärast.
