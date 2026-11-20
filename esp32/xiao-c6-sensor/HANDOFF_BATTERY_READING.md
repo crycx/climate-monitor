@@ -106,3 +106,8 @@ konsoolis `set warmup 1500`, `save`), muidu kulub aku kiiremini.
   lahtiühendamisest. Parandatud: magab ainult järgmise ette nähtud saatmiseni
   (kontrollitud 21:25:58).
 - Kalibreerimist kontrollida ka ~3,7 V juures.
+- Seadete muutmine HA-st (remote config, commit 329e6df): kodune C6 gateway
+  ja kodune XIAO ("Poiste tuba") vajavad selleks uuesti flashi. Kontori C3 on
+  flashitud ja testitud. `warmup` on juba 1500 (tehtud 20:47).
+- Kontoris on testiks teine XIAO ESP32-C6 (MAC 9c:cc:01:18:ae:b0, nimi "Test",
+  ilma DHT22-ta, interval 30 s). HA-s "Climate Sensor (Test)"; kustuta pärast.
