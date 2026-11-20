@@ -59,6 +59,7 @@ impl Console {
         }
         println!("unsaved={}", if self.cfg != self.saved { "yes" } else { "no" });
         println!("mac={}", hw::mac_str(&self.radio.own_mac));
+        println!("firmware={}", crate::FW_VERSION);
         if self.state.channel != 0 {
             println!("gateway={}", hw::mac_str(&self.state.gateway));
             println!("channel={}", self.state.channel);

@@ -1,7 +1,7 @@
 # Copy to .cargo/config.toml (git-ignored) and adjust.
 [target.riscv32imac-unknown-none-elf]
 # Add --port COMx if espflash does not pick the right port.
-runner = "espflash flash --monitor --chip esp32c6 --partition-table partitions.csv --target-app-partition factory"
+runner = "espflash flash --monitor --chip esp32c6 --partition-table partitions.csv --target-app-partition ota_0 --erase-parts otadata"
 
 [env]
 # All values below are DEFAULTS. Settings saved over USB (tools/config.html)

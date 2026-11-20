@@ -265,7 +265,7 @@ impl Radio {
 // ── State kept in RTC fast memory across deep sleep ─────────────────────────
 // `persistent` statics are zeroed on power-on only, not on deep-sleep wake.
 
-const STATE_MAGIC: u32 = 0x434D_4E32; // "CMN2"
+const STATE_MAGIC: u32 = 0x434D_4E33; // "CMN3"
 
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
 static mut RTC_MAGIC: u32 = 0;
@@ -279,6 +279,8 @@ static mut RTC_CHANNEL: u8 = 0;
 static mut RTC_GATEWAY: [u8; 6] = [0; 6];
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
 static mut RTC_GATEWAY_CONFIG: u8 = 0;
+#[esp_hal::ram(unstable(rtc_fast, persistent))]
+static mut RTC_GATEWAY_CAPS: u8 = 0;
 
 pub struct NodeState {
     pub boot_id: u32,
@@ -289,6 +291,9 @@ pub struct NodeState {
     /// The current gateway answers with Config packets, so readings may carry
     /// the config trailer (older gateways reject it).
     pub gateway_config: bool,
+    /// The current gateway's [`espnow_packet::CAP_VERSION`] etc., from its
+    /// last Config reply.
+    pub gateway_caps: u8,
 }
 
 impl NodeState {
@@ -302,6 +307,7 @@ impl NodeState {
                     channel: RTC_CHANNEL,
                     gateway: RTC_GATEWAY,
                     gateway_config: RTC_GATEWAY_CONFIG != 0,
+                    gateway_caps: RTC_GATEWAY_CAPS,
                 };
             }
         }
@@ -312,6 +318,7 @@ impl NodeState {
             channel: 0,
             gateway: [0; 6],
             gateway_config: false,
+            gateway_caps: 0,
         }
     }
 
@@ -323,6 +330,7 @@ impl NodeState {
             RTC_CHANNEL = self.channel;
             RTC_GATEWAY = self.gateway;
             RTC_GATEWAY_CONFIG = self.gateway_config as u8;
+            RTC_GATEWAY_CAPS = self.gateway_caps;
             RTC_MAGIC = STATE_MAGIC;
         }
     }
@@ -434,6 +442,10 @@ pub fn build_reading(cfg: &NodeConfig, state: &NodeState, m: &Measurement) -> Re
         reading.flags |= espnow_packet::FLAG_CONFIG;
         reading.temp_offset_centi = to_centi(cfg.temp_offset) as i16;
         reading.hum_offset_centi = to_centi(cfg.hum_offset) as i16;
+        if state.gateway_caps & espnow_packet::CAP_VERSION != 0 {
+            reading.flags |= espnow_packet::FLAG_VERSION;
+            reading.set_version(crate::FW_VERSION);
+        }
     }
     if m.usb_power {
         reading.flags |= espnow_packet::FLAG_USB_POWER;
@@ -498,6 +510,7 @@ pub async fn deliver(radio: &mut Radio, key: &[u8], state: &mut NodeState, readi
             if state.gateway != gateway {
                 // Another gateway (roaming): learn again whether it does config.
                 state.gateway_config = false;
+                state.gateway_caps = 0;
             }
             state.gateway = gateway;
             return true;
@@ -564,13 +577,20 @@ pub async fn send(cfg: &NodeConfig, measurement: &Measurement, radio: &mut Radio
                     log_line!("ESP-NOW: gateway supports remote config");
                     state.gateway_config = true;
                 }
+                if msg.caps != state.gateway_caps {
+                    log_line!("ESP-NOW: gateway caps 0x{:02x}", msg.caps);
+                    state.gateway_caps = msg.caps;
+                }
                 log_line!(
                     "ESP-NOW: config reply after {} ms (set 0x{:02x})",
                     waited.elapsed().as_millis(),
                     msg.set
                 );
             }
-            None => state.gateway_config = false,
+            None => {
+                state.gateway_config = false;
+                state.gateway_caps = 0;
+            }
         }
     }
     state.store();

@@ -74,7 +74,7 @@ Edit `.cargo/config.toml` before building:
 [target.riscv32imc-unknown-none-elf]
 # Change COM3 to the port your board is connected to.
 # On Linux/macOS use e.g. /dev/ttyUSB0 or /dev/cu.usbserial-0001
-runner = "espflash flash --monitor --chip esp32c3 --port COM3 --partition-table partitions.csv --target-app-partition factory"
+runner = "espflash flash --monitor --chip esp32c3 --port COM3 --partition-table partitions.csv --target-app-partition ota_0 --erase-parts otadata"
 
 [env]
 WIFI_SSID     = "YourNetworkName"
@@ -103,6 +103,16 @@ build-std = ["core", "alloc"]
 
 The `API_KEY` must match the `api_key` column of the corresponding row in the
 `devices` table on the server.
+
+**OTA layout (since 2026-11-20):** `partitions.csv` has two app slots
+(`ota_0`, `ota_1`) and `otadata` instead of one `factory` slot, for updates
+over the air later. The `config` partition did not move, so settings survive.
+A `config.toml` whose runner still says `--target-app-partition factory` fails
+with the new table; change it to
+`--target-app-partition ota_0 --erase-parts otadata` (erasing `otadata` makes
+the board boot the slot just flashed). The firmware version (git commit,
+`-dirty` with local changes) is printed at boot, shown by the console's
+`show` and sent to Home Assistant as the device's firmware (`sw_version`).
 
 ## Build & Flash
 

@@ -122,8 +122,20 @@ use wifi_runtime::WifiCommand;
 #[path = "../oled_display.rs"]
 mod oled_display;
 
-// This creates a default app-descriptor required by the ESP-IDF bootloader.
-esp_bootloader_esp_idf::esp_app_desc!();
+// App descriptor required by the ESP-IDF bootloader; carries FW_VERSION.
+esp_bootloader_esp_idf::esp_app_desc!(
+    env!("FW_VERSION"),
+    env!("CARGO_PKG_NAME"),
+    esp_bootloader_esp_idf::BUILD_TIME,
+    esp_bootloader_esp_idf::BUILD_DATE,
+    esp_bootloader_esp_idf::ESP_IDF_COMPATIBLE_VERSION,
+    esp_bootloader_esp_idf::MMU_PAGE_SIZE,
+    0,
+    u16::MAX
+);
+
+/// Git commit this firmware was built from (see `shared/fw_version_build.rs`).
+pub const FW_VERSION: &str = env!("FW_VERSION");
 
 // ── Static storage for embassy-net (must be 'static) ────────────────────────
 #[cfg(feature = "wifi")]
@@ -1428,6 +1440,7 @@ async fn main(spawner: Spawner) {
     log_runtime_line("Boot: initializing WiFi runtime...");
     let (wifi_stacks, wifi_sender) = wifi_runtime::init(&spawner, peripherals.WIFI).await;
     log_runtime_line("Boot: WiFi runtime initialized.");
+    log_runtime_line(format!("Boot: firmware {}", FW_VERSION).as_str());
     log_runtime_line("Boot: starting config portal tasks...");
     config_portal::start(spawner, wifi_stacks.ap, config_handle, config_storage);
     log_runtime_line("Boot: config portal tasks started.");
@@ -2583,10 +2596,11 @@ async fn mqtt_publish_with_discovery(
     let hum_unique_id = format!("{}_{}_humidity", base_topic, device_id);
 
     let device_block = format!(
-        r#"{{"identifiers":["{}:{}"],"name":"{}","model":"ESP32-C3","manufacturer":"Climate Monitor"}}"#,
+        r#"{{"identifiers":["{}:{}"],"name":"{}","model":"ESP32-C3","manufacturer":"Climate Monitor","sw_version":"{}"}}"#,
         base_topic,
         device_id,
-        json_escape(device_name.as_str())
+        json_escape(device_name.as_str()),
+        json_escape(FW_VERSION)
     );
 
     let temp_discovery_payload = format!(

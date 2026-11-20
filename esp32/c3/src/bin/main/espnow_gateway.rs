@@ -187,6 +187,7 @@ async fn send_config(esp_now: &mut EspNow<'static>, key: &[u8], own_mac: &[u8; 6
     let mut msg = ConfigMsg {
         boot_id: r.boot_id,
         seq: r.seq,
+        caps: espnow_packet::CAP_VERSION,
         ..ConfigMsg::default()
     };
     if let Some(v) = d.temp {
@@ -583,8 +584,11 @@ pub async fn forward_task(
             continue;
         }
         if let Some(settings) = mqtt_settings(config).await {
-            // Re-announce once the sensor starts reporting config (adds the numbers).
-            let name_hash = fnv1a(r.name()) ^ if r.has_config() { 0x9E37_79B9 } else { 0 };
+            // Re-announce once the sensor starts reporting config (adds the
+            // numbers) and when its firmware version changes (sw_version).
+            let name_hash = fnv1a(r.name())
+                ^ if r.has_config() { 0x9E37_79B9 } else { 0 }
+                ^ fnv1a(r.version()).rotate_left(7);
             let needs_discovery = !announced.contains(&item.mac, name_hash);
             if publish(*stack, &settings, &item, needs_discovery, full).await && needs_discovery {
                 announced.insert(&item.mac, name_hash);
@@ -701,11 +705,17 @@ async fn publish(
         } else {
             format!("Climate Sensor ({})", name)
         };
+        let sw_version = if r.version().is_empty() {
+            String::new()
+        } else {
+            format!(r#","sw_version":"{}""#, crate::json_escape(r.version()))
+        };
         let device_block = format!(
-            r#"{{"identifiers":["{}:{}"],"name":"{}","model":"XIAO ESP32C6 (ESP-NOW)","manufacturer":"Climate Monitor"}}"#,
+            r#"{{"identifiers":["{}:{}"],"name":"{}","model":"XIAO ESP32C6 (ESP-NOW)","manufacturer":"Climate Monitor"{}}}"#,
             s.base_topic,
             device_id,
-            crate::json_escape(device_name.as_str())
+            crate::json_escape(device_name.as_str()),
+            sw_version
         );
         // Mark entities unavailable if the sensor misses ~3 reports.
         let expire = if r.interval_s > 0 {

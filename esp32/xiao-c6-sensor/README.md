@@ -112,6 +112,18 @@ The runner flashes `partitions.csv`, which contains the `config` partition.
 Flashing without it works, but settings cannot be saved
 (`warning=no config partition`).
 
+**OTA layout (since 2026-11-20):** `partitions.csv` has two app slots
+(`ota_0`, `ota_1`) and `otadata` instead of one `factory` slot, for updates
+over the air later. The `config` partition did not move, so settings survive.
+A `config.toml` whose runner still says `--target-app-partition factory` fails
+with the new table; change it to
+`--target-app-partition ota_0 --erase-parts otadata` (erasing `otadata` makes
+the board boot the slot just flashed). The firmware version (git commit,
+`-dirty` with local changes) is printed at boot, shown by the console's
+`show` and sent to Home Assistant as the device's firmware (`sw_version`).
+ESP-NOW sensors report their version only to gateways built with it
+(the gateway's Config reply sets `CAP_VERSION`).
+
 After flashing, the board resets with the computer attached, so it opens the
 USB console directly. Expected output in normal mode:
 

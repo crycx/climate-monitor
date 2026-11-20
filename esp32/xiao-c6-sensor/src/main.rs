@@ -53,7 +53,20 @@ mod portal;
 
 use config::ConfigStore;
 
-esp_bootloader_esp_idf::esp_app_desc!();
+esp_bootloader_esp_idf::esp_app_desc!(
+    env!("FW_VERSION"),
+    env!("CARGO_PKG_NAME"),
+    esp_bootloader_esp_idf::BUILD_TIME,
+    esp_bootloader_esp_idf::BUILD_DATE,
+    esp_bootloader_esp_idf::ESP_IDF_COMPATIBLE_VERSION,
+    esp_bootloader_esp_idf::MMU_PAGE_SIZE,
+    0,
+    u16::MAX,
+    esp_bootloader_esp_idf::SECURE_VERSION
+);
+
+/// Git commit this firmware was built from (see `shared/fw_version_build.rs`).
+pub const FW_VERSION: &str = env!("FW_VERSION");
 
 const BOOT_WINDOW_MS: u64 = 3000;
 /// SOF frame changes needed to treat USB as a computer (not a charger).
@@ -150,7 +163,8 @@ async fn main(spawner: Spawner) {
         }
         let mut led = Output::new(peripherals.GPIO15, Level::High, OutputConfig::default());
         log_line!(
-            "Boot: settings from {}; press BOOT within 3 s for the WiFi portal",
+            "Boot: firmware {}, settings from {}; press BOOT within 3 s for the WiFi portal",
+            FW_VERSION,
             if from_flash { "flash" } else { "build defaults" }
         );
         match select_mode(peripherals.GPIO9, &mut led).await {

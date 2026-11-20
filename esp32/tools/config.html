@@ -198,7 +198,7 @@ let port = null, writer = null, pending = null, busy = false, reconnecting = fal
 let cfg = {}, secrets = {}, info = {}, xiao = false;
 // XIAO battery sensor: settings (`xcur`) and status (`xinfo`) from unprefixed key=value lines.
 let xcur = {}, xinfo = {};
-const X_INFO = {mac: "MAC", gateway: "Gateway", channel: "Channel", temperature: "Temperature",
+const X_INFO = {mac: "MAC", firmware: "Firmware", gateway: "Gateway", channel: "Channel", temperature: "Temperature",
   humidity: "Humidity", battery_mv: "Battery (mV)", usb_power: "USB power (charging)", delivered: "Last send", unsaved: "Unsaved", warning: "Warning"};
 const xInputs = () => [...document.querySelectorAll("[data-x]")];
 

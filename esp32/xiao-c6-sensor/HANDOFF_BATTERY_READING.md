@@ -117,3 +117,10 @@ konsoolis `set warmup 1500`, `save`), muidu kulub aku kiiremini.
   HA seade "Climate Monitor (Kontor3)" jäi testist alles (võltsnäidud), kustuta.
 - Kontoris on testiks teine XIAO ESP32-C6 (MAC 9c:cc:01:18:ae:b0, nimi "Test",
   ilma DHT22-ta, interval 30 s). HA-s "Climate Sensor (Test)"; kustuta pärast.
+- OTA 1. osa (2026-11-20): `partitions.csv` kahe OTA pesaga (ota_0/ota_1 +
+  otadata, `config` samas kohas) ja püsivara versioon (git commit) HA-s
+  seadme "Firmware" all. Kontori C3 ja test-XIAO on flashitud ja töötavad
+  (seaded jäid alles, HA näitas test-XIAO versiooni). Kodune C6 ja kodune
+  XIAO vajavad selleks veel ühe USB flashi; kohalikus `.cargo/config.toml`
+  runneris peab olema `--target-app-partition ota_0 --erase-parts otadata`
+  (vana `factory` annab vea). 2. osa (püsivara ESP-NOW kaudu) on tegemata.

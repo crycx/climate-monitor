@@ -214,6 +214,7 @@ fn show(pending: &AppConfig, saved: &AppConfig) {
         }
     }
     println!("info.unsaved={}", if pending != saved { "yes" } else { "no" });
+    println!("info.firmware={}", crate::FW_VERSION);
     println!("info.running_transport={}", saved.transport);
     // Gateway: sensors heard since boot, to copy MACs from: "mac,name,seconds ago".
     for (i, (mac, name, age)) in espnow_gateway::seen_sensors().iter().enumerate() {
