@@ -445,6 +445,9 @@ pub fn build_reading(cfg: &NodeConfig, state: &NodeState, m: &Measurement) -> Re
         if state.gateway_caps & espnow_packet::CAP_VERSION != 0 {
             reading.flags |= espnow_packet::FLAG_VERSION;
             reading.set_version(crate::FW_VERSION);
+            if crate::ota::CAPABLE.load(core::sync::atomic::Ordering::Relaxed) {
+                reading.flags |= espnow_packet::FLAG_OTA;
+            }
         }
     }
     if m.usb_power {

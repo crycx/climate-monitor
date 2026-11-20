@@ -188,6 +188,7 @@ dependencies = [
  "embedded-dht-rs",
  "embedded-graphics",
  "embedded-io-async 0.7.0",
+ "embedded-storage",
  "enumset",
  "esp-alloc",
  "esp-backtrace",

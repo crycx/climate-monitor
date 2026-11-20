@@ -49,6 +49,7 @@ mod config;
 mod console;
 mod form;
 mod hw;
+mod ota;
 mod portal;
 
 use config::ConfigStore;
@@ -150,6 +151,7 @@ async fn main(spawner: Spawner) {
 
     let mut store = ConfigStore::new(FlashStorage::new(peripherals.FLASH));
     let (cfg, from_flash) = store.load();
+    ota::check_capable(store.flash());
     let mut sensors = hw::Sensors::new(peripherals.GPIO21, peripherals.GPIO2, peripherals.ADC1, peripherals.GPIO0);
     let rf = hw::rf_switch(peripherals.GPIO3, peripherals.GPIO14, cfg.external_antenna);
 
@@ -191,6 +193,21 @@ async fn main(spawner: Spawner) {
         if hw::apply_remote_config(&mut cfg, &msg) {
             if let Err(e) = store.save(&cfg) {
                 log_line!("Remote config: not saved: {}", e);
+            }
+        }
+        // Firmware update from Home Assistant: restarts into it on success.
+        if msg.set & espnow_packet::SET_OTA != 0 {
+            let result = ota::run(
+                &mut radio,
+                cfg.key.as_bytes(),
+                &state.gateway,
+                store.flash(),
+                measurement.battery_mv,
+                measurement.usb_power,
+            )
+            .await;
+            if let Err(e) = result {
+                log_line!("OTA: failed: {}", e);
             }
         }
     }

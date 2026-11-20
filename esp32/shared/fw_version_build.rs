@@ -2,8 +2,11 @@
 //
 // Sets `FW_VERSION` to the git commit (7 hex digits), with "-dirty" when
 // tracked files have local changes, or "unknown" without git. The firmware
-// reports it to Home Assistant and puts it in the app descriptor, so an OTA
-// image can be told apart from the one running.
+// reports it to Home Assistant and puts it in the app descriptor; OTA
+// updates compare it with the running firmware's version.
+//
+// `FW_VERSION=...` in the build environment overrides it, e.g. for a test
+// image that must differ from the one running (at most 16 bytes are sent).
 
 fn emit_fw_version() {
     use std::process::Command;
@@ -14,12 +17,18 @@ fn emit_fw_version() {
         out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
 
-    let version = match git(&["rev-parse", "--short=7", "HEAD"]) {
-        Some(hash) => {
-            let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
-            if dirty { format!("{}-dirty", hash) } else { hash }
-        }
-        None => "unknown".into(),
+    println!("cargo:rerun-if-env-changed=FW_VERSION");
+    let forced = std::env::var("FW_VERSION").ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let version = match forced {
+        Some(v) => v,
+        None => match git(&["rev-parse", "--short=7", "HEAD"]) {
+            Some(hash) => {
+                let dirty =
+                    git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
+                if dirty { format!("{}-dirty", hash) } else { hash }
+            }
+            None => "unknown".into(),
+        },
     };
     println!("cargo:rustc-env=FW_VERSION={}", version);
 

@@ -212,6 +212,14 @@ them on its next MQTT publish, saves them to flash (same settings as the
 portal's Calibration section) and clears the command; they take effect from
 the next measurement.
 
+**Sensor firmware updates:** sensors with OTA support get a **Firmware**
+`update` entity. The gateway reads the image description published by
+`esp32/tools/publish_ota.py` on each session; on **Install** it downloads the
+image into its own spare OTA slot, checks the SHA-256, and serves it to the
+sensor over ESP-NOW after the sensor's next reading (`shared/gateway_ota.rs`,
+steps in `esp32/xiao-c6-sensor/README.md`). Needs the OTA `partitions.csv`
+on the gateway too.
+
 A newly received reading jumps straight to that sensor's page for 10 s. A
 sensor's page disappears after it misses ~3 reports.
 

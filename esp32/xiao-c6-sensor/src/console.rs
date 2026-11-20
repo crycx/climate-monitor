@@ -96,6 +96,22 @@ impl Console {
                     Err(e) => println!("warning=remote config not saved: {}", e),
                 }
             }
+            // Firmware update from Home Assistant: restarts into it on success.
+            if msg.set & crate::espnow_packet::SET_OTA != 0 {
+                println!("note=firmware update offered, downloading");
+                let result = crate::ota::run(
+                    &mut self.radio,
+                    self.cfg.key.as_bytes(),
+                    &self.state.gateway,
+                    self.store.flash(),
+                    measurement.battery_mv,
+                    true,
+                )
+                .await;
+                if let Err(e) = result {
+                    println!("warning=firmware update failed: {}", e);
+                }
+            }
         }
         self.last = Some((measurement, sent.delivered));
         self.next_send_at = Instant::now() + Duration::from_secs(self.cfg.interval_secs as u64);

@@ -123,4 +123,11 @@ konsoolis `set warmup 1500`, `save`), muidu kulub aku kiiremini.
   (seaded jäid alles, HA näitas test-XIAO versiooni). Kodune C6 ja kodune
   XIAO vajavad selleks veel ühe USB flashi; kohalikus `.cargo/config.toml`
   runneris peab olema `--target-app-partition ota_0 --erase-parts otadata`
-  (vana `factory` annab vea). 2. osa (püsivara ESP-NOW kaudu) on tegemata.
+  (vana `factory` annab vea).
+- OTA 2. osa (2026-11-20): püsivara uuendus ESP-NOW kaudu HA "Firmware"
+  olemi "Install" nupuga (`tools/publish_ota.py`, `shared/gateway_ota.rs`,
+  `xiao-c6-sensor/src/ota.rs`, juhend XIAO README-s). Kontoris testitud:
+  C3 laadis 653 KB alla 10 s-ga, test-XIAO tõmbas selle 27 s-ga, käivitus
+  pesast ota_1 versiooniga `ota-test-1`, HA näitas "up to date". Tagasitee
+  ota_1 -> ota_0 testimata. Kodus: kodune C6 ja XIAO vajavad ühe USB flashi
+  selle püsivaraga, edasi saab XIAO-t uuendada HA-st.

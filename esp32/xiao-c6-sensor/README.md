@@ -157,6 +157,37 @@ draws nothing. The wake is only armed when the sensor goes to sleep without
 USB power, so on a USB charger it keeps its normal cycle. Leave `usb_wake`
 off without the divider: a floating D1 would wake the board at random.
 
+## Firmware update over the air
+
+Once a sensor runs firmware with OTA support (flashed over USB once with the
+OTA `partitions.csv`), later versions can be installed from Home Assistant:
+
+1. Commit, then build: `cargo build --release` (the version is the git
+   commit; a `-dirty` build is refused, since its version does not identify
+   the code).
+2. Publish it to the MQTT broker the gateways use (asks for the password,
+   or set `MQTT_PASSWORD`):
+
+   ```bash
+   python ../tools/publish_ota.py --host <mqtt_host> --user <mqtt_username>
+   ```
+
+3. After the sensor's next reading its **Firmware** entity in HA shows the
+   update; press **Install**. With the reading after that, the gateway
+   (which has downloaded and checked the image meanwhile) offers it, the
+   sensor pulls it over ESP-NOW (~30 s), checks the SHA-256, switches OTA
+   slot and restarts. The entity shows the new version after the next
+   reading.
+
+On battery the sensor refuses below 3.70 V. If the new version cannot be
+started or comes back with the old version, the gateway offers it once more
+and then gives up; press Install again to retry. There is no automatic
+rollback: firmware that starts but cannot send must be flashed over USB, so
+try a new version on one sensor first. A test image with its own version:
+`FW_VERSION=ota-test-1 cargo build --release --target-dir target-ota`, then
+`publish_ota.py --elf target-ota/riscv32imac-unknown-none-elf/release/xiao-c6-sensor`.
+`publish_ota.py --clear` removes the published image.
+
 ## Home Assistant entities
 
 Created through MQTT Discovery by the gateway, per sensor:

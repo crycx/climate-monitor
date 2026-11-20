@@ -202,6 +202,9 @@ async fn send_config(esp_now: &mut EspNow<'static>, key: &[u8], own_mac: &[u8; 6
         msg.set |= espnow_packet::SET_INTERVAL;
         msg.interval_s = v;
     }
+    if crate::gateway_ota::offer(dst, r) {
+        msg.set |= espnow_packet::SET_OTA;
+    }
     if msg.set != 0 {
         log_runtime_line(format!("ESP-NOW {}: sending remote config (set 0x{:02x})", mac_hex(dst), msg.set).as_str());
     }
@@ -232,6 +235,33 @@ async fn send_config(esp_now: &mut EspNow<'static>, key: &[u8], own_mac: &[u8; 6
         log_runtime_line(format!("ESP-NOW: config to {} failed: {:?}", mac_hex(dst), e).as_str());
     }
 
+    if added {
+        let _ = esp_now.remove_peer(dst);
+    }
+}
+
+/// Unicast to `dst`; like the ack, the peer entry is removed afterwards.
+async fn send_unicast(esp_now: &mut EspNow<'static>, dst: &[u8; 6], data: &[u8], what: &str) {
+    let added = if esp_now.peer_exists(dst) {
+        false
+    } else {
+        match esp_now.add_peer(PeerInfo {
+            interface: EspNowWifiInterface::Sta,
+            peer_address: *dst,
+            lmk: None,
+            channel: None,
+            encrypt: false,
+        }) {
+            Ok(()) => true,
+            Err(e) => {
+                log_runtime_line(format!("ESP-NOW: add_peer for {} failed: {:?}", what, e).as_str());
+                return;
+            }
+        }
+    };
+    if let Err(e) = esp_now.send_async(dst, data).await {
+        log_runtime_line(format!("ESP-NOW: {} to {} failed: {:?}", what, mac_hex(dst), e).as_str());
+    }
     if added {
         let _ = esp_now.remove_peer(dst);
     }
@@ -269,7 +299,22 @@ pub async fn rx_task(mut esp_now: EspNow<'static>, own_mac: [u8; 6], key: String
                     log_runtime_line("ESP-NOW: queue full, dropping reading");
                 }
             }
-            Ok(Packet::Ack(_) | Packet::Config(_)) => {}
+            Ok(Packet::OtaRequest { offset }) => {
+                if let Some(reply) = crate::gateway_ota::serve(&src, offset) {
+                    let mut buf = [0u8; espnow_packet::MAX_PACKET_LEN];
+                    let len = match &reply {
+                        crate::gateway_ota::Reply::Info(info) => {
+                            espnow_packet::encode_ota_info(key, &own_mac, info, &mut buf)
+                        }
+                        crate::gateway_ota::Reply::Data { offset, len, data } => {
+                            espnow_packet::encode_ota_data(key, &own_mac, *offset, &data[..*len], &mut buf)
+                        }
+                    };
+                    send_unicast(&mut esp_now, &src, &buf[..len], "OTA").await;
+                }
+            }
+            // Ack, Config and OTA replies are for sensors, not for us.
+            Ok(_) => {}
             Err(DecodeError::BadTag) => {
                 log_runtime_line(
                     format!(
@@ -296,11 +341,13 @@ pub(crate) struct Desired {
     pub(crate) hum: Option<i16>,
     /// seconds
     pub(crate) interval: Option<u16>,
+    /// HA's update entity asked to install the published firmware.
+    pub(crate) ota: bool,
 }
 
 impl Desired {
     pub(crate) fn is_empty(&self) -> bool {
-        self.temp.is_none() && self.hum.is_none() && self.interval.is_none()
+        self.temp.is_none() && self.hum.is_none() && self.interval.is_none() && !self.ota
     }
 }
 
@@ -396,21 +443,31 @@ async fn mqtt_read_packet(
 
 /// Subscribes to `<base>/<device>/set/+` and collects the retained commands
 /// HA left there. None if the broker did not answer the subscribe.
-pub(crate) async fn read_desired(socket: &mut TcpSocket<'_>, filter: &str) -> Option<Desired> {
-    let filter = filter.as_bytes();
-    let mut packet: Vec<u8> = Vec::with_capacity(filter.len() + 8);
+///
+/// With `meta_topic` it also reads the published sensor firmware's
+/// description and hands it to `gateway_ota::set_latest`.
+pub(crate) async fn read_desired(
+    socket: &mut TcpSocket<'_>,
+    filter: &str,
+    meta_topic: Option<&str>,
+) -> Option<Desired> {
+    let filters: Vec<&[u8]> = core::iter::once(filter).chain(meta_topic).map(str::as_bytes).collect();
+    let mut packet: Vec<u8> = Vec::with_capacity(64 + filter.len());
     packet.push(0x82); // SUBSCRIBE
-    crate::encode_remaining_length(&mut packet, 2 + 2 + filter.len() + 1);
+    crate::encode_remaining_length(&mut packet, 2 + filters.iter().map(|f| 2 + f.len() + 1).sum::<usize>());
     packet.extend_from_slice(&[0x00, 0x01]); // packet id 1
-    packet.push((filter.len() >> 8) as u8);
-    packet.push(filter.len() as u8);
-    packet.extend_from_slice(filter);
-    packet.push(0x00); // QoS 0
+    for f in filters.iter() {
+        packet.push((f.len() >> 8) as u8);
+        packet.push(f.len() as u8);
+        packet.extend_from_slice(f);
+        packet.push(0x00); // QoS 0
+    }
     crate::socket_write_all(socket, &packet).await.ok()?;
 
     let mut desired = Desired::default();
+    let mut meta = None;
     let mut subscribed = false;
-    let mut body = [0u8; 160];
+    let mut body = [0u8; 256];
     // Retained messages arrive right around the SUBACK: stop after a short idle.
     loop {
         let wait = if subscribed {
@@ -431,7 +488,12 @@ pub(crate) async fn read_desired(socket: &mut TcpSocket<'_>, filter: &str) -> Op
                 }
                 let topic = core::str::from_utf8(&body[2..2 + topic_len]).unwrap_or("");
                 let payload = &body[2 + topic_len..len];
+                if Some(topic) == meta_topic {
+                    meta = crate::gateway_ota::parse_meta(payload);
+                    continue;
+                }
                 match topic.rsplit('/').next().unwrap_or("") {
+                    "ota" => desired.ota = payload == b"install",
                     "temp_offset" => desired.temp = parse_centi(payload, 20.0).map(|v| v as i16),
                     "hum_offset" => desired.hum = parse_centi(payload, 20.0).map(|v| v as i16),
                     "interval" => {
@@ -445,6 +507,9 @@ pub(crate) async fn read_desired(socket: &mut TcpSocket<'_>, filter: &str) -> Op
             }
             _ => {}
         }
+    }
+    if subscribed && meta_topic.is_some() {
+        crate::gateway_ota::set_latest(meta);
     }
     subscribed.then_some(desired)
 }
@@ -588,10 +653,31 @@ pub async fn forward_task(
             // numbers) and when its firmware version changes (sw_version).
             let name_hash = fnv1a(r.name())
                 ^ if r.has_config() { 0x9E37_79B9 } else { 0 }
-                ^ fnv1a(r.version()).rotate_left(7);
+                ^ fnv1a(r.version()).rotate_left(7)
+                ^ if r.ota_capable() { 0x5BD1_E995 } else { 0 };
             let needs_discovery = !announced.contains(&item.mac, name_hash);
             if publish(*stack, &settings, &item, needs_discovery, full).await && needs_discovery {
                 announced.insert(&item.mac, name_hash);
+            }
+            // "Install" from HA's update entity (read in that session).
+            let d = desired_for(&item.mac);
+            if d.ota {
+                set_desired(&item.mac, Desired { ota: false, ..d });
+                if r.ota_capable() {
+                    let broker = crate::gateway_ota::Broker {
+                        host: settings.host.as_str(),
+                        port: settings.port,
+                        username: settings.username.as_str(),
+                        password: settings.password.as_str(),
+                        base: settings.base_topic.as_str(),
+                    };
+                    crate::gateway_ota::install(*stack, &broker, &item.mac, r.version()).await;
+                } else {
+                    log_runtime_line(
+                        format!("OTA {}: this sensor's firmware cannot update over the air (flash it over USB once)", mac)
+                            .as_str(),
+                    );
+                }
             }
         }
 
@@ -694,7 +780,8 @@ async fn publish(
 
     // Remote config: pick up HA's retained commands for this sensor; the
     // Config reply to its next reading carries them.
-    if let Some(d) = read_desired(&mut socket, topic("set/+").as_str()).await {
+    let meta_topic = crate::gateway_ota::meta_topic(s.base_topic.as_str());
+    if let Some(d) = read_desired(&mut socket, topic("set/+").as_str(), Some(meta_topic.as_str())).await {
         set_desired(&item.mac, d);
     }
 
@@ -855,6 +942,26 @@ async fn publish(
                 .await;
             }
         }
+        if r.ota_capable() {
+            // Firmware update (gateway_ota): "Install" leaves a retained
+            // command on set/ota; the state shows installed vs. published.
+            let config_topic = format!("{}/update/{}_firmware/config", crate::HA_DISCOVERY_PREFIX, device_id);
+            let payload = format!(
+                r#"{{"name":"Firmware","unique_id":"{}_{}_firmware","state_topic":"{}","command_topic":"{}","payload_install":"install","retain":true,"device_class":"firmware","entity_category":"config","device":{}}}"#,
+                s.base_topic,
+                device_id,
+                crate::json_escape(topic("firmware").as_str()),
+                crate::json_escape(topic("set/ota").as_str()),
+                device_block,
+            );
+            let _ = with_io_timeout(crate::mqtt_publish(
+                &mut socket,
+                config_topic.as_str(),
+                payload.as_bytes(),
+                true,
+            ))
+            .await;
+        }
     }
 
     let mut values: [(&str, Option<String>); 8] = [
@@ -926,6 +1033,14 @@ async fn publish(
             log_runtime_line(format!("ESP-NOW {}: remote {} applied", mac_hex(&item.mac), key).as_str());
         }
         set_desired(&item.mac, d);
+    }
+    if r.ota_capable() {
+        let state = crate::gateway_ota::ha_state(&item.mac, r.version());
+        let _ = with_io_timeout(crate::mqtt_publish(&mut socket, topic("firmware").as_str(), state.as_bytes(), true)).await;
+    }
+    if desired_for(&item.mac).ota {
+        // One click, one attempt: forward_task acts on it after this session.
+        let _ = with_io_timeout(crate::mqtt_publish(&mut socket, topic("set/ota").as_str(), b"", true)).await;
     }
     // Not retained: HA stamps "Last seen" with the arrival time (see last_seen_discovery).
     let _ = with_io_timeout(crate::mqtt_publish(&mut socket, topic("last_seen").as_str(), b"1", false)).await;

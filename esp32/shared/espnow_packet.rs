@@ -22,7 +22,8 @@
 //!   20      flags        u8   bit0 = sensor read failed,
 //!                               bit1 = on USB power (battery charging),
 //!                               bit2 = config trailer present (FLAG_CONFIG),
-//!                               bit3 = version trailer present (FLAG_VERSION)
+//!                               bit3 = version trailer present (FLAG_VERSION),
+//!                               bit4 = sensor can update over the air (FLAG_OTA)
 //!   21      name_len     u8   0..=MAX_NAME_LEN
 //!   22..    name         UTF-8, name_len bytes
 //!   ..+2    temp_offset  i16  degC * 100 } only with FLAG_CONFIG: the
@@ -42,14 +43,40 @@
 //!   0..4    magic, version, kind = 4
 //!   4..8    boot_id      echoed from the reading
 //!   8..12   seq          echoed from the reading
-//!   12      set          u8   bit0 temp_offset, bit1 hum_offset, bit2 interval
+//!   12      set          u8   bit0 temp_offset, bit1 hum_offset, bit2 interval,
+//!                               bit3 firmware update waiting (SET_OTA)
 //!   13..15  temp_offset  i16  degC * 100
 //!   15..17  hum_offset   i16  % * 100
 //!   17..19  interval_s   u16
 //!   19      caps         u8   gateway capabilities (CAP_*); missing in
 //!                             gateways built before it (19-byte body)
 //!   ..+8    tag
+//!
+//! OtaRequest (sensor -> gateway, after a Config with SET_OTA)
+//!   0..4    magic, version, kind = 5
+//!   4..8    offset       u32  image offset to send, OTA_INFO_OFFSET = info
+//!   8..16   tag
+//!
+//! OtaInfo (gateway -> sensor, reply to offset OTA_INFO_OFFSET)
+//!   0..4    magic, version, kind = 6
+//!   4..8    size         u32  image size in bytes
+//!   8..40   sha256       image SHA-256
+//!   40      version_len  u8
+//!   41..57  version      UTF-8, zero padded
+//!   57..65  tag
+//!
+//! OtaData (gateway -> sensor)
+//!   0..4    magic, version, kind = 7
+//!   4..8    offset       u32
+//!   8       len          u8   1..=OTA_CHUNK_LEN
+//!   9..     data
+//!   ..+8    tag
 //! ```
+//!
+//! Firmware update (see `shared/gateway_ota.rs` and the sensor's `ota.rs`):
+//! the sensor pulls the image chunk by chunk (stop and wait), so the gateway
+//! only answers requests. Every packet carries the HMAC tag and the sensor
+//! checks the image SHA-256 before switching to it.
 //!
 //! Remote config: the gateway answers each reading with a Config packet,
 //! with `set = 0` when nothing is pending. A sensor sets FLAG_CONFIG (and
@@ -76,8 +103,18 @@ const ACK_BODY_LEN: usize = 13;
 /// Config body without the caps byte (gateways built before it).
 const CONFIG_BODY_LEN_NO_CAPS: usize = 19;
 const CONFIG_BODY_LEN: usize = 20;
-pub const MAX_PACKET_LEN: usize =
+const OTA_REQUEST_BODY_LEN: usize = 8;
+const OTA_INFO_BODY_LEN: usize = 41 + MAX_VERSION_LEN;
+const OTA_DATA_HEADER_LEN: usize = 9;
+/// Image bytes per OtaData packet (ESP-NOW payloads are at most 250 bytes).
+pub const OTA_CHUNK_LEN: usize = 200;
+/// OtaRequest offset that asks for the OtaInfo.
+pub const OTA_INFO_OFFSET: u32 = u32::MAX;
+const MAX_READING_LEN: usize =
     READING_HEADER_LEN + MAX_NAME_LEN + CONFIG_TRAILER_LEN + 1 + MAX_VERSION_LEN + TAG_LEN;
+const MAX_OTA_DATA_LEN: usize = OTA_DATA_HEADER_LEN + OTA_CHUNK_LEN + TAG_LEN;
+pub const MAX_PACKET_LEN: usize =
+    if MAX_READING_LEN > MAX_OTA_DATA_LEN { MAX_READING_LEN } else { MAX_OTA_DATA_LEN };
 
 pub const FLAG_SENSOR_ERROR: u8 = 0x01;
 /// Sensor runs on USB power: the charger holds the cell at ~4.2 V, so
@@ -90,6 +127,9 @@ pub const FLAG_CONFIG: u8 = 0x04;
 /// The reading carries the sensor's firmware version (version trailer).
 pub const FLAG_VERSION: u8 = 0x08;
 
+/// The sensor has OTA app slots and handles [`SET_OTA`].
+pub const FLAG_OTA: u8 = 0x10;
+
 /// [`ConfigMsg::caps`] bits: what the gateway accepts from the sensor.
 pub const CAP_VERSION: u8 = 0x01;
 
@@ -97,6 +137,8 @@ pub const CAP_VERSION: u8 = 0x01;
 pub const SET_TEMP_OFFSET: u8 = 0x01;
 pub const SET_HUM_OFFSET: u8 = 0x02;
 pub const SET_INTERVAL: u8 = 0x04;
+/// A firmware update is waiting: stay awake and send OtaRequests.
+pub const SET_OTA: u8 = 0x08;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -109,6 +151,9 @@ pub enum Kind {
     Ack = 3,
     /// Gateway reply to every reading: pending remote config (may be empty).
     Config = 4,
+    OtaRequest = 5,
+    OtaInfo = 6,
+    OtaData = 7,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -185,6 +230,10 @@ impl Reading {
         self.flags & FLAG_USB_POWER != 0
     }
 
+    pub fn ota_capable(&self) -> bool {
+        self.flags & FLAG_OTA != 0
+    }
+
     pub fn temperature_c(&self) -> f32 {
         self.temp_centi as f32 / 100.0
     }
@@ -226,11 +275,54 @@ pub struct ConfigMsg {
     pub caps: u8,
 }
 
+/// Image description sent before the data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OtaInfo {
+    pub size: u32,
+    pub sha256: [u8; 32],
+    version: [u8; MAX_VERSION_LEN],
+    version_len: u8,
+}
+
+impl OtaInfo {
+    pub fn new(size: u32, sha256: [u8; 32], version: &str) -> Self {
+        let mut info = Self {
+            size,
+            sha256,
+            version: [0; MAX_VERSION_LEN],
+            version_len: 0,
+        };
+        info.version_len = copy_truncated(&mut info.version, version);
+        info
+    }
+
+    pub fn version(&self) -> &str {
+        core::str::from_utf8(&self.version[..self.version_len as usize]).unwrap_or("")
+    }
+}
+
+/// One chunk of the image.
+#[derive(Clone, Copy, Debug)]
+pub struct OtaData {
+    pub offset: u32,
+    pub len: u8,
+    pub data: [u8; OTA_CHUNK_LEN],
+}
+
+impl OtaData {
+    pub fn bytes(&self) -> &[u8] {
+        &self.data[..self.len as usize]
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Packet {
     Reading { reading: Reading, wants_ack: bool },
     Ack(Ack),
     Config(ConfigMsg),
+    OtaRequest { offset: u32 },
+    OtaInfo(OtaInfo),
+    OtaData(OtaData),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -324,6 +416,38 @@ pub fn encode_config(
     out[17..19].copy_from_slice(&msg.interval_s.to_le_bytes());
     out[19] = msg.caps;
     append_tag(key, src_mac, out, CONFIG_BODY_LEN)
+}
+
+/// Encodes a firmware chunk request (`OTA_INFO_OFFSET` asks for the info).
+pub fn encode_ota_request(key: &[u8], src_mac: &[u8; 6], offset: u32, out: &mut [u8; MAX_PACKET_LEN]) -> usize {
+    write_header(out, Kind::OtaRequest);
+    out[4..8].copy_from_slice(&offset.to_le_bytes());
+    append_tag(key, src_mac, out, OTA_REQUEST_BODY_LEN)
+}
+
+pub fn encode_ota_info(key: &[u8], src_mac: &[u8; 6], info: &OtaInfo, out: &mut [u8; MAX_PACKET_LEN]) -> usize {
+    write_header(out, Kind::OtaInfo);
+    out[4..8].copy_from_slice(&info.size.to_le_bytes());
+    out[8..40].copy_from_slice(&info.sha256);
+    out[40] = info.version_len;
+    out[41..41 + MAX_VERSION_LEN].copy_from_slice(&info.version);
+    append_tag(key, src_mac, out, OTA_INFO_BODY_LEN)
+}
+
+/// Encodes a firmware chunk; `data` must be 1..=OTA_CHUNK_LEN bytes.
+pub fn encode_ota_data(
+    key: &[u8],
+    src_mac: &[u8; 6],
+    offset: u32,
+    data: &[u8],
+    out: &mut [u8; MAX_PACKET_LEN],
+) -> usize {
+    let len = data.len().min(OTA_CHUNK_LEN);
+    write_header(out, Kind::OtaData);
+    out[4..8].copy_from_slice(&offset.to_le_bytes());
+    out[8] = len as u8;
+    out[OTA_DATA_HEADER_LEN..OTA_DATA_HEADER_LEN + len].copy_from_slice(&data[..len]);
+    append_tag(key, src_mac, out, OTA_DATA_HEADER_LEN + len)
 }
 
 /// Encodes an acknowledgement. Returns the number of bytes written to `out`.
@@ -444,6 +568,41 @@ pub fn decode(key: &[u8], src_mac: &[u8; 6], data: &[u8]) -> Result<Packet, Deco
                 interval_s: u16_at(17),
                 caps: if body_len == CONFIG_BODY_LEN { data[19] } else { 0 },
             }))
+        }
+        5 => {
+            if data.len() != OTA_REQUEST_BODY_LEN + TAG_LEN {
+                return Err(DecodeError::BadLength);
+            }
+            verify_tag(key, src_mac, data)?;
+            Ok(Packet::OtaRequest { offset: u32_at(4) })
+        }
+        6 => {
+            if data.len() != OTA_INFO_BODY_LEN + TAG_LEN {
+                return Err(DecodeError::BadLength);
+            }
+            verify_tag(key, src_mac, data)?;
+            let mut sha256 = [0u8; 32];
+            sha256.copy_from_slice(&data[8..40]);
+            let version_len = (data[40] as usize).min(MAX_VERSION_LEN);
+            let version = core::str::from_utf8(&data[41..41 + version_len]).unwrap_or("");
+            Ok(Packet::OtaInfo(OtaInfo::new(u32_at(4), sha256, version)))
+        }
+        7 => {
+            if data.len() < OTA_DATA_HEADER_LEN + 1 + TAG_LEN {
+                return Err(DecodeError::TooShort);
+            }
+            let len = data[8] as usize;
+            if len == 0 || len > OTA_CHUNK_LEN || data.len() != OTA_DATA_HEADER_LEN + len + TAG_LEN {
+                return Err(DecodeError::BadLength);
+            }
+            verify_tag(key, src_mac, data)?;
+            let mut chunk = OtaData {
+                offset: u32_at(4),
+                len: len as u8,
+                data: [0; OTA_CHUNK_LEN],
+            };
+            chunk.data[..len].copy_from_slice(&data[OTA_DATA_HEADER_LEN..OTA_DATA_HEADER_LEN + len]);
+            Ok(Packet::OtaData(chunk))
         }
         _ => Err(DecodeError::UnknownKind),
     }

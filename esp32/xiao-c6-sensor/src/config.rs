@@ -298,6 +298,11 @@ impl ConfigStore {
         self.range.is_some()
     }
 
+    /// The whole flash, for OTA (writes outside the config partition).
+    pub fn flash(&mut self) -> &mut FlashStorage<'static> {
+        &mut self.flash
+    }
+
     /// Saved settings, or build-time defaults when nothing valid is stored.
     pub fn load(&mut self) -> (NodeConfig, bool) {
         if let Some(range) = &self.range {

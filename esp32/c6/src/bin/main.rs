@@ -93,6 +93,9 @@ mod wifi_runtime;
 #[path = "../../../shared/espnow_packet.rs"]
 mod espnow_packet;
 #[cfg(feature = "wifi")]
+#[path = "../../../shared/gateway_ota.rs"]
+mod gateway_ota;
+#[cfg(feature = "wifi")]
 #[path = "main/espnow_gateway.rs"]
 mod espnow_gateway;
 #[cfg(feature = "wifi")]
@@ -1435,6 +1438,9 @@ async fn main(spawner: Spawner) {
     }
 
     if espnow_gateway::key().is_some() {
+        // Second handle on the flash for sensor firmware staging (the
+        // config storage keeps its own); flash calls never interleave.
+        gateway_ota::init(FlashStorage::new(unsafe { esp_hal::peripherals::FLASH::steal() }));
         spawner.spawn(espnow_gateway::rx_task(wifi_stacks.esp_now, wifi_stacks.sta_mac).unwrap());
         spawner.spawn(espnow_gateway::forward_task(stack, tcp_state, config_handle).unwrap());
         if config_handle.lock().await.deep_sleep_enabled {
@@ -2669,7 +2675,7 @@ async fn mqtt_publish_with_discovery(
         )
         .await;
     }
-    let commands = espnow_gateway::read_desired(&mut socket, own_topic("set/+").as_str()).await;
+    let commands = espnow_gateway::read_desired(&mut socket, own_topic("set/+").as_str(), None).await;
     let in_use = match commands {
         Some(d) if !d.is_empty() => apply_own_remote_config(config, storage, &d).await,
         _ => config.lock().await.clone(),
