@@ -172,6 +172,12 @@ With MQTT on (`wifi` and `gateway`), the board's own HA device also has
 own DHT22: a change in HA is applied on the next publish and saved to flash,
 like the portal's Calibration section (see `esp32/c6/README.md`).
 
+The same device has a **Firmware** `update` entity (even without a DHT22):
+publish a C3 build with GitHub Actions → **Publish Firmware** (firmware
+`c3`, built without the `supermini` feature) or `publish_ota.py --project
+c3`, then press **Install**; details and caveats in `esp32/c6/README.md`
+("Gateway firmware updates"). The OLED is a setting now (`set oled on`).
+
 ### Gateway mode
 
 Works like the `esp32/c6` gateway (see its README), without the OLED sensor

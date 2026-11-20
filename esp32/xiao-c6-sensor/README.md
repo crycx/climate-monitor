@@ -206,9 +206,9 @@ Once a sensor runs firmware with OTA support (flashed over USB once, see
 [New sensor](#new-sensor-first-flash-over-usb)), later versions can be
 installed from Home Assistant.
 
-**From GitHub (button):** Actions → **Publish XIAO Firmware** → **Run
-workflow** (pick the branch, normally `main`). It builds the sensor
-firmware from that commit and publishes it to the broker; the image is also
+**From GitHub (button):** Actions → **Publish Firmware** → **Run
+workflow** (pick the branch, normally `main`, and firmware
+`xiao-c6-sensor`). It builds the sensor firmware from that commit and publishes it to the broker; the image is also
 kept as a workflow artifact. Only the last 10 runs are kept: each run
 deletes older ones (and their images). Needs repository secrets `MQTT_HOST`,
 `MQTT_USER` and `MQTT_PASSWORD` (Settings → Secrets and variables →

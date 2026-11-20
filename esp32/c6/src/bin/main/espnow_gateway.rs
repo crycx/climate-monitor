@@ -8,8 +8,9 @@
 //!   (with discovery), and POSTs them to the backend for sensors that have a
 //!   backend API key configured on the gateway (sensor MAC -> API key).
 //!
-//! The gateway is enabled only when the firmware is built with `ESPNOW_KEY`
-//! (same value as on the sensors). It must stay awake to receive, so deep
+//! The gateway is enabled only with an ESP-NOW key in the settings
+//! (`espnow_key`, same value as on the sensors; `ESPNOW_KEY` at build time
+//! is its default). It must stay awake to receive, so deep
 //! sleep should be disabled on the gateway.
 
 use alloc::{format, string::String, vec::Vec};
@@ -27,7 +28,6 @@ use crate::log_runtime_line;
 
 const QUEUE_DEPTH: usize = 8;
 const MAX_TRACKED_SENSORS: usize = 16;
-const MIN_KEY_LEN: usize = 8;
 
 #[derive(Clone, Copy)]
 pub struct RemoteReading {
@@ -224,13 +224,6 @@ pub fn display_pages() -> (Vec<RemotePage>, Option<usize>) {
     (pages, newest)
 }
 
-/// Shared HMAC key; ESP-NOW is disabled when it is missing or too short.
-pub fn key() -> Option<&'static [u8]> {
-    option_env!("ESPNOW_KEY")
-        .filter(|k| k.len() >= MIN_KEY_LEN)
-        .map(str::as_bytes)
-}
-
 pub fn mac_hex(mac: &[u8; 6]) -> String {
     format!(
         "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
@@ -397,10 +390,8 @@ async fn send_unicast(esp_now: &mut EspNow<'static>, dst: &[u8; 6], data: &[u8],
 }
 
 #[embassy_executor::task]
-pub async fn rx_task(mut esp_now: EspNow<'static>, own_mac: [u8; 6]) {
-    let Some(key) = key() else {
-        return;
-    };
+pub async fn rx_task(mut esp_now: EspNow<'static>, own_mac: [u8; 6], key: String) {
+    let key = key.as_bytes();
     log_runtime_line(
         format!("ESP-NOW: gateway listening, MAC {}", mac_hex(&own_mac)).as_str(),
     );
@@ -575,13 +566,13 @@ async fn mqtt_read_packet(
 /// Subscribes to `<base>/<device>/set/+` and collects the retained commands
 /// HA left there. None if the broker did not answer the subscribe.
 ///
-/// With `meta_topic` it also reads the published sensor firmware's
-/// description and hands it to `gateway_ota::set_latest`.
+/// With `meta_topic` it also reads a published firmware's description
+/// (None: nothing published).
 pub(crate) async fn read_desired(
     socket: &mut TcpSocket<'_>,
     filter: &str,
     meta_topic: Option<&str>,
-) -> Option<Desired> {
+) -> Option<(Desired, Option<espnow_packet::OtaInfo>)> {
     let filters: Vec<&[u8]> = core::iter::once(filter).chain(meta_topic).map(str::as_bytes).collect();
     let mut packet: Vec<u8> = Vec::with_capacity(64 + filter.len());
     packet.push(0x82); // SUBSCRIBE
@@ -639,10 +630,7 @@ pub(crate) async fn read_desired(
             _ => {}
         }
     }
-    if subscribed && meta_topic.is_some() {
-        crate::gateway_ota::set_latest(meta);
-    }
-    subscribed.then_some(desired)
+    subscribed.then_some((desired, meta))
 }
 
 struct MqttSettings {
@@ -911,7 +899,8 @@ async fn publish(
     // Remote config: pick up HA's retained commands for this sensor; the
     // Config reply to its next reading carries them.
     let meta_topic = crate::gateway_ota::meta_topic(s.base_topic.as_str());
-    if let Some(d) = read_desired(&mut socket, topic("set/+").as_str(), Some(meta_topic.as_str())).await {
+    if let Some((d, meta)) = read_desired(&mut socket, topic("set/+").as_str(), Some(meta_topic.as_str())).await {
+        crate::gateway_ota::set_latest(meta);
         set_desired(&item.mac, d);
     }
 

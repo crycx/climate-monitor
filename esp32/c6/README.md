@@ -220,6 +220,25 @@ sensor over ESP-NOW after the sensor's next reading (`shared/gateway_ota.rs`,
 steps in `esp32/xiao-c6-sensor/README.md`). Needs the OTA `partitions.csv`
 on the gateway too.
 
+**Gateway firmware updates:** the gateway's own HA device has a
+**Firmware** `update` entity too (also without a DHT22: it then publishes
+only its status, settings and firmware). Publish a gateway build with
+GitHub Actions → **Publish Firmware** (firmware `c6` or `c3`) or
+`publish_ota.py --project c6|c3`, then press **Install**: the gateway
+downloads its image into the spare OTA slot, checks chip, project and
+SHA-256, switches slot and restarts (~1 min). It refuses while a sensor is
+downloading its update. There is no rollback: firmware that starts but
+cannot reach WiFi/MQTT must be flashed over USB.
+
+Builds made elsewhere (GitHub) carry none of this computer's
+`.cargo/config.toml` values. So on its first start each gateway saves all
+its current settings to flash (log: `Config: current settings saved to
+flash`); flash it over USB once with this firmware before the first update
+over the air. Display switches and the ESP-NOW key are settings now
+(console `set oled on|off`, `set nextion on|off`, `set espnow_key ...`, or
+the config page's Display / ESP-NOW cards); `OLED_ENABLED`,
+`NEXTION_ENABLED` and `ESPNOW_KEY` at build time are only their defaults.
+
 A newly received reading jumps straight to that sensor's page for 10 s. A
 sensor's page disappears after it misses ~3 reports.
 

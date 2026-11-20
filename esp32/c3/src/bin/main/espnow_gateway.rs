@@ -444,13 +444,13 @@ async fn mqtt_read_packet(
 /// Subscribes to `<base>/<device>/set/+` and collects the retained commands
 /// HA left there. None if the broker did not answer the subscribe.
 ///
-/// With `meta_topic` it also reads the published sensor firmware's
-/// description and hands it to `gateway_ota::set_latest`.
+/// With `meta_topic` it also reads a published firmware's description
+/// (None: nothing published).
 pub(crate) async fn read_desired(
     socket: &mut TcpSocket<'_>,
     filter: &str,
     meta_topic: Option<&str>,
-) -> Option<Desired> {
+) -> Option<(Desired, Option<espnow_packet::OtaInfo>)> {
     let filters: Vec<&[u8]> = core::iter::once(filter).chain(meta_topic).map(str::as_bytes).collect();
     let mut packet: Vec<u8> = Vec::with_capacity(64 + filter.len());
     packet.push(0x82); // SUBSCRIBE
@@ -508,10 +508,7 @@ pub(crate) async fn read_desired(
             _ => {}
         }
     }
-    if subscribed && meta_topic.is_some() {
-        crate::gateway_ota::set_latest(meta);
-    }
-    subscribed.then_some(desired)
+    subscribed.then_some((desired, meta))
 }
 
 struct MqttSettings {
@@ -781,7 +778,8 @@ async fn publish(
     // Remote config: pick up HA's retained commands for this sensor; the
     // Config reply to its next reading carries them.
     let meta_topic = crate::gateway_ota::meta_topic(s.base_topic.as_str());
-    if let Some(d) = read_desired(&mut socket, topic("set/+").as_str(), Some(meta_topic.as_str())).await {
+    if let Some((d, meta)) = read_desired(&mut socket, topic("set/+").as_str(), Some(meta_topic.as_str())).await {
+        crate::gateway_ota::set_latest(meta);
         set_desired(&item.mac, d);
     }
 

@@ -79,17 +79,21 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
   </div>
 
   <form id="form" hidden>
-    <section class="card" data-needs="transport" hidden>
-      <h2>Transport</h2>
-      <label for="transport">Send readings via</label>
-      <select id="transport" data-field="transport">
-        <option value="wifi">WiFi (backend + MQTT)</option>
-        <option value="gateway">WiFi + ESP-NOW gateway</option>
-        <option value="espnow">ESP-NOW (via gateway)</option>
-      </select>
-      <small data-modes="wifi">Readings go over WiFi to the backend and MQTT.</small>
-      <small data-modes="espnow">No WiFi connection: readings go to the ESP-NOW gateway, which forwards them to Home Assistant.</small>
-      <small data-modes="gateway">WiFi mode, and also receives ESP-NOW sensors and forwards them to MQTT and the backend.</small>
+    <section class="card" data-needs="espnow_key" hidden>
+      <!-- C3: transport + key; C6 (always a gateway): only the key. -->
+      <div data-needs="transport">
+        <h2>Transport</h2>
+        <label for="transport">Send readings via</label>
+        <select id="transport" data-field="transport">
+          <option value="wifi">WiFi (backend + MQTT)</option>
+          <option value="gateway">WiFi + ESP-NOW gateway</option>
+          <option value="espnow">ESP-NOW (via gateway)</option>
+        </select>
+        <small data-modes="wifi">Readings go over WiFi to the backend and MQTT.</small>
+        <small data-modes="espnow">No WiFi connection: readings go to the ESP-NOW gateway, which forwards them to Home Assistant.</small>
+        <small data-modes="gateway">WiFi mode, and also receives ESP-NOW sensors and forwards them to MQTT and the backend.</small>
+      </div>
+      <h2 data-needs="nextion">ESP-NOW gateway</h2>
       <div data-modes="espnow gateway">
         <label for="espnow_key">ESP-NOW key</label>
         <input id="espnow_key" data-secret="espnow_key" type="password" autocomplete="off">
@@ -118,6 +122,13 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
         <div data-needs="oled_orientation"><label for="oled_orientation">OLED</label>
           <select id="oled_orientation" data-field="oled_orientation"><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></div>
       </div>
+    </section>
+
+    <section class="card" data-needs="oled">
+      <h2>Display</h2>
+      <label class="check"><input id="oled" data-field="oled" type="checkbox"> OLED (SSD1306 on GPIO6/GPIO7) attached</label>
+      <label class="check" data-needs="nextion"><input id="nextion" data-field="nextion" type="checkbox"> Nextion display instead of the OLED (GPIO6 = TX to its RX)</label>
+      <small>Applies after the restart that saving does.</small>
     </section>
 
     <section class="card" data-modes="wifi gateway">

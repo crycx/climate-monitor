@@ -131,3 +131,10 @@ konsoolis `set warmup 1500`, `save`), muidu kulub aku kiiremini.
   pesast ota_1 versiooniga `ota-test-1`, HA näitas "up to date". Tagasitee
   ota_1 -> ota_0 testimata. Kodus: kodune C6 ja XIAO vajavad ühe USB flashi
   selle püsivaraga, edasi saab XIAO-t uuendada HA-st.
+- OTA 3. osa (2026-11-20): gateway'd uuendavad ka iseennast (HA "Firmware",
+  GitHub "Publish Firmware" valikuga c6/c3). OLED/Nextion/ESP-NOW võti on
+  seaded (`oled`, `nextion`, `espnow_key`); gateway salvestab esimesel
+  käivitusel kõik oma seaded flash'i, et GitHubi build neid ei kaotaks.
+  Kontori C3 USB-ga flashitud ja töötab; gateway enda OTA veel testimisel.
+  Kodune C6: enne esimest OTA-d üks USB flash selle püsivaraga (kohaliku
+  config.toml-iga, et ESPNOW_KEY jm salvestuks).

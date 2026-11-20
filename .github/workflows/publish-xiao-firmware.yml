@@ -1,7 +1,8 @@
-name: Publish XIAO Firmware
+name: Publish Firmware
 
-# Builds esp32/xiao-c6-sensor and publishes it for over-the-air updates
-# (esp32/tools/publish_ota.py). Afterwards each sensor's Firmware entity in
+# Builds one firmware and publishes it for over-the-air updates
+# (esp32/tools/publish_ota.py): xiao-c6-sensor (the ESP-NOW battery sensors),
+# c6 or c3 (the gateways). Afterwards each such device's Firmware entity in
 # Home Assistant shows the new version; press Install there.
 #
 # Needs repository secrets MQTT_HOST, MQTT_USER and MQTT_PASSWORD (the
@@ -9,11 +10,24 @@ name: Publish XIAO Firmware
 # (default 1883) and MQTT_BASE_TOPIC (default climate_monitor).
 #
 # The build uses only defaults from the code: settings such as the ESP-NOW
-# key and name must be saved on each sensor (config page / console `save`).
+# key and name must be saved on each device (config page / console `save`;
+# gateways save their current settings by themselves on first start). The c3
+# build has no `supermini` feature.
+#
+# (File name kept from when it only built the XIAO firmware.)
 
 on:
   workflow_dispatch:
     inputs:
+      firmware:
+        description: "Firmware to build"
+        required: true
+        type: choice
+        default: xiao-c6-sensor
+        options:
+          - xiao-c6-sensor
+          - c6
+          - c3
       publish:
         description: "Publish to the MQTT broker (off: build and check only)"
         required: false
@@ -31,11 +45,10 @@ env:
 
 jobs:
   publish:
-    name: Build and publish
+    name: Build and publish ${{ inputs.firmware }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: esp32/xiao-c6-sensor
+    env:
+      FIRMWARE: ${{ inputs.firmware }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,7 +61,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: esp32/xiao-c6-sensor -> target
+          key: ${{ inputs.firmware }}
+          workspaces: |
+            esp32/xiao-c6-sensor -> target
+            esp32/c6 -> target
+            esp32/c3 -> target
 
       - name: Install espflash
         uses: cargo-bins/cargo-binstall@main
@@ -57,10 +74,18 @@ jobs:
 
       - name: Build
         run: |
-          # Target and build-std come from the example config (all [env]
-          # defaults there are commented out).
-          cp .cargo/config.toml.example .cargo/config.toml
-          cargo build --release --locked
+          cd "esp32/$FIRMWARE"
+          # No .cargo/config.toml in git: target and build-std given here
+          # (the XIAO's example config has them, its [env] lines are comments).
+          case "$FIRMWARE" in
+            xiao-c6-sensor)
+              cp .cargo/config.toml.example .cargo/config.toml
+              cargo build --release --locked ;;
+            c6)
+              cargo build --release --locked --target riscv32imac-unknown-none-elf -Zbuild-std=core,alloc ;;
+            c3)
+              cargo build --release --locked --target riscv32imc-unknown-none-elf -Zbuild-std=core,alloc ;;
+          esac
 
       - name: Check and publish
         env:
@@ -75,17 +100,17 @@ jobs:
               echo "::error::Add the MQTT_HOST, MQTT_USER and MQTT_PASSWORD repository secrets"
               exit 1
             fi
-            python3 ../tools/publish_ota.py --host "$MQTT_HOST" --port "$MQTT_PORT" \
-              --user "$MQTT_USER" --base "$MQTT_BASE_TOPIC" --out xiao-c6-sensor.bin
+            python3 esp32/tools/publish_ota.py --project "$FIRMWARE" --host "$MQTT_HOST" --port "$MQTT_PORT" \
+              --user "$MQTT_USER" --base "$MQTT_BASE_TOPIC" --out "$FIRMWARE.bin"
           else
-            python3 ../tools/publish_ota.py --dry-run --out xiao-c6-sensor.bin
+            python3 esp32/tools/publish_ota.py --project "$FIRMWARE" --dry-run --out "$FIRMWARE.bin"
           fi
 
       - name: Upload image
         uses: actions/upload-artifact@v4
         with:
-          name: xiao-c6-sensor-${{ github.sha }}
-          path: esp32/xiao-c6-sensor/xiao-c6-sensor.bin
+          name: ${{ inputs.firmware }}-${{ github.sha }}
+          path: ${{ inputs.firmware }}.bin
           if-no-files-found: error
 
   cleanup:

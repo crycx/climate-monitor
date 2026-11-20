@@ -39,6 +39,8 @@ Fields:
   interval <5..3600 s>     temp_offset <C>       hum_offset <%>
   deep_sleep on|off        power_source battery|power_bank
   oled_orientation landscape|portrait
+  oled on|off              nextion on|off (Nextion on the OLED pins; both apply after restart)
+  espnow_key <secret>      ESP-NOW key shared with the sensors (empty = gateway off)
   wifi_ssid[_2.._5] <ssid> wifi_password[_2.._5] <pw> wifi_location[_2.._5] <text>
   mqtt_enabled[_2.._5] on|off
   mqtt_host  mqtt_port  mqtt_username  mqtt_password  mqtt_base_topic  mqtt_device_id
@@ -49,7 +51,7 @@ Fields:
 /// Settable fields, in `show` order.
 const FIELDS: &[&str] = &[
     "interval", "temp_offset", "hum_offset", "deep_sleep",
-    "power_source", "oled_orientation",
+    "power_source", "oled_orientation", "oled", "nextion", "espnow_key",
     "wifi_ssid", "wifi_password", "wifi_location", "mqtt_enabled",
     "wifi_ssid_2", "wifi_password_2", "wifi_location_2", "mqtt_enabled_2",
     "wifi_ssid_3", "wifi_password_3", "wifi_location_3", "mqtt_enabled_3",
@@ -80,6 +82,9 @@ fn field<'a>(cfg: &'a mut AppConfig, name: &str) -> Option<Field<'a>> {
         "deep_sleep" => Flag(&mut cfg.deep_sleep_enabled),
         "power_source" => Text(&mut cfg.power_source),
         "oled_orientation" => Text(&mut cfg.oled_orientation),
+        "oled" => Flag(&mut cfg.oled_enabled),
+        "nextion" => Flag(&mut cfg.nextion_enabled),
+        "espnow_key" => Secret(&mut cfg.espnow_key),
         "wifi_ssid" => Text(&mut cfg.wifi_ssid),
         "wifi_password" => Secret(&mut cfg.wifi_password),
         "wifi_location" => Text(&mut cfg.wifi_location),
@@ -139,6 +144,13 @@ fn validate(name: &str, value: &str) -> Result<String, String> {
         return Err("backend API keys are 64 characters".into());
     }
     match name {
+        "espnow_key" if !value.is_empty() => {
+            if value.len() < app_config::ESPNOW_KEY_MIN_LEN || value.len() > 64 || value.contains(' ') {
+                Err(format!("key must be {}..64 characters without spaces", app_config::ESPNOW_KEY_MIN_LEN))
+            } else {
+                Ok(value.into())
+            }
+        }
         "interval" => match value.parse::<u64>() {
             Ok(secs) if (5..=3600).contains(&secs) => Ok(format!("{}", secs)),
             _ => Err("expected 5..3600 seconds".into()),

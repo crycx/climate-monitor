@@ -334,17 +334,6 @@ fn oled_i2c_address() -> u8 {
 }
 
 #[cfg(feature = "wifi")]
-fn oled_enabled() -> bool {
-    match option_env!("OLED_ENABLED") {
-        Some("0" | "false" | "FALSE" | "no" | "NO" | "off" | "OFF") => false,
-        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") => true,
-        // The C3 boards run without an SSD1306 (only the C6 gateway has a
-        // display); set OLED_ENABLED=1 at build time to use one.
-        _ => false,
-    }
-}
-
-#[cfg(feature = "wifi")]
 fn oled_boot_scan_enabled() -> bool {
     matches!(
         option_env!("OLED_BOOT_SCAN"),
@@ -1264,9 +1253,21 @@ async fn main(spawner: Spawner) {
     }
 
     let mut flash = FlashStorage::new(peripherals.FLASH);
+    // Settings first: they also choose the display (OLED / Nextion).
+    let partition_range = resolve_partition_range(&mut flash, "config").expect("config partition missing");
+    let mut config_storage = FlashConfigStorage::new(flash, partition_range);
+    config_storage.mount().await.expect("config mount failed");
+    let loaded_config = config_storage.load_config().await.expect("config load failed");
+    // Build-time defaults become saved settings, so firmware installed over
+    // the air (built without this computer's .cargo/config.toml) keeps them.
+    match config_storage.persist_once(&loaded_config).await {
+        Ok(true) => log_runtime_line("Config: current settings saved to flash"),
+        Ok(false) => {}
+        Err(e) => log_runtime_line(format!("Config: saving current settings failed: {}", e).as_str()),
+    }
 
     let oled_addr = oled_i2c_address();
-    let mut oled = if oled_enabled() {
+    let mut oled = if loaded_config.oled_enabled {
         match I2c::new(
             peripherals.I2C0,
             oled_i2c_config(),
@@ -1303,7 +1304,7 @@ async fn main(spawner: Spawner) {
             }
         }
     } else {
-        log_runtime_line("OLED disabled (set OLED_ENABLED=1 to force-enable).");
+        log_runtime_line("OLED off (setting `oled off`; `set oled on` + save to use one).");
         None
     };
 
@@ -1345,10 +1346,6 @@ async fn main(spawner: Spawner) {
         log_runtime_line("OLED: disabled (bus init failed)");
     }
 
-    let partition_range = resolve_partition_range(&mut flash, "config").expect("config partition missing");
-    let mut config_storage = FlashConfigStorage::new(flash, partition_range);
-    config_storage.mount().await.expect("config mount failed");
-    let loaded_config = config_storage.load_config().await.expect("config load failed");
 
     if boot_button_held
         || !loaded_config.deep_sleep_enabled
@@ -2062,8 +2059,7 @@ async fn main(spawner: Spawner) {
                             mqtt_base_topic.as_str(),
                             mqtt_device_id.as_str(),
                             active_wifi_location.as_str(),
-                            temp,
-                            hum,
+                            Some((temp, hum)),
                             config_handle,
                             config_storage,
                         )
@@ -2257,6 +2253,16 @@ async fn main(spawner: Spawner) {
             }
             Err(e) => {
                 log_runtime_line(format!("DHT22 read error: {:?}", e).as_str());
+                if stack_has_ipv4(stack) {
+                    publish_own_status(
+                        *stack,
+                        config_handle,
+                        config_storage,
+                        active_wifi_slot,
+                        active_wifi_location.as_str(),
+                    )
+                    .await;
+                }
             }
         }
     }
@@ -2501,6 +2507,53 @@ fn json_escape(input: &str) -> String {
     out
 }
 
+/// The gateway's own HA device without a DHT22 reading (no sensor fitted,
+/// or it failed): settings, firmware update and "Last seen" stay current.
+#[cfg(feature = "wifi")]
+async fn publish_own_status(
+    stack: Stack<'static>,
+    config: &'static Mutex<CriticalSectionRawMutex, AppConfig>,
+    storage: &'static Mutex<CriticalSectionRawMutex, FlashConfigStorage<'static>>,
+    wifi_slot: usize,
+    wifi_location: &str,
+) {
+    let (enabled, host, port, username, password, base_topic, device_id) = {
+        let cfg = config.lock().await;
+        let enabled = match wifi_slot {
+            2 => cfg.mqtt_enabled_2,
+            3 => cfg.mqtt_enabled_3,
+            4 => cfg.mqtt_enabled_4,
+            5 => cfg.mqtt_enabled_5,
+            _ => cfg.mqtt_enabled_1,
+        };
+        (
+            enabled,
+            cfg.mqtt_host.clone(),
+            cfg.mqtt_port.clone(),
+            cfg.mqtt_username.clone(),
+            cfg.mqtt_password.clone(),
+            cfg.mqtt_base_topic.clone(),
+            cfg.mqtt_device_id.clone(),
+        )
+    };
+    if enabled && !host.trim().is_empty() {
+        mqtt_publish_with_discovery(
+            stack,
+            host.as_str(),
+            port.as_str(),
+            username.as_str(),
+            password.as_str(),
+            base_topic.as_str(),
+            device_id.as_str(),
+            wifi_location,
+            None,
+            config,
+            storage,
+        )
+        .await;
+    }
+}
+
 #[cfg(feature = "wifi")]
 async fn mqtt_publish_with_discovery(
     stack: Stack<'static>,
@@ -2511,8 +2564,7 @@ async fn mqtt_publish_with_discovery(
     base_topic_raw: &str,
     device_id_raw: &str,
     wifi_location: &str,
-    temp: f32,
-    hum: f32,
+    reading: Option<(f32, f32)>,
     config: &'static Mutex<CriticalSectionRawMutex, AppConfig>,
     storage: &'static Mutex<CriticalSectionRawMutex, FlashConfigStorage<'static>>,
 ) {
@@ -2624,26 +2676,19 @@ async fn mqtt_publish_with_discovery(
         device_block,
     );
 
-    let _ = embassy_time::with_timeout(
-        Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
-        mqtt_publish(
-            &mut socket,
-            temp_config_topic.as_str(),
-            temp_discovery_payload.as_bytes(),
-            true,
-        ),
-    )
-    .await;
-    let _ = embassy_time::with_timeout(
-        Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
-        mqtt_publish(
-            &mut socket,
-            hum_config_topic.as_str(),
-            hum_discovery_payload.as_bytes(),
-            true,
-        ),
-    )
-    .await;
+    // Without a DHT22 reading, no temperature/humidity entities.
+    if reading.is_some() {
+        for (topic, payload) in [
+            (&temp_config_topic, &temp_discovery_payload),
+            (&hum_config_topic, &hum_discovery_payload),
+        ] {
+            let _ = embassy_time::with_timeout(
+                Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+                mqtt_publish(&mut socket, topic.as_str(), payload.as_bytes(), true),
+            )
+            .await;
+        }
+    }
     let last_seen_topic = format!("{}/{}/last_seen", base_topic, device_id);
     let last_seen_payload = last_seen_discovery(
         format!("{}_{}_last_seen", base_topic, device_id).as_str(),
@@ -2697,7 +2742,32 @@ async fn mqtt_publish_with_discovery(
         )
         .await;
     }
-    let commands = espnow_gateway::read_desired(&mut socket, own_topic("set/+").as_str(), None).await;
+    // Firmware update for this gateway (gateway_ota::update_self): "Install"
+    // leaves a retained command on set/ota.
+    let payload = format!(
+        r#"{{"name":"Firmware","unique_id":"{}_{}_firmware","state_topic":"{}","command_topic":"{}","payload_install":"install","retain":true,"device_class":"firmware","entity_category":"config","device":{}}}"#,
+        base_topic,
+        device_id,
+        json_escape(own_topic("firmware").as_str()),
+        json_escape(own_topic("set/ota").as_str()),
+        device_block,
+    );
+    let _ = embassy_time::with_timeout(
+        Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+        mqtt_publish(
+            &mut socket,
+            format!("{}/update/{}_firmware/config", HA_DISCOVERY_PREFIX, device_id).as_str(),
+            payload.as_bytes(),
+            true,
+        ),
+    )
+    .await;
+    let meta_topic = gateway_ota::self_meta_topic(base_topic);
+    let read = espnow_gateway::read_desired(&mut socket, own_topic("set/+").as_str(), Some(meta_topic.as_str())).await;
+    let commands = read.map(|(d, _)| d);
+    if let Some((_, meta)) = read {
+        gateway_ota::set_latest_self(meta);
+    }
     let in_use = match commands {
         Some(d) if !d.is_empty() => apply_own_remote_config(config, storage, &d).await,
         _ => config.lock().await.clone(),
@@ -2717,7 +2787,12 @@ async fn mqtt_publish_with_discovery(
     // Commands are applied (or rejected) now: clear them so they are not
     // applied again after a later change from the portal or console.
     if let Some(d) = commands {
-        let pending = [("temp_offset", d.temp.is_some()), ("hum_offset", d.hum.is_some()), ("interval", d.interval.is_some())];
+        let pending = [
+            ("temp_offset", d.temp.is_some()),
+            ("hum_offset", d.hum.is_some()),
+            ("interval", d.interval.is_some()),
+            ("ota", d.ota),
+        ];
         for (key, _) in pending.iter().filter(|(_, set)| *set) {
             let _ = embassy_time::with_timeout(
                 Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
@@ -2727,24 +2802,33 @@ async fn mqtt_publish_with_discovery(
         }
     }
 
+    let firmware_state = gateway_ota::self_state(FW_VERSION);
+    let _ = embassy_time::with_timeout(
+        Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+        mqtt_publish(&mut socket, own_topic("firmware").as_str(), firmware_state.as_bytes(), true),
+    )
+    .await;
+
     // Availability + readings (retain to keep last values)
     let _ = embassy_time::with_timeout(
         Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
         mqtt_publish(&mut socket, availability_topic.as_str(), b"online", true),
     )
     .await;
-    let temp_payload = format!("{:.2}", temp);
-    let hum_payload = format!("{:.2}", hum);
-    let _ = embassy_time::with_timeout(
-        Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
-        mqtt_publish(&mut socket, temp_topic.as_str(), temp_payload.as_bytes(), true),
-    )
-    .await;
-    let _ = embassy_time::with_timeout(
-        Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
-        mqtt_publish(&mut socket, hum_topic.as_str(), hum_payload.as_bytes(), true),
-    )
-    .await;
+    if let Some((temp, hum)) = reading {
+        let temp_payload = format!("{:.2}", temp);
+        let hum_payload = format!("{:.2}", hum);
+        let _ = embassy_time::with_timeout(
+            Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+            mqtt_publish(&mut socket, temp_topic.as_str(), temp_payload.as_bytes(), true),
+        )
+        .await;
+        let _ = embassy_time::with_timeout(
+            Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+            mqtt_publish(&mut socket, hum_topic.as_str(), hum_payload.as_bytes(), true),
+        )
+        .await;
+    }
     // Not retained: HA stamps "Last seen" with the arrival time (see last_seen_discovery).
     let _ = embassy_time::with_timeout(
         Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
@@ -2760,6 +2844,47 @@ async fn mqtt_publish_with_discovery(
     socket.close();
     let _ = embassy_time::with_timeout(Duration::from_secs(MQTT_IO_TIMEOUT_SECS), socket.flush()).await;
     log_runtime_line("MQTT: publish cycle done");
+
+    // "Install" on this gateway's Firmware entity: download, switch, restart.
+    if commands.is_some_and(|d| d.ota) {
+        let broker = gateway_ota::Broker {
+            host,
+            port,
+            username,
+            password,
+            base: base_topic,
+        };
+        gateway_ota::update_self(stack, &broker).await;
+    }
+}
+
+/// Selects OTA slot `target` in otadata (see gateway_ota). Erased otadata
+/// reads as "factory": the running slot is recorded first so the sequence
+/// numbers step from it, as the bootloader expects.
+#[cfg(feature = "wifi")]
+pub(crate) fn switch_ota_slot(
+    flash: &mut FlashStorage<'static>,
+    booted: esp_bootloader_esp_idf::partitions::AppPartitionSubType,
+    target: esp_bootloader_esp_idf::partitions::AppPartitionSubType,
+) -> Result<(), &'static str> {
+    use esp_bootloader_esp_idf::partitions::{self, DataPartitionSubType, PARTITION_TABLE_MAX_LEN, PartitionType};
+    let mut buf = [0u8; PARTITION_TABLE_MAX_LEN];
+    let pt = partitions::read_partition_table(flash, &mut buf).map_err(|_| "partition table unreadable")?;
+    let otadata = pt
+        .find_partition(PartitionType::Data(DataPartitionSubType::Ota))
+        .ok()
+        .flatten()
+        .ok_or("no otadata partition")?;
+    let mut region = otadata.as_embedded_storage(flash);
+    let mut ota = esp_bootloader_esp_idf::ota::Ota::new(&mut region, 2).map_err(|_| "otadata invalid")?;
+    if ota.current_app_partition().map_err(|_| "otadata unreadable")? != booted {
+        ota.set_current_app_partition(booted).map_err(|_| "otadata write failed")?;
+    }
+    ota.set_current_app_partition(target).map_err(|_| "otadata write failed")?;
+    if ota.current_app_partition().map_err(|_| "otadata unreadable")? != target {
+        return Err("otadata did not switch");
+    }
+    Ok(())
 }
 
 /// Applies HA remote config to this gateway's own sensor settings and saves

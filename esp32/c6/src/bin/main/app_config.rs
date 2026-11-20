@@ -73,6 +73,15 @@ const MQTT_ENABLED_2_KEY: u64 = fnv1a_hash(b"mqtt_enabled_2");
 const MQTT_ENABLED_3_KEY: u64 = fnv1a_hash(b"mqtt_enabled_3");
 const MQTT_ENABLED_4_KEY: u64 = fnv1a_hash(b"mqtt_enabled_4");
 const MQTT_ENABLED_5_KEY: u64 = fnv1a_hash(b"mqtt_enabled_5");
+/// Bump when adding settings, so [`FlashConfigStorage::persist_once`] saves
+/// the new ones' build defaults once more.
+const PERSIST_SCHEMA: u32 = 1;
+const PERSISTED_SCHEMA_KEY: u64 = fnv1a_hash(b"__persisted_schema__");
+const OLED_ENABLED_KEY: u64 = fnv1a_hash(b"oled_enabled");
+const NEXTION_ENABLED_KEY: u64 = fnv1a_hash(b"nextion_enabled");
+const ESPNOW_KEY_KEY: u64 = fnv1a_hash(b"espnow_key");
+/// Shorter ESP-NOW keys are rejected (the gateway stays off).
+pub const ESPNOW_KEY_MIN_LEN: usize = 8;
 
 /// ESP-NOW sensors the gateway forwards to the backend, each with its own
 /// backend device API key (sensor MAC -> API key).
@@ -135,6 +144,12 @@ pub struct AppConfig {
     pub mqtt_enabled_3: bool,
     pub mqtt_enabled_4: bool,
     pub mqtt_enabled_5: bool,
+    /// SSD1306 on GPIO6/GPIO7 (applies after a restart).
+    pub oled_enabled: bool,
+    /// Nextion on GPIO6 (UART TX) instead of the OLED (applies after a restart).
+    pub nextion_enabled: bool,
+    /// Shared ESP-NOW HMAC key; the gateway is off without one.
+    pub espnow_key: String,
     /// Normalized MACs (see `normalize_mac`), "" = unused slot.
     pub espnow_sensor_mac: [String; ESPNOW_SENSOR_SLOTS],
     /// Backend API key for the sensor in the same slot.
@@ -149,6 +164,15 @@ impl AppConfig {
             .zip(self.espnow_sensor_api_key.iter())
             .find(|(mac, key)| mac.as_str() == mac_hex && !key.is_empty())
             .map(|(_, key)| key.as_str())
+    }
+}
+
+/// On/off build default ("1"/"0", "on"/"off", ...); None if unset or unclear.
+fn build_flag(value: Option<&str>) -> Option<bool> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -221,6 +245,10 @@ impl Default for AppConfig {
             mqtt_enabled_3,
             mqtt_enabled_4,
             mqtt_enabled_5,
+            // Super Mini boards are often used without an SSD1306 attached.
+            oled_enabled: build_flag(option_env!("OLED_ENABLED")).unwrap_or(!cfg!(feature = "supermini")),
+            nextion_enabled: build_flag(option_env!("NEXTION_ENABLED")).unwrap_or(false),
+            espnow_key: option_env!("ESPNOW_KEY").unwrap_or("").trim().into(),
             espnow_sensor_mac: core::array::from_fn(|_| String::new()),
             espnow_sensor_api_key: core::array::from_fn(|_| String::new()),
         }
@@ -387,6 +415,15 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(MQTT_DEVICE_ID_KEY).await? {
             cfg.mqtt_device_id = value;
         }
+        if let Some(value) = self.get_u32(OLED_ENABLED_KEY).await? {
+            cfg.oled_enabled = value != 0;
+        }
+        if let Some(value) = self.get_u32(NEXTION_ENABLED_KEY).await? {
+            cfg.nextion_enabled = value != 0;
+        }
+        if let Some(value) = self.get_string(ESPNOW_KEY_KEY).await? {
+            cfg.espnow_key = value;
+        }
         for i in 0..ESPNOW_SENSOR_SLOTS {
             if let Some(value) = self.get_string(espnow_sensor_mac_key(i)).await? {
                 cfg.espnow_sensor_mac[i] = normalize_mac(&value).unwrap_or_default();
@@ -499,6 +536,9 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_string(MQTT_PASSWORD_KEY, &cfg.mqtt_password).await?;
         self.set_string(MQTT_BASE_TOPIC_KEY, &cfg.mqtt_base_topic).await?;
         self.set_string(MQTT_DEVICE_ID_KEY, &cfg.mqtt_device_id).await?;
+        self.set_u32(OLED_ENABLED_KEY, cfg.oled_enabled as u32).await?;
+        self.set_u32(NEXTION_ENABLED_KEY, cfg.nextion_enabled as u32).await?;
+        self.set_string(ESPNOW_KEY_KEY, &cfg.espnow_key).await?;
         for i in 0..ESPNOW_SENSOR_SLOTS {
             self.set_string(espnow_sensor_mac_key(i), &cfg.espnow_sensor_mac[i]).await?;
             self.set_string(espnow_sensor_api_key_key(i), &cfg.espnow_sensor_api_key[i]).await?;
@@ -523,6 +563,18 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_u32(MQTT_ENABLED_KEY, if any_enabled { 1 } else { 0 })
             .await?;
         Ok(())
+    }
+
+    /// Saves `cfg` once per [`PERSIST_SCHEMA`], so values that so far came
+    /// from build-time defaults (`.cargo/config.toml`) are in flash: an OTA
+    /// update is built without them. Returns true if it saved.
+    pub async fn persist_once(&mut self, cfg: &AppConfig) -> Result<bool, ConfigError> {
+        if self.get_u32(PERSISTED_SCHEMA_KEY).await? == Some(PERSIST_SCHEMA) {
+            return Ok(false);
+        }
+        self.store_config(cfg).await?;
+        self.set_u32(PERSISTED_SCHEMA_KEY, PERSIST_SCHEMA).await?;
+        Ok(true)
     }
 
     async fn format(&mut self) -> Result<(), ConfigError> {

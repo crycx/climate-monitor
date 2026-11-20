@@ -16,8 +16,10 @@
 //!    the old version is offered it once more, then the update is marked
 //!    failed.
 //!
-//! The staging slot is the gateway's own inactive OTA slot (the gateway does
-//! not update itself, so it is free).
+//! The staging slot is the gateway's own inactive OTA slot. The gateway
+//! updates itself through the same slot ([`update_self`]): its own image
+//! (`<base>/ota/c3|c6/...`, from the same tool) is downloaded and checked
+//! there, then selected in otadata, and the gateway restarts into it.
 
 use alloc::{format, string::String, vec, vec::Vec};
 use core::cell::RefCell;
@@ -34,6 +36,19 @@ use crate::log_runtime_line;
 
 /// Project whose images are published for the ESP-NOW sensors.
 pub const PROJECT: &str = "xiao-c6-sensor";
+/// This gateway's own project ("c3" or "c6").
+const SELF_PROJECT: &str = env!("CARGO_PKG_NAME");
+const IMAGE_MAGIC: u8 = 0xE9;
+const APP_DESC_OFFSET: usize = 32;
+const APP_DESC_MAGIC: u32 = 0xABCD_5432;
+
+/// ESP image header chip id of a project's target.
+fn chip_id(project: &str) -> u16 {
+    match project {
+        "c3" => 5, // ESP32-C3
+        _ => 13,   // ESP32-C6 (c6, xiao-c6-sensor)
+    }
+}
 /// Times an armed sensor is offered the update before it counts as failed.
 const MAX_ATTEMPTS: u8 = 2;
 const MAX_SENSORS: usize = 16;
@@ -61,18 +76,27 @@ struct Shared {
     flash: Option<FlashStorage<'static>>,
     /// Spare OTA slot: (flash offset, length).
     staging: Option<(u32, u32)>,
-    /// Last image description seen on the broker.
+    /// (running slot, spare slot), for switching to the spare one.
+    slots: Option<(AppPartitionSubType, AppPartitionSubType)>,
+    /// Last sensor image description seen on the broker.
     latest: Option<OtaInfo>,
-    /// Image held (and verified) in the staging slot.
-    staged: Option<OtaInfo>,
+    /// Last description of this gateway's own image.
+    latest_self: Option<OtaInfo>,
+    /// Image held (and verified) in the staging slot, with its project.
+    staged: Option<(&'static str, OtaInfo)>,
+    /// This gateway is downloading its own update.
+    self_busy: bool,
     sensors: [Option<SensorOta>; MAX_SENSORS],
 }
 
 static SHARED: critical_section::Mutex<RefCell<Shared>> = critical_section::Mutex::new(RefCell::new(Shared {
     flash: None,
     staging: None,
+    slots: None,
     latest: None,
+    latest_self: None,
     staged: None,
+    self_busy: false,
     sensors: [None; MAX_SENSORS],
 }));
 
@@ -93,15 +117,21 @@ fn with_flash<R>(f: impl FnOnce(&mut FlashStorage<'static>) -> R) -> Option<R> {
 /// updates are disabled.
 pub fn init(mut flash: FlashStorage<'static>) {
     let mut buf = [0u8; PARTITION_TABLE_MAX_LEN];
-    let staging = partitions::read_partition_table(&mut flash, &mut buf).ok().and_then(|pt| {
+    let found = partitions::read_partition_table(&mut flash, &mut buf).ok().and_then(|pt| {
         let booted = pt.booted_partition().ok().flatten()?;
-        pt.iter()
-            .find(|p| {
-                matches!(p.partition_type(), PartitionType::App(s) if s == AppPartitionSubType::Ota0 || s == AppPartitionSubType::Ota1)
-                    && p.offset() != booted.offset()
-            })
-            .map(|p| (p.offset(), p.len()))
+        let PartitionType::App(booted_sub) = booted.partition_type() else {
+            return None;
+        };
+        let spare = pt.iter().find(|p| {
+            matches!(p.partition_type(), PartitionType::App(s) if s == AppPartitionSubType::Ota0 || s == AppPartitionSubType::Ota1)
+                && p.offset() != booted.offset()
+        })?;
+        let PartitionType::App(spare_sub) = spare.partition_type() else {
+            return None;
+        };
+        Some(((spare.offset(), spare.len()), (booted_sub, spare_sub)))
     });
+    let staging = found.map(|(range, _)| range);
     match staging {
         Some((offset, len)) => log_runtime_line(
             format!("OTA: sensor images are staged at 0x{:x} ({} KB)", offset, len / 1024).as_str(),
@@ -111,6 +141,7 @@ pub fn init(mut flash: FlashStorage<'static>) {
     with_shared(|s| {
         s.flash = Some(flash);
         s.staging = staging;
+        s.slots = found.map(|(_, slots)| slots);
     });
 }
 
@@ -118,8 +149,13 @@ pub fn meta_topic(base: &str) -> String {
     format!("{}/ota/{}/meta", base, PROJECT)
 }
 
-fn image_topic(base: &str) -> String {
-    format!("{}/ota/{}/image", base, PROJECT)
+fn image_topic(base: &str, project: &str) -> String {
+    format!("{}/ota/{}/image", base, project)
+}
+
+/// Where the image for this gateway itself is described.
+pub fn self_meta_topic(base: &str) -> String {
+    format!("{}/ota/{}/meta", base, SELF_PROJECT)
 }
 
 fn json_field<'a>(json: &'a str, key: &str) -> Option<&'a str> {
@@ -157,6 +193,28 @@ pub fn set_latest(info: Option<OtaInfo>) {
 
 fn latest() -> Option<OtaInfo> {
     with_shared(|s| s.latest)
+}
+
+/// This gateway's own image on the broker (None: none published).
+pub fn set_latest_self(info: Option<OtaInfo>) {
+    with_shared(|s| s.latest_self = info);
+}
+
+/// The sensor image in the staging slot, if that is what it holds.
+fn staged_sensor_image(s: &Shared) -> Option<OtaInfo> {
+    s.staged.filter(|(project, _)| *project == PROJECT).map(|(_, info)| info)
+}
+
+/// State JSON for this gateway's own HA `update` entity.
+pub fn self_state(installed: &str) -> String {
+    let (latest, busy) = with_shared(|s| (s.latest_self, s.self_busy));
+    let latest = latest.map(|i| String::from(i.version())).unwrap_or_else(|| String::from(installed));
+    format!(
+        r#"{{"installed_version":"{}","latest_version":"{}","in_progress":{}}}"#,
+        crate::json_escape(installed),
+        crate::json_escape(latest.as_str()),
+        busy
+    )
 }
 
 pub fn in_progress(mac: &[u8; 6]) -> bool {
@@ -202,7 +260,7 @@ pub fn offer(mac: &[u8; 6], r: &Reading) -> bool {
         GaveUp,
     }
     let outcome = with_shared(|s| {
-        let staged = s.staged;
+        let staged = staged_sensor_image(s);
         let Some(slot) = s.sensors.iter_mut().find(|e| e.is_some_and(|e| &e.mac == mac)) else {
             return Outcome::No;
         };
@@ -254,7 +312,7 @@ pub fn serve(mac: &[u8; 6], offset: u32) -> Option<Reply> {
             return None;
         }
         entry.phase = Phase::Running;
-        Some((s.staged?, s.staging?))
+        Some((staged_sensor_image(s)?, s.staging?))
     })?;
     if offset == OTA_INFO_OFFSET {
         return Some(Reply::Info(info));
@@ -315,11 +373,37 @@ async fn skip(socket: &mut TcpSocket<'_>, mut len: usize, buf: &mut [u8]) -> Opt
 }
 
 /// Streams the retained image into the staging slot, checking size and hash.
+/// Rejects images for another chip or project (checked on the first bytes).
+fn check_image_start(bytes: &[u8], project: &str) -> Result<(), &'static str> {
+    if bytes.len() < APP_DESC_OFFSET + 80 || bytes[0] != IMAGE_MAGIC {
+        return Err("not an ESP app image");
+    }
+    if u16::from_le_bytes([bytes[12], bytes[13]]) != chip_id(project) {
+        return Err("image is for another chip");
+    }
+    let magic = u32::from_le_bytes([
+        bytes[APP_DESC_OFFSET],
+        bytes[APP_DESC_OFFSET + 1],
+        bytes[APP_DESC_OFFSET + 2],
+        bytes[APP_DESC_OFFSET + 3],
+    ]);
+    if magic != APP_DESC_MAGIC {
+        return Err("image has no app descriptor");
+    }
+    let name = &bytes[APP_DESC_OFFSET + 48..APP_DESC_OFFSET + 80];
+    let name = &name[..name.iter().position(|b| *b == 0).unwrap_or(name.len())];
+    if name != project.as_bytes() {
+        return Err("image is for another project");
+    }
+    Ok(())
+}
+
 async fn receive_image(
     socket: &mut TcpSocket<'_>,
     topic: &str,
     info: &OtaInfo,
     slot: (u32, u32),
+    project: &str,
 ) -> Result<(), &'static str> {
     let io = Duration::from_secs(crate::MQTT_IO_TIMEOUT_SECS);
     let mut sector: Vec<u8> = vec![0xFF; SECTOR];
@@ -368,6 +452,9 @@ async fn receive_image(
             let n = (payload_len - done).min(SECTOR);
             sector.fill(0xFF);
             read_exact(socket, &mut sector[..n], io).await.ok_or("download interrupted")?;
+            if done == 0 {
+                check_image_start(&sector[..n], project)?;
+            }
             hasher.update(&sector[..n]);
             let addr = slot.0 + done as u32;
             with_flash(|f| {
@@ -383,9 +470,9 @@ async fn receive_image(
     }
 }
 
-/// Makes sure the staging slot holds the image the broker describes.
-async fn stage(stack: Stack<'static>, s: &Broker<'_>, info: &OtaInfo) -> bool {
-    if with_shared(|sh| sh.staged == Some(*info)) {
+/// Makes sure the staging slot holds `project`'s image the broker describes.
+async fn stage(stack: Stack<'static>, s: &Broker<'_>, info: &OtaInfo, project: &'static str) -> bool {
+    if with_shared(|sh| sh.staged == Some((project, *info))) {
         return true;
     }
     let Some(slot) = with_shared(|sh| sh.staging) else {
@@ -423,7 +510,7 @@ async fn stage(stack: Stack<'static>, s: &Broker<'_>, info: &OtaInfo) -> bool {
         return false;
     }
 
-    let topic = image_topic(s.base);
+    let topic = image_topic(s.base, project);
     let mut packet: Vec<u8> = Vec::with_capacity(topic.len() + 8);
     packet.push(0x82); // SUBSCRIBE
     crate::encode_remaining_length(&mut packet, 2 + 2 + topic.len() + 1);
@@ -432,7 +519,7 @@ async fn stage(stack: Stack<'static>, s: &Broker<'_>, info: &OtaInfo) -> bool {
     packet.extend_from_slice(topic.as_bytes());
     packet.push(0x00); // QoS 0
     let result = match crate::socket_write_all(&mut socket, &packet).await {
-        Ok(()) => receive_image(&mut socket, topic.as_str(), info, slot).await,
+        Ok(()) => receive_image(&mut socket, topic.as_str(), info, slot, project).await,
         Err(_) => Err("subscribe failed"),
     };
     let _ = embassy_time::with_timeout(io, crate::mqtt_disconnect(&mut socket)).await;
@@ -441,7 +528,7 @@ async fn stage(stack: Stack<'static>, s: &Broker<'_>, info: &OtaInfo) -> bool {
 
     match result {
         Ok(()) => {
-            with_shared(|sh| sh.staged = Some(*info));
+            with_shared(|sh| sh.staged = Some((project, *info)));
             log_runtime_line(
                 format!("OTA: {} staged and verified in {} s", info.version(), started.elapsed().as_secs()).as_str(),
             );
@@ -479,7 +566,12 @@ pub async fn install(stack: Stack<'static>, broker: &Broker<'_>, mac: &[u8; 6], 
     if in_progress(mac) {
         return;
     }
-    if !stage(stack, broker, &info).await {
+    if with_shared(|s| s.self_busy) {
+        log_runtime_line(format!("OTA {}: the gateway is updating itself, try again later", mac_hex).as_str());
+        set_phase(mac, Phase::Failed);
+        return;
+    }
+    if !stage(stack, broker, &info, PROJECT).await {
         set_phase(mac, Phase::Failed);
         return;
     }
@@ -487,4 +579,47 @@ pub async fn install(stack: Stack<'static>, broker: &Broker<'_>, mac: &[u8; 6], 
     log_runtime_line(
         format!("OTA {}: {} -> {} armed, starts after its next reading", mac_hex, installed, info.version()).as_str(),
     );
+}
+
+/// Selects the staging slot in otadata; the bootloader starts it next.
+/// (`crate::switch_ota_slot`: the C3 and C6 bootloader crates differ.)
+fn activate_staging() -> Result<(), &'static str> {
+    let (booted, spare) = with_shared(|s| s.slots).ok_or("no spare OTA slot")?;
+    with_flash(|flash| crate::switch_ota_slot(flash, booted, spare)).ok_or("flash busy")?
+}
+
+/// "Install" on this gateway's own Firmware entity: downloads its published
+/// image into the spare slot, checks it, switches to it and restarts.
+/// Returns only on failure (the running firmware stays selected).
+pub async fn update_self(stack: Stack<'static>, broker: &Broker<'_>) {
+    let Some(info) = with_shared(|s| s.latest_self) else {
+        log_runtime_line(
+            format!("OTA: no {} firmware published (publish_ota.py --project {})", SELF_PROJECT, SELF_PROJECT).as_str(),
+        );
+        return;
+    };
+    if info.version() == crate::FW_VERSION {
+        log_runtime_line(format!("OTA: already running {}", info.version()).as_str());
+        return;
+    }
+    let busy_sensor = with_shared(|s| s.sensors.iter().flatten().any(|e| e.phase == Phase::Running));
+    if busy_sensor {
+        log_runtime_line("OTA: a sensor is downloading its update; install the gateway update later");
+        return;
+    }
+    log_runtime_line(format!("OTA: updating this gateway {} -> {}", crate::FW_VERSION, info.version()).as_str());
+    with_shared(|s| s.self_busy = true);
+    let staged = stage(stack, broker, &info, SELF_PROJECT).await;
+    let result = if staged { activate_staging() } else { Err("download failed") };
+    match result {
+        Ok(()) => {
+            log_runtime_line(format!("OTA: {} installed, restarting", info.version()).as_str());
+            embassy_time::Timer::after(Duration::from_millis(300)).await;
+            esp_hal::system::software_reset();
+        }
+        Err(e) => {
+            log_runtime_line(format!("OTA: gateway update failed: {}", e).as_str());
+            with_shared(|s| s.self_busy = false);
+        }
+    }
 }

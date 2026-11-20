@@ -73,6 +73,11 @@ const MQTT_ENABLED_2_KEY: u64 = fnv1a_hash(b"mqtt_enabled_2");
 const MQTT_ENABLED_3_KEY: u64 = fnv1a_hash(b"mqtt_enabled_3");
 const MQTT_ENABLED_4_KEY: u64 = fnv1a_hash(b"mqtt_enabled_4");
 const MQTT_ENABLED_5_KEY: u64 = fnv1a_hash(b"mqtt_enabled_5");
+/// Bump when adding settings, so [`FlashConfigStorage::persist_once`] saves
+/// the new ones' build defaults once more.
+const PERSIST_SCHEMA: u32 = 1;
+const PERSISTED_SCHEMA_KEY: u64 = fnv1a_hash(b"__persisted_schema__");
+const OLED_ENABLED_KEY: u64 = fnv1a_hash(b"oled_enabled");
 const TRANSPORT_KEY: u64 = fnv1a_hash(b"transport");
 const ESPNOW_KEY_KEY: u64 = fnv1a_hash(b"espnow_key");
 const ESPNOW_NAME_KEY: u64 = fnv1a_hash(b"espnow_name");
@@ -146,6 +151,8 @@ pub struct AppConfig {
     pub mqtt_enabled_3: bool,
     pub mqtt_enabled_4: bool,
     pub mqtt_enabled_5: bool,
+    /// SSD1306 on GPIO6/GPIO7 (applies after a restart).
+    pub oled_enabled: bool,
     /// "wifi" (backend + MQTT over WiFi), "espnow" (send to the ESP-NOW gateway)
     /// or "gateway" (WiFi mode that also receives and forwards ESP-NOW sensors).
     pub transport: String,
@@ -191,6 +198,15 @@ pub fn normalize_transport(value: &str) -> &'static str {
         TRANSPORT_GATEWAY
     } else {
         TRANSPORT_WIFI
+    }
+}
+
+/// On/off build default ("1"/"0", "on"/"off", ...); None if unset or unclear.
+fn build_flag(value: Option<&str>) -> Option<bool> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -263,6 +279,8 @@ impl Default for AppConfig {
             mqtt_enabled_3,
             mqtt_enabled_4,
             mqtt_enabled_5,
+            // The C3 boards run without an SSD1306 (only the C6 gateway has one).
+            oled_enabled: build_flag(option_env!("OLED_ENABLED")).unwrap_or(false),
             transport: normalize_transport(option_env!("TRANSPORT").unwrap_or(TRANSPORT_WIFI)).into(),
             espnow_key: option_env!("ESPNOW_KEY").unwrap_or("").trim().into(),
             espnow_name: option_env!("ESPNOW_NAME").unwrap_or("").into(),
@@ -441,6 +459,9 @@ impl<'d> FlashConfigStorage<'d> {
         if let Some(value) = self.get_string(ESPNOW_NAME_KEY).await? {
             cfg.espnow_name = value;
         }
+        if let Some(value) = self.get_u32(OLED_ENABLED_KEY).await? {
+            cfg.oled_enabled = value != 0;
+        }
         for i in 0..ESPNOW_SENSOR_SLOTS {
             if let Some(value) = self.get_string(espnow_sensor_mac_key(i)).await? {
                 cfg.espnow_sensor_mac[i] = normalize_mac(&value).unwrap_or_default();
@@ -556,6 +577,7 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_string(TRANSPORT_KEY, &cfg.transport).await?;
         self.set_string(ESPNOW_KEY_KEY, &cfg.espnow_key).await?;
         self.set_string(ESPNOW_NAME_KEY, &cfg.espnow_name).await?;
+        self.set_u32(OLED_ENABLED_KEY, cfg.oled_enabled as u32).await?;
         for i in 0..ESPNOW_SENSOR_SLOTS {
             self.set_string(espnow_sensor_mac_key(i), &cfg.espnow_sensor_mac[i]).await?;
             self.set_string(espnow_sensor_api_key_key(i), &cfg.espnow_sensor_api_key[i]).await?;
@@ -580,6 +602,18 @@ impl<'d> FlashConfigStorage<'d> {
         self.set_u32(MQTT_ENABLED_KEY, if any_enabled { 1 } else { 0 })
             .await?;
         Ok(())
+    }
+
+    /// Saves `cfg` once per [`PERSIST_SCHEMA`], so values that so far came
+    /// from build-time defaults (`.cargo/config.toml`) are in flash: an OTA
+    /// update is built without them. Returns true if it saved.
+    pub async fn persist_once(&mut self, cfg: &AppConfig) -> Result<bool, ConfigError> {
+        if self.get_u32(PERSISTED_SCHEMA_KEY).await? == Some(PERSIST_SCHEMA) {
+            return Ok(false);
+        }
+        self.store_config(cfg).await?;
+        self.set_u32(PERSISTED_SCHEMA_KEY, PERSIST_SCHEMA).await?;
+        Ok(true)
     }
 
     async fn format(&mut self) -> Result<(), ConfigError> {

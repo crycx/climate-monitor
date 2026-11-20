@@ -39,7 +39,7 @@ Fields:
   transport wifi|espnow|gateway    espnow_key <secret>   espnow_name <text>
   interval <5..3600 s>     temp_offset <C>       hum_offset <%>
   deep_sleep on|off        power_source battery|power_bank
-  oled_orientation landscape|portrait
+  oled_orientation landscape|portrait  oled on|off (SSD1306 attached; applies after restart)
   wifi_ssid[_2.._5] <ssid> wifi_password[_2.._5] <pw> wifi_location[_2.._5] <text>
   mqtt_enabled[_2.._5] on|off
   mqtt_host  mqtt_port  mqtt_username  mqtt_password  mqtt_base_topic  mqtt_device_id
@@ -51,7 +51,7 @@ Gateway only (transport gateway):
 /// Settable fields, in `show` order.
 const FIELDS: &[&str] = &[
     "transport", "espnow_key", "espnow_name", "interval", "temp_offset", "hum_offset", "deep_sleep",
-    "power_source", "oled_orientation",
+    "power_source", "oled_orientation", "oled",
     "wifi_ssid", "wifi_password", "wifi_location", "mqtt_enabled",
     "wifi_ssid_2", "wifi_password_2", "wifi_location_2", "mqtt_enabled_2",
     "wifi_ssid_3", "wifi_password_3", "wifi_location_3", "mqtt_enabled_3",
@@ -85,6 +85,7 @@ fn field<'a>(cfg: &'a mut AppConfig, name: &str) -> Option<Field<'a>> {
         "deep_sleep" => Flag(&mut cfg.deep_sleep_enabled),
         "power_source" => Text(&mut cfg.power_source),
         "oled_orientation" => Text(&mut cfg.oled_orientation),
+        "oled" => Flag(&mut cfg.oled_enabled),
         "wifi_ssid" => Text(&mut cfg.wifi_ssid),
         "wifi_password" => Secret(&mut cfg.wifi_password),
         "wifi_location" => Text(&mut cfg.wifi_location),
