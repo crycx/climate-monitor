@@ -87,3 +87,27 @@ jobs:
           name: xiao-c6-sensor-${{ github.sha }}
           path: esp32/xiao-c6-sensor/xiao-c6-sensor.bin
           if-no-files-found: error
+
+  cleanup:
+    name: Keep the last 10 runs
+    needs: publish
+    # Also after a failed run, so failures do not pile up either.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete older runs of this workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: 10
+        run: |
+          # Newest first; the run in progress counts as one of the 10.
+          # Deleting a run also deletes its image artifact.
+          gh api --paginate "repos/${{ github.repository }}/actions/workflows/publish-xiao-firmware.yml/runs?per_page=100" \
+            --jq '.workflow_runs[].id' \
+            | tail -n +$((KEEP + 1)) \
+            | while read -r id; do
+                echo "Deleting run $id"
+                gh api -X DELETE "repos/${{ github.repository }}/actions/runs/$id" || true
+              done

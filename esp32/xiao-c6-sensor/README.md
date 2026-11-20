@@ -209,7 +209,8 @@ installed from Home Assistant.
 **From GitHub (button):** Actions → **Publish XIAO Firmware** → **Run
 workflow** (pick the branch, normally `main`). It builds the sensor
 firmware from that commit and publishes it to the broker; the image is also
-kept as a workflow artifact. Needs repository secrets `MQTT_HOST`,
+kept as a workflow artifact. Only the last 10 runs are kept: each run
+deletes older ones (and their images). Needs repository secrets `MQTT_HOST`,
 `MQTT_USER` and `MQTT_PASSWORD` (Settings → Secrets and variables →
 Actions), and optionally the variables `MQTT_PORT` and `MQTT_BASE_TOPIC`.
 Untick **publish** to only build and check. Then continue with step 3.
