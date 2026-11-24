@@ -1428,6 +1428,7 @@ async fn main(spawner: Spawner) {
 
     let stack: &'static Stack<'static> = NET_STACK.init(wifi_stacks.sta);
     let tcp_state: &'static TcpClientState<2, 4096, 4096> = TCP_STATE.init(TcpClientState::new());
+    spawner.spawn(backend_post_task(stack, tcp_state).unwrap());
 
     // Nextion display: UART1 TX on GPIO6 (the OLED's SDA pin).
     if let Some(pin) = nextion_tx_pin {
@@ -1446,7 +1447,7 @@ async fn main(spawner: Spawner) {
         // config storage keeps its own); flash calls never interleave.
         gateway_ota::init(FlashStorage::new(unsafe { esp_hal::peripherals::FLASH::steal() }));
         spawner.spawn(espnow_gateway::rx_task(wifi_stacks.esp_now, wifi_stacks.sta_mac, key).unwrap());
-        spawner.spawn(espnow_gateway::forward_task(stack, tcp_state, config_handle).unwrap());
+        spawner.spawn(espnow_gateway::forward_task(stack, config_handle).unwrap());
         if config_handle.lock().await.deep_sleep_enabled {
             log_runtime_line(
                 "ESP-NOW: WARNING deep sleep is enabled; sensor packets are missed while the gateway sleeps.",
@@ -2087,16 +2088,7 @@ async fn main(spawner: Spawner) {
                         .await;
                     }
 
-                    post_readings_with_retry(
-                        stack,
-                        tcp_state,
-                        api_url.as_str(),
-                        api_key.as_str(),
-                        active_wifi_location.as_str(),
-                        temp,
-                        hum,
-                    )
-                    .await;
+                    queue_backend_post(api_url.as_str(), api_key.as_str(), active_wifi_location.as_str(), temp, hum, 3, None);
                 } else {
                     log_runtime_line("Network down, waiting for reconnect...");
                     let mut reconnected =
@@ -2108,16 +2100,7 @@ async fn main(spawner: Spawner) {
                     if reconnected {
                         log_runtime_line("Reconnected, waiting 5 s before sending...");
                         Timer::after(Duration::from_secs(5)).await;
-                        post_readings_with_retry(
-                            stack,
-                            tcp_state,
-                            api_url.as_str(),
-                            api_key.as_str(),
-                            active_wifi_location.as_str(),
-                            temp,
-                            hum,
-                        )
-                        .await;
+                        queue_backend_post(api_url.as_str(), api_key.as_str(), active_wifi_location.as_str(), temp, hum, 3, None);
                     } else {
                         log_runtime_line(
                             "Reconnect timed out; scanning and trying other configured WiFi networks...",
@@ -2139,16 +2122,7 @@ async fn main(spawner: Spawner) {
                             active_wifi_location = location;
                             log_runtime_line("Failover connected, waiting 5 s before sending...");
                             Timer::after(Duration::from_secs(5)).await;
-                            post_readings_with_retry(
-                                stack,
-                                tcp_state,
-                                api_url.as_str(),
-                                api_key.as_str(),
-                                active_wifi_location.as_str(),
-                                temp,
-                                hum,
-                            )
-                            .await;
+                            queue_backend_post(api_url.as_str(), api_key.as_str(), active_wifi_location.as_str(), temp, hum, 3, None);
                         } else {
                             wifi_sender.send(WifiCommand::StaDown).await;
                             set_portal_mode(
@@ -2341,33 +2315,103 @@ async fn recover_dht22_pin(pin: &mut Flex<'static>) {
     Timer::after(Duration::from_millis(health::DHT_RECOVERY_SETTLE_MS)).await;
 }
 
-/// Retry wrapper: tries up to 3 times with 10 s delay between attempts.
+/// One backend POST, handled by [`backend_post_task`].
 #[cfg(feature = "wifi")]
-async fn post_readings_with_retry(
-    stack: &'static Stack<'static>,
-    tcp_state: &'static TcpClientState<2, 4096, 4096>,
+struct PostJob {
+    api_url: String,
+    api_key: String,
+    location: String,
+    temp: f32,
+    hum: f32,
+    attempts: u8,
+    /// ESP-NOW sensor (MAC) for the log; None = this board's own reading.
+    sensor: Option<String>,
+}
+
+#[cfg(feature = "wifi")]
+static POST_QUEUE: embassy_sync::channel::Channel<CriticalSectionRawMutex, PostJob, 4> =
+    embassy_sync::channel::Channel::new();
+
+/// Queues a backend POST and returns at once. The POST (with its ~37 KB of
+/// TLS state) runs in its own task: inside the main loop that state made the
+/// main task large enough to overflow the stack, and a stalled server could
+/// hold up the main loop or ESP-NOW forwarding.
+#[cfg(feature = "wifi")]
+pub(crate) fn queue_backend_post(
     api_url: &str,
     api_key: &str,
     location: &str,
     temp: f32,
     hum: f32,
-) -> bool {
-    SENDING.store(true, Ordering::Relaxed);
-    for attempt in 1..=3u8 {
-        if attempt > 1 {
-            log_runtime_line(format!("Retry {}/3 in 10 s...", attempt).as_str());
-            Timer::after(Duration::from_secs(10)).await;
+    attempts: u8,
+    sensor: Option<String>,
+) {
+    if api_url.is_empty() || api_key.is_empty() {
+        if sensor.is_none() {
+            log_runtime_line("API config missing, skipping POST.");
         }
-        if post_readings(stack, tcp_state, api_url, api_key, location, temp, hum).await {
-            SENDING.store(false, Ordering::Relaxed);
-            let secs = (Instant::now().as_millis() / 1000) as usize;
-            LAST_SENT_SECS.store(secs, Ordering::Relaxed);
-            return true;
+        return;
+    }
+    let job = PostJob {
+        api_url: String::from(api_url),
+        api_key: String::from(api_key),
+        location: String::from(location),
+        temp,
+        hum,
+        attempts,
+        sensor,
+    };
+    if POST_QUEUE.try_send(job).is_err() {
+        log_runtime_line("Backend: POST queue full, reading not posted");
+    }
+}
+
+/// Posts queued readings; own readings up to `attempts` times, 10 s apart.
+#[cfg(feature = "wifi")]
+#[embassy_executor::task]
+async fn backend_post_task(
+    stack: &'static Stack<'static>,
+    tcp_state: &'static TcpClientState<2, 4096, 4096>,
+) {
+    loop {
+        let job = POST_QUEUE.receive().await;
+        SENDING.store(true, Ordering::Relaxed);
+        let attempts = job.attempts.max(1);
+        let mut ok = false;
+        for attempt in 1..=attempts {
+            if attempt > 1 {
+                log_runtime_line(format!("Retry {}/{} in 10 s...", attempt, attempts).as_str());
+                Timer::after(Duration::from_secs(10)).await;
+            }
+            if post_readings(
+                stack,
+                tcp_state,
+                job.api_url.as_str(),
+                job.api_key.as_str(),
+                job.location.as_str(),
+                job.temp,
+                job.hum,
+            )
+            .await
+            {
+                ok = true;
+                break;
+            }
+        }
+        SENDING.store(false, Ordering::Relaxed);
+        match job.sensor.as_deref() {
+            None if ok => {
+                let secs = (Instant::now().as_millis() / 1000) as usize;
+                LAST_SENT_SECS.store(secs, Ordering::Relaxed);
+            }
+            None => log_runtime_line(
+                format!("All {} POST attempts failed, will retry next cycle.", attempts).as_str(),
+            ),
+            Some(mac) => log_runtime_line(
+                format!("ESP-NOW {} -> backend: {}", mac, if ok { "ok" } else { "failed" }).as_str(),
+            ),
         }
     }
-    SENDING.store(false, Ordering::Relaxed);
-    log_runtime_line("All 3 POST attempts failed, will retry next cycle.");
-    false
 }
 
 /// Whole backend POST (DNS, connect, TLS handshake, request, response).
@@ -2378,8 +2422,12 @@ const HTTP_POST_TIMEOUT_SECS: u64 = 30;
 
 /// Send temperature + humidity as HTTPS JSON POST to the backend API.
 /// Returns true on success; false also after [`HTTP_POST_TIMEOUT_SECS`].
+///
+/// The deadline wraps the individual awaits, not the whole function: a
+/// combinator around this future made rustc keep its state twice (+12 KB in
+/// the main task), which overflowed the main stack at boot.
 #[cfg(feature = "wifi")]
-pub(crate) async fn post_readings(
+async fn post_readings(
     stack: &'static Stack<'static>,
     tcp_state: &'static TcpClientState<2, 4096, 4096>,
     api_url: &str,
@@ -2392,31 +2440,9 @@ pub(crate) async fn post_readings(
         log_runtime_line("API config missing, skipping POST.");
         return false;
     }
-    match embassy_time::with_timeout(
-        Duration::from_secs(HTTP_POST_TIMEOUT_SECS),
-        post_readings_once(stack, tcp_state, api_url, api_key, location, temp, hum),
-    )
-    .await
-    {
-        Ok(ok) => ok,
-        Err(_) => {
-            log_runtime_line(format!("POST timed out after {} s", HTTP_POST_TIMEOUT_SECS).as_str());
-            false
-        }
-    }
-}
+    let deadline = Instant::now() + Duration::from_secs(HTTP_POST_TIMEOUT_SECS);
 
-#[cfg(feature = "wifi")]
-async fn post_readings_once(
-    stack: &'static Stack<'static>,
-    tcp_state: &'static TcpClientState<2, 4096, 4096>,
-    api_url: &str,
-    api_key: &str,
-    location: &str,
-    temp: f32,
-    hum: f32,
-) -> bool {
-    // Dropped with this future on timeout, which frees the socket.
+    // Dropped on return (also after a timeout), which frees the socket.
     let tcp_client = embassy_net::tcp::client::TcpClient::new(*stack, tcp_state);
     let dns = DnsSocket::new(*stack);
 
@@ -2455,14 +2481,25 @@ async fn post_readings_once(
     let readings_url = format!("{}readings", api_url);
 
     let mut rx_buf = [0u8; 512];
-    match http.request(Method::POST, readings_url.as_str()).await {
-        Ok(req) => {
+    // Futures are pinned in place and the deadline only holds a reference:
+    // passing them by value would keep their (large) TLS state twice.
+    let mut connect = core::pin::pin!(http.request(Method::POST, readings_url.as_str()));
+    match embassy_time::with_deadline(deadline, connect.as_mut()).await {
+        Err(_) => {
+            log_runtime_line(format!("POST timed out after {} s (connect)", HTTP_POST_TIMEOUT_SECS).as_str());
+            false
+        }
+        Ok(Ok(req)) => {
             let headers = [("X-API-Key", api_key)];
             let mut builder = req
                 .content_type(ContentType::ApplicationJson)
                 .headers(&headers)
                 .body(body.as_bytes());
-            let result = builder.send(&mut rx_buf).await;
+            let mut send = core::pin::pin!(builder.send(&mut rx_buf));
+            let Ok(result) = embassy_time::with_deadline(deadline, send.as_mut()).await else {
+                log_runtime_line(format!("POST timed out after {} s", HTTP_POST_TIMEOUT_SECS).as_str());
+                return false;
+            };
             match result {
                 Ok(r) => {
                     log_runtime_line(format!("POST -> HTTP {}", r.status.0).as_str());
@@ -2474,7 +2511,7 @@ async fn post_readings_once(
                 }
             }
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             log_runtime_line(format!("HTTP connect error: {:?}", e).as_str());
             false
         }

@@ -17,7 +17,7 @@ use alloc::{format, string::String, vec::Vec};
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_net::{Stack, tcp::{TcpSocket, client::TcpClientState}, IpEndpoint};
+use embassy_net::{Stack, tcp::TcpSocket, IpEndpoint};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex};
 use embassy_time::{Duration, Instant};
 use esp_radio::esp_now::{EspNow, EspNowWifiInterface, PeerInfo};
@@ -724,7 +724,6 @@ async fn backend_target(
 #[embassy_executor::task]
 pub async fn forward_task(
     stack: &'static Stack<'static>,
-    tcp_state: &'static TcpClientState<2, 4096, 4096>,
     config: &'static Mutex<CriticalSectionRawMutex, AppConfig>,
 ) {
     let mut announced = AnnouncedTable::new();
@@ -812,20 +811,16 @@ pub async fn forward_task(
 
         if r.sensor_ok() {
             if let Some((api_url, api_key)) = backend_target(config, mac.as_str()).await {
-                // One attempt: retries would hold up the queue; the next
-                // reading follows within one sensor interval anyway.
-                let ok = crate::post_readings(
-                    stack,
-                    tcp_state,
+                // One attempt (queued, does not hold up forwarding); the
+                // next reading follows within one sensor interval anyway.
+                crate::queue_backend_post(
                     api_url.as_str(),
                     api_key.as_str(),
                     r.name(),
                     r.temperature_c(),
                     r.humidity_pct(),
-                )
-                .await;
-                log_runtime_line(
-                    format!("ESP-NOW {} -> backend: {}", mac, if ok { "ok" } else { "failed" }).as_str(),
+                    1,
+                    Some(mac.clone()),
                 );
             }
         }
