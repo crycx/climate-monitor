@@ -8,11 +8,15 @@
     holding buffers for the duration of a data transfer."
 )]
 
-/// Panic handler: prindib vea consolesse.
+/// Panic handler: prints the panic, then restarts. Hanging here would leave
+/// the board looking alive (retained MQTT values) while it does nothing.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     esp_println::println!("\n\n*** PANIC ***\n{}", info);
-    loop {}
+    #[cfg(feature = "wifi")]
+    health::record_panic();
+    esp_hal::delay::Delay::new().delay_millis(1000);
+    esp_hal::system::software_reset()
 }
 
 #[cfg(feature = "wifi")]
@@ -104,6 +108,9 @@ mod usb_console;
 #[cfg(feature = "wifi")]
 #[path = "main/nextion.rs"]
 mod nextion;
+#[cfg(feature = "wifi")]
+#[path = "main/health.rs"]
+mod health;
 
 #[cfg(feature = "wifi")]
 use app_config::{AppConfig, FlashConfigStorage, resolve_partition_range};
@@ -1211,6 +1218,11 @@ async fn main(spawner: Spawner) {
     esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
     let mut lpwr_for_sleep = Some(peripherals.LPWR);
 
+    // Watchdog first: everything after this (WiFi boot, main loop) is supervised.
+    health::init();
+    log_runtime_line(format!("Boot: last restart: {}", health::reset_reason_text()).as_str());
+    health::start_watchdog(&spawner, TimerGroup::new(peripherals.TIMG1).wdt);
+
     // GPIO9 = BOOT button (active-low).
     let btn = Input::new(peripherals.GPIO9, InputConfig::default().with_pull(Pull::Up));
     let boot_button_held = btn.level() == Level::Low;
@@ -1579,18 +1591,11 @@ async fn main(spawner: Spawner) {
 
     BOOTING.store(false, Ordering::Relaxed);
 
-    // DHT22 on GPIO5 (open-drain, pull-up).
+    // DHT22 on GPIO5 (open-drain, pull-up). The pin stays ours (each read
+    // borrows it) so a recovery can reconfigure it.
     let mut dht22_pin = Flex::new(peripherals.GPIO5);
-    dht22_pin.apply_output_config(
-        &OutputConfig::default()
-            .with_drive_mode(DriveMode::OpenDrain)
-            .with_pull(Pull::Up),
-    );
-    dht22_pin.set_output_enable(true);
-    dht22_pin.set_input_enable(true);
-    dht22_pin.set_high();
-
-    let mut dht22 = Dht22::new(dht22_pin, Delay::new());
+    configure_dht22_pin(&mut dht22_pin);
+    let mut sensor_health = health::SensorHealth::new();
 
     // Cache last sensor readings for WiFi display; None means no measurement yet.
     let mut last_temp: Option<f32> = None;
@@ -1611,6 +1616,7 @@ async fn main(spawner: Spawner) {
     let mut next_page_switch_at = Instant::now() + Duration::from_millis(OLED_PAGE_MS);
     let mut last_remote_generation = espnow_gateway::display_generation();
     loop {
+        health::main_loop_alive();
         ACTIVE_WIFI_SLOT.store(active_wifi_slot, Ordering::Relaxed);
         let config_save_changed = embassy_time::with_timeout(
             Duration::from_millis(MAIN_LOOP_TICK_MS),
@@ -1961,7 +1967,28 @@ async fn main(spawner: Spawner) {
             log_runtime_line("AP active: STA up, sensor post continues");
         }
 
-        match dht22.read() {
+        // Read, then validate: a failed or implausible read and a value that
+        // stopped changing are never reported (the old value is not resent).
+        let reading = match Dht22::new(&mut dht22_pin, Delay::new()).read() {
+            Ok(r) => match sensor_health.check(r.temperature, r.humidity) {
+                Ok(()) => Ok(r),
+                Err(why) => {
+                    log_runtime_line(
+                        format!(
+                            "DHT22 reading rejected ({:?}): raw {:.1} C {:.1} %",
+                            why, r.temperature, r.humidity
+                        )
+                        .as_str(),
+                    );
+                    Err(why)
+                }
+            },
+            Err(e) => {
+                log_runtime_line(format!("DHT22 read error: {:?}", e).as_str());
+                Err(health::BadReading::Error)
+            }
+        };
+        match reading {
             Ok(r) => {
                 let (
                     temp_offset,
@@ -2053,6 +2080,7 @@ async fn main(spawner: Spawner) {
                             mqtt_device_id.as_str(),
                             active_wifi_location.as_str(),
                             Some((temp, hum)),
+                            false,
                             config_handle,
                             config_storage,
                         )
@@ -2177,6 +2205,7 @@ async fn main(spawner: Spawner) {
                                 _ => {}
                             }
                         }
+                        health::main_loop_allow(sleep_interval_secs);
                         Timer::after(Duration::from_secs(sleep_interval_secs)).await;
                         POWER_SAVE_ACTIVE.store(false, Ordering::Relaxed);
                         if let Some(display) = oled.as_mut() {
@@ -2239,8 +2268,27 @@ async fn main(spawner: Spawner) {
                     }
                 }
             }
-            Err(e) => {
-                log_runtime_line(format!("DHT22 read error: {:?}", e).as_str());
+            Err(why) => {
+                let action = sensor_health.on_bad(why);
+                // One failed read is common (WiFi interrupts disturb the
+                // bit timing): skip it. A lasting problem or a frozen value
+                // turns temperature/humidity unavailable in HA right away.
+                let unavailable = why == health::BadReading::Frozen
+                    || sensor_health.bad_streak() >= health::SENSOR_ERRORS_BEFORE_UNAVAILABLE;
+                log_runtime_line(
+                    format!(
+                        "DHT22: bad reading {} in a row ({} since boot){}",
+                        sensor_health.bad_streak(),
+                        health::sensor_errors(),
+                        if unavailable { ", reported unavailable" } else { "" }
+                    )
+                    .as_str(),
+                );
+                if unavailable {
+                    // Do not keep showing a value that is no longer measured.
+                    last_temp = None;
+                    last_hum = None;
+                }
                 if stack_has_ipv4(stack) {
                     publish_own_status(
                         *stack,
@@ -2248,12 +2296,49 @@ async fn main(spawner: Spawner) {
                         config_storage,
                         active_wifi_slot,
                         active_wifi_location.as_str(),
+                        unavailable,
                     )
                     .await;
+                }
+                match action {
+                    health::SensorAction::None => {}
+                    health::SensorAction::Recover => {
+                        log_runtime_line("DHT22: recovering (release data line, reconfigure GPIO5, settle)");
+                        recover_dht22_pin(&mut dht22_pin).await;
+                    }
+                    health::SensorAction::Restart(cause) => health::restart(cause),
                 }
             }
         }
     }
+}
+
+/// DHT22 data line: open-drain with pull-up, released (high) when idle.
+#[cfg(feature = "wifi")]
+fn configure_dht22_pin(pin: &mut Flex<'static>) {
+    pin.apply_output_config(
+        &OutputConfig::default()
+            .with_drive_mode(DriveMode::OpenDrain)
+            .with_pull(Pull::Up),
+    );
+    pin.set_output_enable(true);
+    pin.set_input_enable(true);
+    pin.set_high();
+}
+
+/// DHT22 recovery: the single-wire equivalent of an I²C bus recovery. A read
+/// that was cut off can leave the sensor mid-frame; releasing the line for
+/// longer than a frame plus the 2 s minimum read spacing lets it return to
+/// idle, and the pin config is applied again in case it was disturbed.
+/// (With VCC on 3V3 the sensor cannot be power-cycled from here; a restart
+/// that does not help points at the sensor itself.)
+#[cfg(feature = "wifi")]
+async fn recover_dht22_pin(pin: &mut Flex<'static>) {
+    pin.set_high();
+    pin.set_output_enable(false);
+    Timer::after(Duration::from_millis(50)).await;
+    configure_dht22_pin(pin);
+    Timer::after(Duration::from_millis(health::DHT_RECOVERY_SETTLE_MS)).await;
 }
 
 /// Retry wrapper: tries up to 3 times with 10 s delay between attempts.
@@ -2285,10 +2370,16 @@ async fn post_readings_with_retry(
     false
 }
 
-/// Send temperature + humidity as HTTPS JSON POST to the backend API.
-/// Returns true on success.
+/// Whole backend POST (DNS, connect, TLS handshake, request, response).
+/// Before this limit a stalled server could block the caller forever:
+/// reqwless and the embassy-net TCP client have no timeout of their own.
 #[cfg(feature = "wifi")]
-async fn post_readings(
+const HTTP_POST_TIMEOUT_SECS: u64 = 30;
+
+/// Send temperature + humidity as HTTPS JSON POST to the backend API.
+/// Returns true on success; false also after [`HTTP_POST_TIMEOUT_SECS`].
+#[cfg(feature = "wifi")]
+pub(crate) async fn post_readings(
     stack: &'static Stack<'static>,
     tcp_state: &'static TcpClientState<2, 4096, 4096>,
     api_url: &str,
@@ -2301,7 +2392,31 @@ async fn post_readings(
         log_runtime_line("API config missing, skipping POST.");
         return false;
     }
+    match embassy_time::with_timeout(
+        Duration::from_secs(HTTP_POST_TIMEOUT_SECS),
+        post_readings_once(stack, tcp_state, api_url, api_key, location, temp, hum),
+    )
+    .await
+    {
+        Ok(ok) => ok,
+        Err(_) => {
+            log_runtime_line(format!("POST timed out after {} s", HTTP_POST_TIMEOUT_SECS).as_str());
+            false
+        }
+    }
+}
 
+#[cfg(feature = "wifi")]
+async fn post_readings_once(
+    stack: &'static Stack<'static>,
+    tcp_state: &'static TcpClientState<2, 4096, 4096>,
+    api_url: &str,
+    api_key: &str,
+    location: &str,
+    temp: f32,
+    hum: f32,
+) -> bool {
+    // Dropped with this future on timeout, which frees the socket.
     let tcp_client = embassy_net::tcp::client::TcpClient::new(*stack, tcp_state);
     let dns = DnsSocket::new(*stack);
 
@@ -2386,6 +2501,20 @@ fn last_seen_discovery(unique_id: &str, state_topic: &str, device_block: &str) -
         device_block,
     )
 }
+
+/// Diagnostics of this board (health.rs), as (key, discovery fields).
+#[cfg(feature = "wifi")]
+const HEALTH_ENTITIES: [(&str, &str); 3] = [
+    (
+        "sensor_errors",
+        r#""name":"Sensor errors","state_class":"total_increasing","icon":"mdi:alert-circle-outline""#,
+    ),
+    ("reset_reason", r#""name":"Last restart reason","icon":"mdi:restart""#),
+    (
+        "uptime",
+        r#""name":"Uptime","device_class":"duration","unit_of_measurement":"s","state_class":"measurement""#,
+    ),
+];
 
 #[cfg(feature = "wifi")]
 const MQTT_DNS_TIMEOUT_SECS: u64 = 5;
@@ -2489,6 +2618,7 @@ async fn publish_own_status(
     storage: &'static Mutex<CriticalSectionRawMutex, FlashConfigStorage<'static>>,
     wifi_slot: usize,
     wifi_location: &str,
+    mark_unavailable: bool,
 ) {
     let (enabled, host, port, username, password, base_topic, device_id) = {
         let cfg = config.lock().await;
@@ -2520,6 +2650,7 @@ async fn publish_own_status(
             device_id.as_str(),
             wifi_location,
             None,
+            mark_unavailable,
             config,
             storage,
         )
@@ -2538,6 +2669,8 @@ async fn mqtt_publish_with_discovery(
     device_id_raw: &str,
     wifi_location: &str,
     reading: Option<(f32, f32)>,
+    // Without a reading: also turn temperature/humidity unavailable in HA.
+    mark_unavailable: bool,
     config: &'static Mutex<CriticalSectionRawMutex, AppConfig>,
     storage: &'static Mutex<CriticalSectionRawMutex, FlashConfigStorage<'static>>,
 ) {
@@ -2604,8 +2737,14 @@ async fn mqtt_publish_with_discovery(
     }
 
     let availability_topic = format!("{}/{}/availability", base_topic, device_id);
+    // Second availability for temperature/humidity only: "offline" while
+    // the DHT22 fails or is frozen, so HA does not show a stale value.
+    let reading_availability_topic = format!("{}/{}/reading_availability", base_topic, device_id);
     let temp_topic = format!("{}/{}/temperature", base_topic, device_id);
     let hum_topic = format!("{}/{}/humidity", base_topic, device_id);
+    // Backstop for a board that stops publishing altogether: HA turns the
+    // values unavailable after ~3 missed readings (as for ESP-NOW sensors).
+    let expire_after_secs = sensor_interval_secs(&*config.lock().await) * 3 + 60;
 
     let device_name = if wifi_location.trim().is_empty() {
         format!("Climate Monitor {}", device_id)
@@ -2634,18 +2773,24 @@ async fn mqtt_publish_with_discovery(
         json_escape(FW_VERSION)
     );
 
+    let reading_availability = format!(
+        r#""availability":[{{"topic":"{}","payload_available":"online","payload_not_available":"offline"}},{{"topic":"{}","payload_available":"online","payload_not_available":"offline"}}],"availability_mode":"all","expire_after":{}"#,
+        json_escape(availability_topic.as_str()),
+        json_escape(reading_availability_topic.as_str()),
+        expire_after_secs,
+    );
     let temp_discovery_payload = format!(
-        r#"{{"name":"Temperature","unique_id":"{}","state_topic":"{}","unit_of_measurement":"°C","device_class":"temperature","state_class":"measurement","availability_topic":"{}","payload_available":"online","payload_not_available":"offline","device":{}}}"#,
+        r#"{{"name":"Temperature","unique_id":"{}","state_topic":"{}","unit_of_measurement":"°C","device_class":"temperature","state_class":"measurement",{},"device":{}}}"#,
         json_escape(temp_unique_id.as_str()),
         json_escape(temp_topic.as_str()),
-        json_escape(availability_topic.as_str()),
+        reading_availability,
         device_block,
     );
     let hum_discovery_payload = format!(
-        r#"{{"name":"Humidity","unique_id":"{}","state_topic":"{}","unit_of_measurement":"%","device_class":"humidity","state_class":"measurement","availability_topic":"{}","payload_available":"online","payload_not_available":"offline","device":{}}}"#,
+        r#"{{"name":"Humidity","unique_id":"{}","state_topic":"{}","unit_of_measurement":"%","device_class":"humidity","state_class":"measurement",{},"device":{}}}"#,
         json_escape(hum_unique_id.as_str()),
         json_escape(hum_topic.as_str()),
-        json_escape(availability_topic.as_str()),
+        reading_availability,
         device_block,
     );
 
@@ -2679,10 +2824,34 @@ async fn mqtt_publish_with_discovery(
     )
     .await;
 
+    // Health diagnostics (see health.rs): sensor errors, last restart reason, uptime.
+    let own_topic = |key: &str| format!("{}/{}/{}", base_topic, device_id, key);
+    for (key, extra) in HEALTH_ENTITIES.iter() {
+        let payload = format!(
+            r#"{{"unique_id":"{}_{}_{}","state_topic":"{}","availability_topic":"{}","entity_category":"diagnostic",{},"device":{}}}"#,
+            base_topic,
+            device_id,
+            key,
+            json_escape(own_topic(key).as_str()),
+            json_escape(availability_topic.as_str()),
+            extra,
+            device_block,
+        );
+        let _ = embassy_time::with_timeout(
+            Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+            mqtt_publish(
+                &mut socket,
+                format!("{}/sensor/{}_{}/config", HA_DISCOVERY_PREFIX, device_id, key).as_str(),
+                payload.as_bytes(),
+                true,
+            ),
+        )
+        .await;
+    }
+
     // Remote config for this gateway's own sensor, as HA numbers (same
     // entities as for ESP-NOW sensors): HA leaves retained commands on
     // set/<key>; they are applied and saved here, the state is the value in use.
-    let own_topic = |key: &str| format!("{}/{}/{}", base_topic, device_id, key);
     for (key, name, unit, min, max, step, extra) in espnow_gateway::CONFIG_NUMBERS.iter() {
         let (min, max, step) = if *key == "interval" {
             ("10", "3600", "5")
@@ -2802,6 +2971,32 @@ async fn mqtt_publish_with_discovery(
         )
         .await;
     }
+    // After the values: HA must not show the previous value as available.
+    let reading_state: Option<&[u8]> = match (reading.is_some(), mark_unavailable) {
+        (true, _) => Some(b"online"),
+        (false, true) => Some(b"offline"),
+        (false, false) => None,
+    };
+    if let Some(state) = reading_state {
+        let _ = embassy_time::with_timeout(
+            Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+            mqtt_publish(&mut socket, reading_availability_topic.as_str(), state, true),
+        )
+        .await;
+    }
+    let health_states = [
+        ("sensor_errors", format!("{}", health::sensor_errors()), true),
+        ("reset_reason", String::from(health::reset_reason_text()), true),
+        // Not retained: a replay after an HA restart would show an old uptime.
+        ("uptime", format!("{}", health::uptime_secs()), false),
+    ];
+    for (key, value, retain) in health_states.iter() {
+        let _ = embassy_time::with_timeout(
+            Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
+            mqtt_publish(&mut socket, own_topic(key).as_str(), value.as_bytes(), *retain),
+        )
+        .await;
+    }
     // Not retained: HA stamps "Last seen" with the arrival time (see last_seen_discovery).
     let _ = embassy_time::with_timeout(
         Duration::from_secs(MQTT_IO_TIMEOUT_SECS),
@@ -2820,6 +3015,7 @@ async fn mqtt_publish_with_discovery(
 
     // "Install" on this gateway's Firmware entity: download, switch, restart.
     if commands.is_some_and(|d| d.ota) {
+        health::main_loop_allow(health::SELF_OTA_ALLOWANCE_SECS);
         let broker = gateway_ota::Broker {
             host,
             port,

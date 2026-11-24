@@ -242,6 +242,38 @@ the config page's Display / ESP-NOW cards); `OLED_ENABLED`,
 A newly received reading jumps straight to that sensor's page for 10 s. A
 sensor's page disappears after it misses ~3 reports.
 
+## Self-supervision (watchdog, sensor health)
+
+Added after the board kept one value in HA for 9 h (2026-11-24) until it was
+reset by hand. Its "Last seen" stopped too while ESP-NOW forwarding went on,
+so the main loop was stuck, most likely in the backend POST (no timeout then;
+the connection probably died around a nightly router/ISP reconnect).
+Tunables are constants at the top of `src/bin/main/health.rs`.
+
+- **Watchdog.** The board restarts itself when the main loop has not
+  completed an iteration for 10 min, or ESP-NOW forwarding is stuck on one
+  reading for 10 min. If the whole firmware hangs, the hardware watchdog
+  (TIMG1) resets the chip after 30 s. A panic restarts too (it used to hang).
+- **Timeouts.** The backend POST is limited to 30 s in total; it had no
+  limit, so a server that stopped answering mid-request blocked the main
+  loop (and ESP-NOW forwarding) forever.
+- **DHT22 checks.** Failed reads, values outside -40..80 °C / 0..100 % and
+  an all-zero frame are never sent. Temperature and humidity turn
+  **unavailable** in HA after 2 bad readings in a row, or immediately when
+  temperature and humidity have not changed at all for 60 min (frozen
+  sensor). They also expire after ~3 missed readings (`expire_after`).
+- **Recovery.** After 5 bad readings in a row the DHT22 data line is
+  released and GPIO5 reconfigured; after 5 more, the board restarts. A
+  restart only happens for a sensor that worked since boot (or froze), and
+  at most 3 times in a row, so a missing or dead DHT22 cannot cause a restart
+  loop. The DHT22's VCC is on 3V3, so the firmware cannot power-cycle it; if
+  restarts do not help, power the board off and on.
+- **HA diagnostics** (on the board's own device): *Sensor errors* (bad
+  readings since boot), *Last restart reason* (e.g. `Power on`,
+  `Watchdog: main loop stalled`, `Sensor frozen (DHT22)`,
+  `Watchdog: system hung (MWDT)`) and *Uptime*. The boot log prints
+  `Boot: last restart: ...` as well.
+
 ## Build & Flash
 
 ### WiFi mode (sends data to server via HTTPS)

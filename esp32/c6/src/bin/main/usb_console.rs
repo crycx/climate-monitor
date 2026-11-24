@@ -270,12 +270,12 @@ async fn handle(
             println!("info.restarting=yes");
             println!("OK");
             Timer::after(Duration::from_millis(200)).await;
-            esp_hal::system::software_reset();
+            crate::health::restart(crate::health::Cause::Console);
         }
         "reboot" => {
             println!("OK");
             Timer::after(Duration::from_millis(200)).await;
-            esp_hal::system::software_reset();
+            crate::health::restart(crate::health::Cause::Console);
         }
         _ => {
             println!("ERR unknown command '{}' (try help)", command);

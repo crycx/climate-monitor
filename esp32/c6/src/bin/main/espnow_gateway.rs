@@ -729,8 +729,18 @@ pub async fn forward_task(
 ) {
     let mut announced = AnnouncedTable::new();
     let mut battery_full = espnow_packet::BatteryFullTracker::<MAX_TRACKED_SENSORS>::new();
+    // Marks the task busy for the watchdog (health.rs) until the end of the
+    // iteration, `continue` included.
+    struct Busy;
+    impl Drop for Busy {
+        fn drop(&mut self) {
+            crate::health::forward_end();
+        }
+    }
     loop {
         let item = READINGS.receive().await;
+        crate::health::forward_begin();
+        let _busy = Busy;
         let r = &item.reading;
         let mac = mac_hex(&item.mac);
         // Tracked even while MQTT is down, so the hour keeps counting.
