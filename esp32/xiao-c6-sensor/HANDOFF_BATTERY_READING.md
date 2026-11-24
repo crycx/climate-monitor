@@ -106,9 +106,9 @@ konsoolis `set warmup 1500`, `save`), muidu kulub aku kiiremini.
   lahtiühendamisest. Parandatud: magab ainult järgmise ette nähtud saatmiseni
   (kontrollitud 21:25:58).
 - Kalibreerimist kontrollida ka ~3,7 V juures.
-- Seadete muutmine HA-st (remote config, commit 329e6df): kodune XIAO
-  ("Poiste tuba") vajab selleks uuesti flashi. Kontori C3 on flashitud ja
-  testitud. `warmup` on juba 1500 (tehtud 20:47).
+- Seadete muutmine HA-st (remote config, commit 329e6df): ~~kodune XIAO
+  ("Poiste tuba") vajab selleks uuesti flashi~~: tehtud 2026-11-20 (89783a2,
+  vt allpool "Kodus flashitud"). Kontori C3 on flashitud ja testitud. `warmup` on juba 1500 (tehtud 20:47).
   ~~Kodune C6 gateway vajab flashi~~: tehtud 2026-11-20 12:00 (ff88f17,
   MAC 8c:fd:49:10:b7:c4). Boot OK, nihked alles, MQTT ja POST 201 töötavad.
   Nüüd saab kodu-C6 enda DHT22 nihkeid ja intervalli HA-st muuta
@@ -138,3 +138,20 @@ konsoolis `set warmup 1500`, `save`), muidu kulub aku kiiremini.
   Kontori C3 USB-ga flashitud ja töötab; gateway enda OTA veel testimisel.
   Kodune C6: enne esimest OTA-d üks USB flash selle püsivaraga (kohaliku
   config.toml-iga, et ESPNOW_KEY jm salvestuks).
+- Kodus flashitud USB-ga 2026-11-20 püsivaraga 89783a2 (OTA mälujaotus,
+  pesa ota_0; edasi saab mõlemat uuendada HA "Firmware" kaudu, Install'i
+  pole veel vajutatud):
+  - Kodune C6 gateway "C6 ekraaniga" (MAC 8c:fd:49:10:b7:c4): boot-logis
+    `Boot: firmware 89783a2`, `OTA: sensor images are staged at 0x230000`,
+    `ESP-NOW: gateway listening`; WiFi ASUS_B0_2G, MQTT ja POST 201 töötavad.
+    `show`: seaded samad mis enne flashi (nihked -1.9 / -6.8), juurde tulid
+    `cfg.oled=on`, `cfg.nextion=off`, `secret.espnow_key=yes`;
+    `info.firmware=89783a2`. OLED töötab, HA näitab Firmware "up to date".
+    Logirida `Config: current settings saved to flash` jäi nägemata (see
+    tuleb ainult esimesel käivitusel kohe pärast flashi), aga `show` kinnitab,
+    et seaded on flash'is.
+  - Kodune XIAO (MAC 90:64:9b:aa:1f:88, sensori nimi `C6-akuga`): boot-logis
+    `Boot: firmware 89783a2, settings from flash`; `show`: key_set=yes,
+    divider=2.94, warmup=1500, interval 300, nihked -0.9 / -8.0 (samad mis
+    enne), firmware=89783a2; `test` -> `delivered=yes`. Gateway sai XIAO
+    näidud ka enne flashi kätte (`-> backend: ok`).
