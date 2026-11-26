@@ -187,6 +187,17 @@ impl Sensors {
     /// powers off.
     pub async fn measure(&mut self, cfg: &NodeConfig) -> Measurement {
         self.dht_power.set_high();
+        // Release DATA (idle high) together with VCC. Held low through the
+        // warm-up, the DHT22 takes it as a start signal and answers on
+        // release, colliding with the driver's own start pulse: the first
+        // read then always timed out.
+        self.dht_pin.apply_output_config(
+            &OutputConfig::default()
+                .with_drive_mode(DriveMode::OpenDrain)
+                .with_pull(Pull::Up),
+        );
+        self.dht_pin.set_input_enable(true);
+        self.dht_pin.set_high();
         let warmup_started = Instant::now();
         let warmup = Duration::from_millis(cfg.dht_warmup_ms as u64);
         // The 100 nF on D0 is partly discharged after a deep-sleep wake and
@@ -206,13 +217,6 @@ impl Sensors {
             Timer::after(warmup - elapsed).await;
         }
 
-        self.dht_pin.apply_output_config(
-            &OutputConfig::default()
-                .with_drive_mode(DriveMode::OpenDrain)
-                .with_pull(Pull::Up),
-        );
-        self.dht_pin.set_input_enable(true);
-        self.dht_pin.set_high();
         let raw = self.read_dht22().await;
         self.dht_power.set_low();
         self.dht_pin.apply_output_config(&OutputConfig::default().with_drive_mode(DriveMode::OpenDrain));
