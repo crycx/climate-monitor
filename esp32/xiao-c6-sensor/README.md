@@ -143,8 +143,8 @@ sensor just keeps its settings.
 
 **Battery calibration from Home Assistant:** measure the cell with a
 multimeter (BAT+ to GND, **on battery**, not on USB) and type the value
-into **Battery voltage (multimeter)**, which otherwise shows the measured
-voltage. With the sensor's next reading the gateway works out the new
+into **Battery voltage (multimeter)**, which shows the value last used
+(empty before the first calibration). With the sensor's next reading the gateway works out the new
 divider, `divider × multimeter / sensor reading`, and sends it like the
 settings above. **Battery divider** shows the value in use and can also be
 set directly. The gateway ignores the value (log line `battery calibration

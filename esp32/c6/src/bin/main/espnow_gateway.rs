@@ -526,13 +526,13 @@ pub(crate) const CONFIG_NUMBERS: [(&str, &str, &str, &str, &str, &str, &str); 3]
 
 /// HA `number` entities for battery calibration, for sensors that report
 /// their divider: (key, name, state key, min, max, step, extra JSON).
-/// "Battery voltage (multimeter)" shows the measured voltage; typing the
-/// multimeter value there recalibrates the divider (see [`calibrated_divider`]).
+/// Typing the multimeter value into "Battery voltage (multimeter)" recalibrates
+/// the divider (see [`calibrated_divider`]); it then shows the value last used.
 const BATTERY_NUMBERS: [(&str, &str, &str, &str, &str, &str, &str); 2] = [
     (
         "battery_cal",
         "Battery voltage (multimeter)",
-        "battery_voltage",
+        "battery_cal",
         "2.5",
         "4.5",
         "0.01",
@@ -1272,6 +1272,9 @@ async fn publish(
                     );
                     // A retained divider command, sent until the sensor reports it.
                     d.divider = Some(new);
+                    // Shown by the multimeter number until the next calibration.
+                    let used = format!("{:.2}", actual_mv as f32 / 1000.0);
+                    let _ = with_io_timeout(crate::mqtt_publish(&mut socket, topic("battery_cal").as_str(), used.as_bytes(), true)).await;
                     let value = format!("{:.3}", new as f32 / 1000.0);
                     let _ = with_io_timeout(crate::mqtt_publish(
                         &mut socket,
