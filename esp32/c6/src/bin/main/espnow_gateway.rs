@@ -843,7 +843,9 @@ pub async fn forward_task(
                 ^ if r.has_config() { 0x9E37_79B9 } else { 0 }
                 ^ fnv1a(r.version()).rotate_left(7)
                 ^ if r.ota_capable() { 0x5BD1_E995 } else { 0 }
-                ^ if r.divider_milli().is_some() { 0x2545_F491 } else { 0 };
+                ^ if r.divider_milli().is_some() { 0x2545_F491 } else { 0 }
+                // expire_after depends on the interval.
+                ^ (r.interval_s as u32).rotate_left(13);
             let needs_discovery = !announced.contains(&item.mac, name_hash);
             if publish(*stack, &settings, &item, needs_discovery, full).await && needs_discovery {
                 announced.insert(&item.mac, name_hash);
