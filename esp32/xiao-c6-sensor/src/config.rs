@@ -191,7 +191,7 @@ impl NodeConfig {
             ("antenna", String::from(if self.external_antenna { "external" } else { "internal" })),
             ("warmup", format!("{}", self.dht_warmup_ms)),
             ("battery", String::from(if self.battery_adc { "on" } else { "off" })),
-            ("divider", format!("{:.2}", self.battery_divider)),
+            ("divider", format!("{:.3}", self.battery_divider)),
             ("usb_wake", String::from(if self.usb_wake { "on" } else { "off" })),
         ]
     }

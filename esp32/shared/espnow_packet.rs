@@ -23,11 +23,14 @@
 //!                               bit1 = on USB power (battery charging),
 //!                               bit2 = config trailer present (FLAG_CONFIG),
 //!                               bit3 = version trailer present (FLAG_VERSION),
-//!                               bit4 = sensor can update over the air (FLAG_OTA)
+//!                               bit4 = sensor can update over the air (FLAG_OTA),
+//!                               bit5 = divider trailer present (FLAG_DIVIDER)
 //!   21      name_len     u8   0..=MAX_NAME_LEN
 //!   22..    name         UTF-8, name_len bytes
 //!   ..+2    temp_offset  i16  degC * 100 } only with FLAG_CONFIG: the
 //!   ..+2    hum_offset   i16  % * 100    } sensor's current offsets
+//!   ..+2    divider      u16  ratio * 1000, only with FLAG_DIVIDER: the
+//!                             sensor's battery divider setting
 //!   ..+1    version_len  u8   } only with FLAG_VERSION: firmware version
 //!   ..      version      UTF-8, version_len bytes (<= MAX_VERSION_LEN)
 //!   ..+8    tag
@@ -44,12 +47,15 @@
 //!   4..8    boot_id      echoed from the reading
 //!   8..12   seq          echoed from the reading
 //!   12      set          u8   bit0 temp_offset, bit1 hum_offset, bit2 interval,
-//!                               bit3 firmware update waiting (SET_OTA)
+//!                               bit3 firmware update waiting (SET_OTA),
+//!                               bit4 divider (SET_DIVIDER)
 //!   13..15  temp_offset  i16  degC * 100
 //!   15..17  hum_offset   i16  % * 100
 //!   17..19  interval_s   u16
 //!   19      caps         u8   gateway capabilities (CAP_*); missing in
 //!                             gateways built before it (19-byte body)
+//!   20..22  divider      u16  ratio * 1000, only with SET_DIVIDER (sent
+//!                             only to sensors that report FLAG_DIVIDER)
 //!   ..+8    tag
 //!
 //! OtaRequest (sensor -> gateway, after a Config with SET_OTA)
@@ -83,7 +89,10 @@
 //! appends its offsets) only after its current gateway has answered, so
 //! gateways that predate Config, whose decoder checks the exact length,
 //! keep accepting its readings. Likewise a sensor adds the version trailer
-//! only when its gateway's Config reply has CAP_VERSION.
+//! only when its gateway's Config reply has CAP_VERSION, and the divider
+//! trailer only with CAP_DIVIDER. The gateway sends the longer Config (with
+//! SET_DIVIDER) only to a sensor that reported FLAG_DIVIDER, since older
+//! sensors check the Config length too.
 
 #![allow(dead_code)]
 
@@ -99,10 +108,13 @@ pub const MAX_NAME_LEN: usize = 24;
 pub const MAX_VERSION_LEN: usize = 16;
 const READING_HEADER_LEN: usize = 22;
 const CONFIG_TRAILER_LEN: usize = 4;
+const DIVIDER_TRAILER_LEN: usize = 2;
 const ACK_BODY_LEN: usize = 13;
 /// Config body without the caps byte (gateways built before it).
 const CONFIG_BODY_LEN_NO_CAPS: usize = 19;
 const CONFIG_BODY_LEN: usize = 20;
+/// Config body with the divider (only with [`SET_DIVIDER`]).
+const CONFIG_BODY_LEN_DIVIDER: usize = 22;
 const OTA_REQUEST_BODY_LEN: usize = 8;
 const OTA_INFO_BODY_LEN: usize = 41 + MAX_VERSION_LEN;
 const OTA_DATA_HEADER_LEN: usize = 9;
@@ -111,7 +123,7 @@ pub const OTA_CHUNK_LEN: usize = 200;
 /// OtaRequest offset that asks for the OtaInfo.
 pub const OTA_INFO_OFFSET: u32 = u32::MAX;
 const MAX_READING_LEN: usize =
-    READING_HEADER_LEN + MAX_NAME_LEN + CONFIG_TRAILER_LEN + 1 + MAX_VERSION_LEN + TAG_LEN;
+    READING_HEADER_LEN + MAX_NAME_LEN + CONFIG_TRAILER_LEN + DIVIDER_TRAILER_LEN + 1 + MAX_VERSION_LEN + TAG_LEN;
 const MAX_OTA_DATA_LEN: usize = OTA_DATA_HEADER_LEN + OTA_CHUNK_LEN + TAG_LEN;
 pub const MAX_PACKET_LEN: usize =
     if MAX_READING_LEN > MAX_OTA_DATA_LEN { MAX_READING_LEN } else { MAX_OTA_DATA_LEN };
@@ -130,8 +142,14 @@ pub const FLAG_VERSION: u8 = 0x08;
 /// The sensor has OTA app slots and handles [`SET_OTA`].
 pub const FLAG_OTA: u8 = 0x10;
 
+/// The reading carries the sensor's battery divider (divider trailer) and the
+/// sensor applies [`SET_DIVIDER`].
+pub const FLAG_DIVIDER: u8 = 0x20;
+
 /// [`ConfigMsg::caps`] bits: what the gateway accepts from the sensor.
 pub const CAP_VERSION: u8 = 0x01;
+/// The gateway accepts the divider trailer ([`FLAG_DIVIDER`]).
+pub const CAP_DIVIDER: u8 = 0x02;
 
 /// [`ConfigMsg::set`] bits.
 pub const SET_TEMP_OFFSET: u8 = 0x01;
@@ -139,6 +157,8 @@ pub const SET_HUM_OFFSET: u8 = 0x02;
 pub const SET_INTERVAL: u8 = 0x04;
 /// A firmware update is waiting: stay awake and send OtaRequests.
 pub const SET_OTA: u8 = 0x08;
+/// New battery divider in [`ConfigMsg::divider_milli`].
+pub const SET_DIVIDER: u8 = 0x10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -169,6 +189,8 @@ pub struct Reading {
     pub temp_offset_centi: i16,
     /// Only meaningful with [`FLAG_CONFIG`].
     pub hum_offset_centi: i16,
+    /// Battery divider ratio * 1000; only meaningful with [`FLAG_DIVIDER`].
+    pub divider_milli: u16,
     name: [u8; MAX_NAME_LEN],
     name_len: u8,
     /// Only meaningful with [`FLAG_VERSION`].
@@ -188,6 +210,7 @@ impl Reading {
             flags: 0,
             temp_offset_centi: 0,
             hum_offset_centi: 0,
+            divider_milli: 0,
             name: [0; MAX_NAME_LEN],
             name_len: 0,
             version: [0; MAX_VERSION_LEN],
@@ -234,6 +257,12 @@ impl Reading {
         self.flags & FLAG_OTA != 0
     }
 
+    /// The sensor's battery divider, if it reports one (and so accepts
+    /// [`SET_DIVIDER`]).
+    pub fn divider_milli(&self) -> Option<u16> {
+        (self.flags & FLAG_DIVIDER != 0).then_some(self.divider_milli)
+    }
+
     pub fn temperature_c(&self) -> f32 {
         self.temp_centi as f32 / 100.0
     }
@@ -273,6 +302,8 @@ pub struct ConfigMsg {
     pub interval_s: u16,
     /// Gateway capabilities ([`CAP_VERSION`]); 0 from older gateways.
     pub caps: u8,
+    /// Battery divider ratio * 1000; sent only with [`SET_DIVIDER`].
+    pub divider_milli: u16,
 }
 
 /// Image description sent before the data.
@@ -391,6 +422,10 @@ pub fn encode_reading(
         out[body_len + 2..body_len + 4].copy_from_slice(&r.hum_offset_centi.to_le_bytes());
         body_len += CONFIG_TRAILER_LEN;
     }
+    if r.flags & FLAG_DIVIDER != 0 {
+        out[body_len..body_len + 2].copy_from_slice(&r.divider_milli.to_le_bytes());
+        body_len += DIVIDER_TRAILER_LEN;
+    }
     if r.flags & FLAG_VERSION != 0 {
         let len = r.version_len as usize;
         out[body_len] = r.version_len;
@@ -415,6 +450,10 @@ pub fn encode_config(
     out[15..17].copy_from_slice(&msg.hum_offset_centi.to_le_bytes());
     out[17..19].copy_from_slice(&msg.interval_s.to_le_bytes());
     out[19] = msg.caps;
+    if msg.set & SET_DIVIDER != 0 {
+        out[20..22].copy_from_slice(&msg.divider_milli.to_le_bytes());
+        return append_tag(key, src_mac, out, CONFIG_BODY_LEN_DIVIDER);
+    }
     append_tag(key, src_mac, out, CONFIG_BODY_LEN)
 }
 
@@ -490,7 +529,9 @@ pub fn decode(key: &[u8], src_mac: &[u8; 6], data: &[u8]) -> Result<Packet, Deco
                 return Err(DecodeError::BadLength);
             }
             let trailer = if flags & FLAG_CONFIG != 0 { CONFIG_TRAILER_LEN } else { 0 };
-            let version_at = READING_HEADER_LEN + name_len + trailer;
+            let divider_at = READING_HEADER_LEN + name_len + trailer;
+            let divider_len = if flags & FLAG_DIVIDER != 0 { DIVIDER_TRAILER_LEN } else { 0 };
+            let version_at = divider_at + divider_len;
             let mut body_len = version_at;
             let mut version_len = 0;
             if flags & FLAG_VERSION != 0 {
@@ -518,11 +559,15 @@ pub fn decode(key: &[u8], src_mac: &[u8; 6], data: &[u8]) -> Result<Packet, Deco
                 flags,
                 temp_offset_centi: 0,
                 hum_offset_centi: 0,
+                divider_milli: 0,
                 name: [0; MAX_NAME_LEN],
                 name_len: 0,
                 version: [0; MAX_VERSION_LEN],
                 version_len: 0,
             };
+            if divider_len != 0 {
+                reading.divider_milli = u16_at(divider_at);
+            }
             if flags & FLAG_VERSION != 0 {
                 let version = &data[version_at + 1..version_at + 1 + version_len];
                 reading.set_version(core::str::from_utf8(version).unwrap_or(""));
@@ -555,18 +600,24 @@ pub fn decode(key: &[u8], src_mac: &[u8; 6], data: &[u8]) -> Result<Packet, Deco
         }
         4 => {
             let body_len = data.len() - TAG_LEN;
-            if body_len != CONFIG_BODY_LEN && body_len != CONFIG_BODY_LEN_NO_CAPS {
+            if ![CONFIG_BODY_LEN_NO_CAPS, CONFIG_BODY_LEN, CONFIG_BODY_LEN_DIVIDER].contains(&body_len) {
                 return Err(DecodeError::BadLength);
             }
             verify_tag(key, src_mac, data)?;
+            let mut set = data[12];
+            // A short packet cannot carry a divider, whatever the bit says.
+            if body_len != CONFIG_BODY_LEN_DIVIDER {
+                set &= !SET_DIVIDER;
+            }
             Ok(Packet::Config(ConfigMsg {
                 boot_id: u32_at(4),
                 seq: u32_at(8),
-                set: data[12],
+                set,
                 temp_offset_centi: u16_at(13) as i16,
                 hum_offset_centi: u16_at(15) as i16,
                 interval_s: u16_at(17),
-                caps: if body_len == CONFIG_BODY_LEN { data[19] } else { 0 },
+                caps: if body_len >= CONFIG_BODY_LEN { data[19] } else { 0 },
+                divider_milli: if body_len == CONFIG_BODY_LEN_DIVIDER { u16_at(20) } else { 0 },
             }))
         }
         5 => {

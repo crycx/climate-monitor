@@ -309,9 +309,14 @@ async fn send_config(esp_now: &mut EspNow<'static>, key: &[u8], own_mac: &[u8; 6
     let mut msg = ConfigMsg {
         boot_id: r.boot_id,
         seq: r.seq,
-        caps: espnow_packet::CAP_VERSION,
+        caps: espnow_packet::CAP_VERSION | espnow_packet::CAP_DIVIDER,
         ..ConfigMsg::default()
     };
+    // Only a sensor that reports its divider decodes the longer Config.
+    if let (Some(v), Some(_)) = (d.divider, r.divider_milli()) {
+        msg.set |= espnow_packet::SET_DIVIDER;
+        msg.divider_milli = v;
+    }
     if let Some(v) = d.temp {
         msg.set |= espnow_packet::SET_TEMP_OFFSET;
         msg.temp_offset_centi = v;
@@ -465,11 +470,21 @@ pub(crate) struct Desired {
     pub(crate) interval: Option<u16>,
     /// HA's update entity asked to install the published firmware.
     pub(crate) ota: bool,
+    /// Battery divider, ratio * 1000.
+    pub(crate) divider: Option<u16>,
+    /// Battery voltage measured with a multimeter (mV): the gateway turns it
+    /// into a new `divider` with the sensor's next reading.
+    pub(crate) battery_cal: Option<u16>,
 }
 
 impl Desired {
     pub(crate) fn is_empty(&self) -> bool {
-        self.temp.is_none() && self.hum.is_none() && self.interval.is_none() && !self.ota
+        self.temp.is_none()
+            && self.hum.is_none()
+            && self.interval.is_none()
+            && !self.ota
+            && self.divider.is_none()
+            && self.battery_cal.is_none()
     }
 }
 
@@ -508,6 +523,49 @@ pub(crate) const CONFIG_NUMBERS: [(&str, &str, &str, &str, &str, &str, &str); 3]
     ("hum_offset", "Humidity offset", "%", "-20", "20", "0.1", r#","icon":"mdi:water-plus""#),
     ("interval", "Interval", "s", "10", "21600", "10", r#","device_class":"duration""#),
 ];
+
+/// HA `number` entities for battery calibration, for sensors that report
+/// their divider: (key, name, state key, min, max, step, extra JSON).
+/// "Battery voltage (multimeter)" shows the measured voltage; typing the
+/// multimeter value there recalibrates the divider (see [`calibrated_divider`]).
+const BATTERY_NUMBERS: [(&str, &str, &str, &str, &str, &str, &str); 2] = [
+    (
+        "battery_cal",
+        "Battery voltage (multimeter)",
+        "battery_voltage",
+        "2.5",
+        "4.5",
+        "0.01",
+        r#","unit_of_measurement":"V","device_class":"voltage","icon":"mdi:multimeter""#,
+    ),
+    ("divider", "Battery divider", "divider", "1", "10", "0.001", r#","icon":"mdi:division""#),
+];
+
+/// Thousandths from an HA number command ("4.11" -> 4110), within min..=max.
+fn parse_milli(payload: &[u8], min: f32, max: f32) -> Option<u16> {
+    let v: f32 = core::str::from_utf8(payload).ok()?.trim().parse().ok()?;
+    (v.is_finite() && (min..=max).contains(&v)).then(|| (v * 1000.0 + 0.5) as u16)
+}
+
+/// New divider (ratio * 1000) that makes the sensor read `actual_mv`, the
+/// voltage measured with a multimeter, instead of this reading's voltage.
+fn calibrated_divider(r: &Reading, current: u16, actual_mv: u16) -> Result<u16, &'static str> {
+    if r.usb_power() {
+        return Err("sensor is on USB power and reads high while charging, measure on battery");
+    }
+    if r.battery_mv == 0 {
+        return Err("sensor reports no battery voltage");
+    }
+    let ratio = actual_mv as f32 / r.battery_mv as f32;
+    if !(0.8..=1.25).contains(&ratio) {
+        return Err("more than 20 % off the sensor's own reading, check the value");
+    }
+    let new = (current as f32 * ratio + 0.5) as u32;
+    if !(1000..=10000).contains(&new) {
+        return Err("divider would leave 1..10");
+    }
+    Ok(new as u16)
+}
 
 /// Centi-units from an HA number command ("-0.5", "300", "300.0").
 fn parse_centi(payload: &[u8], limit: f32) -> Option<i32> {
@@ -624,6 +682,8 @@ pub(crate) async fn read_desired(
                             .filter(|s| (10..=21600).contains(s))
                             .map(|s| s as u16)
                     }
+                    "divider" => desired.divider = parse_milli(payload, 1.0, 10.0),
+                    "battery_cal" => desired.battery_cal = parse_milli(payload, 2.5, 4.5),
                     _ => {}
                 }
             }
@@ -782,7 +842,8 @@ pub async fn forward_task(
             let name_hash = fnv1a(r.name())
                 ^ if r.has_config() { 0x9E37_79B9 } else { 0 }
                 ^ fnv1a(r.version()).rotate_left(7)
-                ^ if r.ota_capable() { 0x5BD1_E995 } else { 0 };
+                ^ if r.ota_capable() { 0x5BD1_E995 } else { 0 }
+                ^ if r.divider_milli().is_some() { 0x2545_F491 } else { 0 };
             let needs_discovery = !announced.contains(&item.mac, name_hash);
             if publish(*stack, &settings, &item, needs_discovery, full).await && needs_discovery {
                 announced.insert(&item.mac, name_hash);
@@ -1066,6 +1127,35 @@ async fn publish(
                 .await;
             }
         }
+        if r.divider_milli().is_some() {
+            for (key, name, state_key, min, max, step, extra) in BATTERY_NUMBERS.iter() {
+                let config_topic = format!(
+                    "{}/number/{}_{}/config",
+                    crate::HA_DISCOVERY_PREFIX, device_id, key
+                );
+                let payload = format!(
+                    r#"{{"name":"{}","unique_id":"{}_{}_{}","command_topic":"{}","state_topic":"{}","min":{},"max":{},"step":{},"mode":"box","retain":true,"entity_category":"config"{},"device":{}}}"#,
+                    name,
+                    s.base_topic,
+                    device_id,
+                    key,
+                    crate::json_escape(topic(format!("set/{}", key).as_str()).as_str()),
+                    crate::json_escape(topic(state_key).as_str()),
+                    min,
+                    max,
+                    step,
+                    extra,
+                    device_block,
+                );
+                let _ = with_io_timeout(crate::mqtt_publish(
+                    &mut socket,
+                    config_topic.as_str(),
+                    payload.as_bytes(),
+                    true,
+                ))
+                .await;
+            }
+        }
         if r.ota_capable() {
             // Firmware update (gateway_ota): "Install" leaves a retained
             // command on set/ota; the state shows installed vs. published.
@@ -1155,6 +1245,48 @@ async fn publish(
             ))
             .await;
             log_runtime_line(format!("ESP-NOW {}: remote {} applied", mac_hex(&item.mac), key).as_str());
+        }
+        set_desired(&item.mac, d);
+    }
+    if let Some(current) = r.divider_milli() {
+        let value = format!("{:.3}", current as f32 / 1000.0);
+        let _ = with_io_timeout(crate::mqtt_publish(&mut socket, topic("divider").as_str(), value.as_bytes(), true)).await;
+        let mut d = desired_for(&item.mac);
+        if let Some(actual_mv) = d.battery_cal.take() {
+            // One measurement, one attempt: clear it whatever the outcome.
+            let _ = with_io_timeout(crate::mqtt_publish(&mut socket, topic("set/battery_cal").as_str(), b"", true)).await;
+            match calibrated_divider(r, current, actual_mv) {
+                Ok(new) => {
+                    log_runtime_line(
+                        format!(
+                            "ESP-NOW {}: multimeter {} mV, sensor {} mV: divider {:.3} -> {:.3}",
+                            mac_hex(&item.mac),
+                            actual_mv,
+                            r.battery_mv,
+                            current as f32 / 1000.0,
+                            new as f32 / 1000.0
+                        )
+                        .as_str(),
+                    );
+                    // A retained divider command, sent until the sensor reports it.
+                    d.divider = Some(new);
+                    let value = format!("{:.3}", new as f32 / 1000.0);
+                    let _ = with_io_timeout(crate::mqtt_publish(
+                        &mut socket,
+                        topic("set/divider").as_str(),
+                        value.as_bytes(),
+                        true,
+                    ))
+                    .await;
+                }
+                Err(why) => log_runtime_line(
+                    format!("ESP-NOW {}: battery calibration ignored: {}", mac_hex(&item.mac), why).as_str(),
+                ),
+            }
+        } else if d.divider == Some(current) {
+            d.divider = None;
+            let _ = with_io_timeout(crate::mqtt_publish(&mut socket, topic("set/divider").as_str(), b"", true)).await;
+            log_runtime_line(format!("ESP-NOW {}: remote divider applied", mac_hex(&item.mac)).as_str());
         }
         set_desired(&item.mac, d);
     }

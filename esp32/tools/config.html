@@ -66,7 +66,7 @@ pre{background:var(--log);color:var(--logtext);border-radius:8px;padding:10px;he
       <select id="x_antenna" data-x="antenna"><option value="internal">Internal (ceramic)</option><option value="external">External (U.FL)</option></select>
       <div class="row">
         <div><label for="x_warmup">DHT22 warm-up (ms)</label><input id="x_warmup" data-x="warmup" type="number" min="0" max="5000"></div>
-        <div><label for="x_divider">Divider ratio</label><input id="x_divider" data-x="divider" type="number" step="0.01" min="1" max="10"></div>
+        <div><label for="x_divider">Divider ratio</label><input id="x_divider" data-x="divider" type="number" step="0.001" min="1" max="10"></div>
       </div>
       <label class="check"><input id="x_battery" data-x="battery" type="checkbox"> Measure battery on D0</label>
       <label class="check"><input id="x_usb_wake" data-x="usb_wake" type="checkbox"> Wake when USB is plugged in (5V divider on D1)</label>

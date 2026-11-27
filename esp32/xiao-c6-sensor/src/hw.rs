@@ -431,7 +431,17 @@ pub fn apply_remote_config(cfg: &mut NodeConfig, msg: &ConfigMsg) -> bool {
             changed |= apply(cfg, "interval", alloc::format!("{}", v));
         }
     }
+    if msg.set & espnow_packet::SET_DIVIDER != 0 {
+        // The gateway works it out from the multimeter voltage entered in HA.
+        if msg.divider_milli != divider_milli(cfg) {
+            changed |= apply(cfg, "divider", alloc::format!("{:.3}", msg.divider_milli as f32 / 1000.0));
+        }
+    }
     changed
+}
+
+fn divider_milli(cfg: &NodeConfig) -> u16 {
+    (cfg.battery_divider * 1000.0 + 0.5) as u16
 }
 
 pub fn build_reading(cfg: &NodeConfig, state: &NodeState, m: &Measurement) -> Reading {
@@ -452,6 +462,10 @@ pub fn build_reading(cfg: &NodeConfig, state: &NodeState, m: &Measurement) -> Re
             if crate::ota::CAPABLE.load(core::sync::atomic::Ordering::Relaxed) {
                 reading.flags |= espnow_packet::FLAG_OTA;
             }
+        }
+        if cfg.battery_adc && state.gateway_caps & espnow_packet::CAP_DIVIDER != 0 {
+            reading.flags |= espnow_packet::FLAG_DIVIDER;
+            reading.divider_milli = divider_milli(cfg);
         }
     }
     if m.usb_power {

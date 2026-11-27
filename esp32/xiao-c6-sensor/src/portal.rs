@@ -158,7 +158,7 @@ small{{color:#6b7280}}.ok{{color:#15803d}}.err{{color:#b91c1c}}dl{{margin:0}}dt{
 <small>Must match the gateway. Leave empty to keep the current key.</small>
 <label>Antenna</label><select name="antenna"><option value="internal"{ant_int}>Internal (ceramic)</option><option value="external"{ant_ext}>External (U.FL)</option></select>
 <div class="row"><div><label>DHT22 warm-up (ms)</label><input name="warmup" type="number" min="0" max="5000" value="{warmup}"></div>
-<div><label>Divider ratio</label><input name="divider" type="number" step="0.01" min="1" max="10" value="{divider:.2}"></div></div>
+<div><label>Divider ratio</label><input name="divider" type="number" step="0.001" min="1" max="10" value="{divider:.3}"></div></div>
 <label class="check"><input type="checkbox" name="battery" value="on"{battery_checked}> Measure battery on D0</label>
 <label class="check"><input type="checkbox" name="usb_wake" value="on"{usb_wake_checked}> Wake when USB is plugged in (5V divider on D1)</label>
 <button type="submit">Save and restart</button></form>

@@ -141,6 +141,18 @@ It follows the sensor between gateways (the command is retained in MQTT per
 sensor). Needs gateways built with remote config; with an older gateway the
 sensor just keeps its settings.
 
+**Battery calibration from Home Assistant:** measure the cell with a
+multimeter (BAT+ to GND, **on battery**, not on USB) and type the value
+into **Battery voltage (multimeter)**, which otherwise shows the measured
+voltage. With the sensor's next reading the gateway works out the new
+divider, `divider × multimeter / sensor reading`, and sends it like the
+settings above. **Battery divider** shows the value in use and can also be
+set directly. The gateway ignores the value (log line `battery calibration
+ignored`) if the sensor is on USB power, reports no battery voltage or
+differs from it by more than 20 %. Do not measure D0: the multimeter loads
+the 1 MΩ divider and reads low. Needs gateway and sensor firmware with this
+feature (the gateway's Config reply sets `CAP_DIVIDER`).
+
 ## Build & flash
 
 Same toolchain as the other boards (nightly + `riscv32imac-unknown-none-elf`,
@@ -249,6 +261,8 @@ Created through MQTT Discovery by the gateway, per sensor:
 
 - Temperature, Humidity
 - Battery (%), Battery voltage (V), Signal strength (dBm), as diagnostics
+- Config: Temperature offset, Humidity offset, Interval, Battery voltage
+  (multimeter), Battery divider (see [Changing settings](#changing-settings))
 - Battery low (binary sensor), on below 3.60 V (~10 %): time to charge.
   Use it in an HA automation for a notification.
 - Charging (binary sensor), on while the sensor runs on USB power. The
